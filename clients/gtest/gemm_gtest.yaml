@@ -2456,6 +2456,24 @@ Tests:
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
 
+- name: gemm_invalid_sizes
+  category: quick
+  function:
+    gemm: *half_single_double_precisions
+    gemm_ex: *nonint8_real_precisions
+  matrix_size:
+    - { M:    -5, N:     5, K:     5, lda:     5, ldb:     5, ldc:     5, ldd:     5, transA: N, transB: N, alpha:  1, beta:  1 } #bad M
+    - { M:     5, N:    -5, K:     5, lda:     5, ldb:     5, ldc:     5, ldd:     5, transA: N, transB: N, alpha:  1, beta:  1 } #bad N
+    - { M:     5, N:     5, K:    -5, lda:     5, ldb:     5, ldc:     5, ldd:     5, transA: N, transB: N, alpha:  1, beta:  1 } #bad K
+    - { M:     5, N:     5, K:     5, lda:     4, ldb:     5, ldc:     5, ldd:     5, transA: N, transB: N, alpha:  1, beta:  1 } #bad lda
+    - { M:     5, N:     5, K:     5, lda:     5, ldb:     4, ldc:     5, ldd:     5, transA: N, transB: N, alpha:  1, beta:  1 } #bad ldb
+    - { M:     5, N:     5, K:     5, lda:     5, ldb:     5, ldc:     4, ldd:     5, transA: N, transB: N, alpha:  1, beta:  1 } #bad ldc
+    - { M:     5, N:     5, K:     5, lda:     5, ldb:     5, ldc:     5, ldd:     4, transA: N, transB: N, alpha:  1, beta:  1 } #bad ldd
+    - { M:     5, N:     5, K:     5, lda:     5, ldb:     4, ldc:     5, ldd:     5, transA: N, transB: T, alpha:  1, beta:  1 } #bad ldb
+    - { M:     5, N:     5, K:     5, lda:     4, ldb:     5, ldc:     5, ldd:     5, transA: T, transB: T, alpha:  1, beta:  1 } #bad lda
+    - { M:     5, N:     5, K:     5, lda:     5, ldb:     4, ldc:     5, ldd:     5, transA: T, transB: T, alpha:  1, beta:  1 } #bad ldb
+    - { M:     5, N:     5, K:     5, lda:     4, ldb:     5, ldc:     5, ldd:     5, transA: T, transB: N, alpha:  1, beta:  1 } #bad lda
+
 - name: gemm_small_int8
   category: quick
   function:
@@ -2482,6 +2500,17 @@ Tests:
   matrix_size: *medium_matrix_size_range
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
+
+- name: gemm_medium_alt
+  category: pre_checkin
+  function:
+    gemm_ex: *hpa_half_precision
+  matrix_size: *medium_matrix_size_range
+  transA_transB: *transA_transB_range
+  alpha: 1
+  beta: 0
+  flags: 4
+  initialization: special
 
 - name: gemm_medium_HMM
   category: HMM
@@ -2621,6 +2650,17 @@ Tests:
   alpha_beta: *deepbench_alpha_beta_range
   transA_transB: *deepbench_transA_transB_range
 
+- name: gemm_deepbench_alt
+  category: nightly
+  function:
+    gemm_ex: *hpa_half_precision
+  matrix_size: *deepbench_sizes
+  alpha: 1
+  beta: 0
+  flags: 4
+  initialization: special
+  transA_transB: *deepbench_transA_transB_range
+
 - name: gemm_deepbench_int8
   category: nightly
   function:
@@ -2650,6 +2690,18 @@ Tests:
   matrix_size: *resnet50_fwd_sizes
   alpha: 1
   beta: 0
+
+- name: resnet50_fwd_alt
+  category: nightly
+  function:
+    gemm_ex: *hpa_half_precision
+  transA: N
+  transB: N
+  matrix_size: *resnet50_fwd_sizes
+  alpha: 1
+  beta: 0
+  flags: 4
+  initialization: special
 
 - name: resnet50_fwd_int8
   category: nightly
@@ -3386,7 +3438,7 @@ Tests:
 # This is disabled until the sizes are supported by Tensile,
 # since they take too long with a naive host-side algorithm.
 - name: gemm_ext2_large
-  category: disabled
+  category: known_bug
   transA: N
   transB: N
   function:

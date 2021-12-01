@@ -19,6 +19,7 @@ rocBLAS build & installation helper script
            --cleanup             Removes intermediary build artifacts after successful build to reduce disk usage
       -c | --clients             Build library clients too (combines with -i & -d)
            --clients-only        Build only clients with a pre-built library
+           --clients_no_fortran  When building clients, build them without Fortran API testing or Fortran examples
            --library-path        When only building clients, the path to the pre-built rocBLAS library (default is /opt/rocm/rocblas)
       -g | --debug               Set -DCMAKE_BUILD_TYPE=Debug (default is =Release)
       -f | --fork                GitHub fork to use, e.g., ROCmSoftwarePlatform or MyUserName
@@ -32,8 +33,6 @@ rocBLAS build & installation helper script
            --[no-]merge-files    Whether to enable Tensile_MERGE_FILES (default is enable)
            --build_dir           Specify path of output directory relative to the current directory (default is ./build). Also supports absolute path to output directory.
       -n | --no-tensile          Build subset of library that does not require Tensile
-      -s | --tensile-host        Build with Tensile host
-      -r | --no-tensile-host     Do not build with Tensile host
       -u | --use-custom-version  Ignore Tensile version and just use the Tensile tag
            --use-cuda            Uses installed cuda version instead of rocm stack
            --skipldconf          Skip ld.so.conf entry
@@ -209,11 +208,11 @@ install_packages( )
   fi
 
   # dependencies to build the client
-  local client_dependencies_ubuntu=( "gfortran" "libomp-dev" "libboost-program-options-dev" )
-  local client_dependencies_centos_rhel=( "devtoolset-7-gcc-gfortran" "libgomp" "boost-devel" )
-  local client_dependencies_centos_rhel_8=( "gcc-gfortran" "libgomp" "boost-devel" )
-  local client_dependencies_fedora=( "gcc-gfortran" "libgomp" "boost-devel" )
-  local client_dependencies_sles=( "gcc-fortran" "libgomp1" "libboost_program_options1_66_0-devel" )
+  local client_dependencies_ubuntu=( "gfortran" "libomp-dev" )
+  local client_dependencies_centos_rhel=( "devtoolset-7-gcc-gfortran" "libgomp" )
+  local client_dependencies_centos_rhel_8=( "gcc-gfortran" "libgomp" )
+  local client_dependencies_fedora=( "gcc-gfortran" "libgomp" )
+  local client_dependencies_sles=( "gcc-fortran" "libgomp1" )
 
   # wget is needed for blis
   if [[ "${cpu_ref_lib}" == blis ]] && [[ ! -e "${build_dir}/deps/blis/lib/libblis.so" ]]; then
@@ -332,9 +331,9 @@ tensile_version=
 build_library=true
 build_cleanup=false
 build_clients=false
+build_clients_no_fortran=false
 use_cuda=false
 build_tensile=true
-build_tensile_host=true
 cpu_ref_lib=blis
 build_release=true
 build_hip_clang=true
@@ -362,7 +361,7 @@ library_dir_installed=${rocm_path}/rocblas
 # check if we have a modern version of getopt that can handle whitespace and long parameters
 getopt -T
 if [[ $? -eq 4 ]]; then
-  GETOPT_PARSE=$(getopt --name "${0}" --longoptions help,install,cleanup,clients,clients-only,dependencies,debug,hip-clang,no-hip-clang,merge-files,no-merge-files,no_tensile,no-tensile,tensile-host,no-tensile-host,msgpack,no-msgpack,library-path:,logic:,architecture:,cov:,fork:,branch:,build_dir:,test_local_path:,cpu_ref_lib:,use-custom-version:,skipldconf,static,use-cuda,rocm-dev:,cmake_install,codecoverage,relwithdebinfo,address-sanitizer --options nsrhicdgkl:a:o:f:b:t:u:v: -- "$@")
+  GETOPT_PARSE=$(getopt --name "${0}" --longoptions help,install,cleanup,clients,clients-only,clients_no_fortran,dependencies,debug,hip-clang,no-hip-clang,merge-files,no-merge-files,no_tensile,no-tensile,msgpack,no-msgpack,library-path:,logic:,architecture:,cov:,fork:,branch:,build_dir:,test_local_path:,cpu_ref_lib:,use-custom-version:,skipldconf,static,use-cuda,rocm-dev:,cmake_install,codecoverage,relwithdebinfo,address-sanitizer --options nhicdgkl:a:o:f:b:t:u:v: -- "$@")
 else
   echo "Need a new version of getopt"
   exit 1
@@ -397,6 +396,9 @@ while true; do
         build_library=false
         build_clients=true
         shift ;;
+    --clients_no_fortran)
+        build_clients_no_fortran=true
+        shift ;;
     --library-path)
         library_dir_installed=${2}
         shift 2 ;;
@@ -423,12 +425,6 @@ while true; do
         shift 2 ;;
     -n|--no_tensile|--no-tensile)
         build_tensile=false
-        shift ;;
-    -s|--tensile-host)
-        build_tensile_host=true
-        shift ;;
-    -r|--no-tensile-host)
-        build_tensile_host=false
         shift ;;
     --build_dir)
 #use readlink rather than realpath for CentOS 6.10 support
@@ -610,7 +606,7 @@ if [[ "${install_dependencies}" == true ]]; then
     pushd .
     printf "\033[32mBuilding \033[33mgoogletest & lapack\033[32m from source; installing into \033[33m/usr/local\033[0m\n"
     mkdir -p ${build_dir}/deps && cd ${build_dir}/deps
-    CXX=${cxx} CC=${cc} FC=${fc} ${cmake_executable} -DBUILD_BOOST=OFF ${ROCBLAS_SRC_PATH}/deps
+    CXX=${cxx} CC=${cc} FC=${fc} ${cmake_executable} ${ROCBLAS_SRC_PATH}/deps
     make -j$(nproc)
     elevate_if_not_root make install_deps
     install_blis
@@ -684,13 +680,6 @@ pushd .
     tensile_opt="${tensile_opt} -DTensile_LOGIC=${tensile_logic} -DTensile_CODE_OBJECT_VERSION=${tensile_cov}"
   fi
 
-  if [[ "${build_tensile_host}" == false ]]; then
-    tensile_opt="${tensile_opt} -DBUILD_WITH_TENSILE_HOST=OFF"
-  fi
-
-  if [[ "${build_tensile_host}" == true ]]; then
-    tensile_opt="${tensile_opt} -DBUILD_WITH_TENSILE_HOST=ON"
-  fi
   if [[ "${tensile_merge_files}" == false ]]; then
     tensile_opt="${tensile_opt} -DTensile_MERGE_FILES=OFF"
   fi
@@ -706,6 +695,9 @@ pushd .
 
   if [[ "${build_clients}" == true ]]; then
     cmake_client_options="${cmake_client_options} -DBUILD_CLIENTS_SAMPLES=ON -DBUILD_CLIENTS_TESTS=ON -DBUILD_CLIENTS_BENCHMARKS=ON -DLINK_BLIS=${LINK_BLIS} -DBUILD_DIR=${build_dir}"
+    if [[ "${build_clients_no_fortran}" == true ]]; then
+      cmake_client_options="${cmake_client_options} -DBUILD_FORTRAN_CLIENTS=OFF"
+    fi
   fi
 
   if [[ "${build_library}" == false ]]; then

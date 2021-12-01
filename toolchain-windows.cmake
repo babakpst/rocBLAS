@@ -18,7 +18,7 @@ set(python "python")
 
 # TODO remove, just to speed up slow cmake
 #set(CMAKE_C_COMPILER_WORKS 1)
-#set(CMAKE_CXX_COMPILER_WORKS 1) 
+#set(CMAKE_CXX_COMPILER_WORKS 1)
 #set(CMAKE_Fortran_COMPILER_WORKS 1)
 
 
@@ -32,19 +32,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-ignored-attributes")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHIP_CLANG_HCC_COMPAT_MODE=1")
 
-# args also in hipcc.bat 
+# args also in hipcc.bat
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fms-extensions -fms-compatibility -D__HIP_ROCclr__=1 -D__HIP_PLATFORM_AMD__=1 ")
 
-if (DEFINED ENV{LAPACK_DIR})
-  file(TO_CMAKE_PATH "$ENV{LAPACK_DIR}" LAPACK_DIR)
+if (DEFINED ENV{OPENBLAS_DIR})
+  file(TO_CMAKE_PATH "$ENV{OPENBLAS_DIR}" OPENBLAS_DIR)
 else()
-  set(LAPACK_DIR "C:/lapack/build")
-endif()
-
-if (DEFINED ENV{BLIS_DIR})
-  file(TO_CMAKE_PATH "$ENV{BLIS_DIR}" BLIS_DIR)
-else()
-  set(BLIS_DIR "C:/blis/blis-0.8.1-h8d14728_1/Library")
+  set(OPENBLAS_DIR "C:/OpenBLAS/OpenBLAS-0.3.18-x64")
 endif()
 
 if (DEFINED ENV{VCPKG_PATH})
@@ -58,3 +52,5 @@ set(CMAKE_STATIC_LIBRARY_SUFFIX ".a")
 set(CMAKE_STATIC_LIBRARY_PREFIX "static_")
 set(CMAKE_SHARED_LIBRARY_SUFFIX ".dll")
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
+
+set(BUILD_FORTRAN_CLIENTS OFF)

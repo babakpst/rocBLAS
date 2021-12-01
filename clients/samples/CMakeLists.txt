@@ -2,7 +2,11 @@
 # Copyright 2016-2021 Advanced Micro Devices, Inc.
 # ########################################################################
 
-set( rocblas_samples_common ../common/utility.cpp )
+set( rocblas_samples_common
+      ../common/singletons.cpp
+      ../common/utility.cpp
+      ../common/rocblas_random.cpp
+    )
 
 # C example
 add_executable( example-c-dgeam example_c_dgeam.c )
@@ -13,8 +17,9 @@ target_compile_options( example-c-dgeam PRIVATE -std=c11 )
 add_executable( example-sscal example_sscal.cpp ${rocblas_samples_common} )
 add_executable( example-scal-template example_scal_template.cpp ${rocblas_samples_common} )
 add_executable( example-solver-rocblas example_solver_rocblas.cpp ${rocblas_samples_common} )
+add_executable( example-hip-complex-her2 example_hip_complex_her2.cpp )
 
-if (NOT WIN32)
+if ( BUILD_FORTRAN_CLIENTS )
   # Fortran examples
   add_executable( example-fortran-axpy example_fortran_axpy.f90 $<TARGET_OBJECTS:rocblas_fortran>)
   add_executable( example-fortran-scal example_fortran_scal.f90 $<TARGET_OBJECTS:rocblas_fortran>)
@@ -27,10 +32,14 @@ if( BUILD_WITH_TENSILE )
   add_executable( example-sgemm-strided-batched example_sgemm_strided_batched.cpp ${rocblas_samples_common} )
   add_executable( example-gemm-ext2 example_gemm_ext2.cpp ${rocblas_samples_common} )
   set( sample_list_tensile example-sgemm example-sgemm-strided-batched example-gemm-ext2 )
+else( )
+  add_executable( example-sgemm example_sgemm.cpp ${rocblas_samples_common} )
+  add_executable( example-sgemm-strided-batched example_sgemm_strided_batched.cpp ${rocblas_samples_common} )
+  set( sample_list_tensile example-sgemm example-sgemm-strided-batched )
 endif( )
 
 set( sample_list_c example-c-dgeam )
-set( sample_list_base example-sscal example-scal-template example-solver-rocblas )
+set( sample_list_base example-sscal example-scal-template example-solver-rocblas example-hip-complex-her2 )
 
 set( sample_list_all ${sample_list_base} ${sample_list_tensile} ${sample_list_fortran} ${sample_list_c} )
 set( sample_list_hip_device ${sample_list_base} ${sample_list_tensile} )

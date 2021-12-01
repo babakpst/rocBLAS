@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright 2018-2020 Advanced Micro Devices, Inc.
+ * Copyright 2018-2021 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 
 #include "rocblas_data.hpp"
@@ -7,6 +7,9 @@
 #include "rocblas_test.hpp"
 #include "testing_trmm.hpp"
 #include "testing_trmm_batched.hpp"
+#include "testing_trmm_outofplace.hpp"
+#include "testing_trmm_outofplace_batched.hpp"
+#include "testing_trmm_outofplace_strided_batched.hpp"
 #include "testing_trmm_strided_batched.hpp"
 #include "type_dispatch.hpp"
 #include <cctype>
@@ -21,6 +24,9 @@ namespace
         TRMM,
         TRMM_BATCHED,
         TRMM_STRIDED_BATCHED,
+        TRMM_OUTOFPLACE,
+        TRMM_OUTOFPLACE_BATCHED,
+        TRMM_OUTOFPLACE_STRIDED_BATCHED
     };
 
     //trmm test template
@@ -46,6 +52,15 @@ namespace
             case TRMM_STRIDED_BATCHED:
                 return !strcmp(arg.function, "trmm_strided_batched")
                        || !strcmp(arg.function, "trmm_strided_batched_bad_arg");
+            case TRMM_OUTOFPLACE:
+                return !strcmp(arg.function, "trmm_outofplace")
+                       || !strcmp(arg.function, "trmm_outofplace_bad_arg");
+            case TRMM_OUTOFPLACE_BATCHED:
+                return !strcmp(arg.function, "trmm_outofplace_batched")
+                       || !strcmp(arg.function, "trmm_outofplace_batched_bad_arg");
+            case TRMM_OUTOFPLACE_STRIDED_BATCHED:
+                return !strcmp(arg.function, "trmm_outofplace_strided_batched")
+                       || !strcmp(arg.function, "trmm_outofplace_strided_batched_bad_arg");
             }
             return false;
         }
@@ -63,6 +78,10 @@ namespace
             }
             else
             {
+                bool is_ex = TRMM_TYPE == TRMM_OUTOFPLACE || TRMM_TYPE == TRMM_OUTOFPLACE_BATCHED
+                             || TRMM_TYPE == TRMM_OUTOFPLACE_STRIDED_BATCHED;
+                bool is_strided = TRMM_TYPE == TRMM_OUTOFPLACE_STRIDED_BATCHED
+                                  || TRMM_TYPE == TRMM_STRIDED_BATCHED;
 
                 name << '_' << (char)std::toupper(arg.side) << (char)std::toupper(arg.uplo)
                      << (char)std::toupper(arg.transA) << (char)std::toupper(arg.diag) << '_'
@@ -76,22 +95,28 @@ namespace
 
                 name << '_' << arg.lda;
 
-                if(TRMM_TYPE == TRMM_STRIDED_BATCHED)
+                if(is_strided)
                     name << '_' << arg.stride_a;
 
                 name << '_' << arg.ldb;
 
-                if(TRMM_TYPE == TRMM_STRIDED_BATCHED)
+                if(is_strided)
                     name << '_' << arg.stride_b;
 
-                if(TRMM_TYPE == TRMM_STRIDED_BATCHED || TRMM_TYPE == TRMM_BATCHED)
+                if(is_ex)
+                    name << '_' << arg.ldc;
+
+                if(TRMM_TYPE == TRMM_OUTOFPLACE_STRIDED_BATCHED)
+                    name << '_' << arg.stride_c;
+
+                if(TRMM_TYPE == TRMM_STRIDED_BATCHED || TRMM_TYPE == TRMM_BATCHED
+                   || TRMM_TYPE == TRMM_OUTOFPLACE_STRIDED_BATCHED
+                   || TRMM_TYPE == TRMM_OUTOFPLACE_BATCHED)
                     name << '_' << arg.batch_count;
             }
 
             if(arg.fortran)
-            {
                 name << "_F";
-            }
 
             return std::move(name);
         }
@@ -127,6 +152,18 @@ namespace
                 testing_trmm_strided_batched<T>(arg);
             else if(!strcmp(arg.function, "trmm_strided_batched_bad_arg"))
                 testing_trmm_strided_batched_bad_arg<T>(arg);
+            else if(!strcmp(arg.function, "trmm_outofplace"))
+                testing_trmm_outofplace<T>(arg);
+            else if(!strcmp(arg.function, "trmm_outofplace_bad_arg"))
+                testing_trmm_outofplace_bad_arg<T>(arg);
+            else if(!strcmp(arg.function, "trmm_outofplace_batched"))
+                testing_trmm_outofplace_batched<T>(arg);
+            else if(!strcmp(arg.function, "trmm_outofplace_batched_bad_arg"))
+                testing_trmm_outofplace_batched_bad_arg<T>(arg);
+            else if(!strcmp(arg.function, "trmm_outofplace_strided_batched"))
+                testing_trmm_outofplace_strided_batched<T>(arg);
+            else if(!strcmp(arg.function, "trmm_outofplace_strided_batched_bad_arg"))
+                testing_trmm_outofplace_strided_batched_bad_arg<T>(arg);
             else
                 FAIL() << "Internal error: Test called with unknown function: " << arg.function;
         }
@@ -152,5 +189,27 @@ namespace
         CATCH_SIGNALS_AND_EXCEPTIONS_AS_FAILURES(rocblas_simple_dispatch<trmm_testing>(GetParam()));
     }
     INSTANTIATE_TEST_CATEGORIES(trmm_strided_batched);
+
+    using trmm_outofplace = trmm_template<trmm_testing, TRMM_OUTOFPLACE>;
+    TEST_P(trmm_outofplace, blas3_tensile)
+    {
+        RUN_TEST_ON_THREADS_STREAMS(rocblas_simple_dispatch<trmm_testing>(GetParam()));
+    }
+    INSTANTIATE_TEST_CATEGORIES(trmm_outofplace);
+
+    using trmm_outofplace_batched = trmm_template<trmm_testing, TRMM_OUTOFPLACE_BATCHED>;
+    TEST_P(trmm_outofplace_batched, blas3_tensile)
+    {
+        RUN_TEST_ON_THREADS_STREAMS(rocblas_simple_dispatch<trmm_testing>(GetParam()));
+    }
+    INSTANTIATE_TEST_CATEGORIES(trmm_outofplace_batched);
+
+    using trmm_outofplace_strided_batched
+        = trmm_template<trmm_testing, TRMM_OUTOFPLACE_STRIDED_BATCHED>;
+    TEST_P(trmm_outofplace_strided_batched, blas3_tensile)
+    {
+        RUN_TEST_ON_THREADS_STREAMS(rocblas_simple_dispatch<trmm_testing>(GetParam()));
+    }
+    INSTANTIATE_TEST_CATEGORIES(trmm_outofplace_strided_batched);
 
 } // namespace

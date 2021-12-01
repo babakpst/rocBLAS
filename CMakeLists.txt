@@ -25,6 +25,11 @@ add_compile_options( -Wno-unused-command-line-argument )
 # TODO: address [[nodiscard]] warnings
 add_compile_options( $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-result> )
 
+
+# CMake v3.21.0 can identify ROCMClang, but there are some issues with feature detection.
+# For now, disable ROCMClang detection to make it work the same as CMake v3.20 and earlier.
+set(__skip_rocmclang ON)
+
 unset(ENV{ROCM_BUILD_ID})
 project( rocblas LANGUAGES CXX )
 
@@ -76,7 +81,7 @@ if( CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 # set ( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Xclang -fallow-half-arguments-and-returns" )
   set ( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__HIP_HCC_COMPAT_MODE__=1" )
   if ( CMAKE_BUILD_TYPE MATCHES "Debug" AND NOT WIN32)
-    set ( CMAKE_CXX_FLAGS_DEBUG "-O0 ${CMAKE_CXX_FLAGS_DEBUG} -ggdb" )
+    set ( CMAKE_CXX_FLAGS_DEBUG "-O1 ${CMAKE_CXX_FLAGS_DEBUG} -gsplit-dwarf -ggdb" )
   endif()
 elseif( CXX_VERSION_STRING MATCHES "nvcc" )
   message( STATUS "HIPCC nvcc compiler detected; CUDA backend selected" )
@@ -145,7 +150,7 @@ get_os_id(OS_ID)
 message (STATUS "OS detected is ${OS_ID}")
 
 # Versioning via rocm-cmake
-set ( VERSION_STRING "2.41.0" )
+set ( VERSION_STRING "2.42.0" )
 rocm_setup_version( VERSION ${VERSION_STRING} )
 
 # Append our library helper cmake path and the cmake path for hip (for convenience)
@@ -169,67 +174,70 @@ if(BUILD_CODE_COVERAGE)
   add_link_options(--coverage)
 endif()
 
+include( clients/cmake/build-options.cmake )
+
 # FOR OPTIONAL ADDRESS SANITIZER
 option(BUILD_ADDRESS_SANITIZER "Build with address sanitizer enabled" OFF)
 if(BUILD_ADDRESS_SANITIZER AND BUILD_SHARED_LIBS)
+  # Fortran not supported, add_link_options below invalid for fortran linking
+  set(BUILD_FORTRAN_CLIENTS OFF)
+
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -shared-libasan")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -shared-libasan")
   add_link_options(-fuse-ld=lld)
 endif()
 
-include( clients/cmake/build-options.cmake )
-
 # force library install path to lib (CentOS 7 defaults to lib64)
 set(CMAKE_INSTALL_LIBDIR "lib" CACHE INTERNAL "Installation directory for libraries" FORCE)
 
-if(NOT SKIP_LIBRARY)
-  set( AMDGPU_TARGETS "all" CACHE STRING "Compile for which gpu architectures?")
-  set_property( CACHE AMDGPU_TARGETS PROPERTY STRINGS all gfx803 gfx900 gfx906:xnack- gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx1010 gfx1011 gfx1012 gfx1030 )
+# gpu arch configuration
+set( AMDGPU_TARGETS "all" CACHE STRING "Compile for which gpu architectures?")
+set_property( CACHE AMDGPU_TARGETS PROPERTY STRINGS all gfx803 gfx900 gfx906:xnack- gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx1010 gfx1011 gfx1012 gfx1030 )
 
-  # Detect if target ID syntax if supported for default all AMDGPU_TARGETS list
-  # Sets the AMDGPU_TARGETS with backward compatiblity
-  if(COMMAND rocm_check_target_ids)
-    rocm_check_target_ids(target_list
-        TARGETS "gfx803;gfx900;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack+;gfx90a:xnack-;gfx1010;gfx1011;gfx1012;gfx1030"
-    )
+# Detect if target ID syntax if supported for default all AMDGPU_TARGETS list
+# Sets the AMDGPU_TARGETS with backward compatiblity
+if(COMMAND rocm_check_target_ids)
+  rocm_check_target_ids(target_list
+      TARGETS "gfx803;gfx900;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack+;gfx90a:xnack-;gfx1010;gfx1011;gfx1012;gfx1030"
+  )
+else()
+  # This section is deprecated. Please use rocm_check_target_ids for future use.
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    execute_process(COMMAND ${CMAKE_CXX_COMPILER} "--help"
+      OUTPUT_VARIABLE CXX_OUTPUT
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_STRIP_TRAILING_WHITESPACE)
+    string(REGEX MATCH ".mcode\-object\-version" TARGET_ID_SUPPORT ${CXX_OUTPUT})
+  endif()
+  if(TARGET_ID_SUPPORT)
+    if(Tensile_LOGIC STREQUAL "aldebaran")
+      # Temporary bypass: if logic aldebaran logic is selected, assume aldebaran compiler support exists
+      # To be removed for ROCm 4.4
+      set(target_list "gfx803;gfx900;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack+;gfx90a:xnack-;gfx1010;gfx1011;gfx1012;gfx1030")
+    else()
+      set(target_list "gfx803;gfx900;gfx906:xnack-;gfx908:xnack-;gfx1010;gfx1011;gfx1012;gfx1030")
+    endif()
   else()
-    # This section is deprecated. Please use rocm_check_target_ids for future use.
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-      execute_process(COMMAND ${CMAKE_CXX_COMPILER} "--help"
-        OUTPUT_VARIABLE CXX_OUTPUT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_STRIP_TRAILING_WHITESPACE)
-      string(REGEX MATCH ".mcode\-object\-version" TARGET_ID_SUPPORT ${CXX_OUTPUT})
-    endif()
-    if(TARGET_ID_SUPPORT)
-      if(Tensile_LOGIC STREQUAL "aldebaran")
-        # Temporary bypass: if logic aldebaran logic is selected, assume aldebaran compiler support exists
-        # To be removed for ROCm 4.4
-        set(target_list "gfx803;gfx900;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack+;gfx90a:xnack-;gfx1010;gfx1011;gfx1012;gfx1030")
-      else()
-        set(target_list "gfx803;gfx900;gfx906:xnack-;gfx908:xnack-;gfx1010;gfx1011;gfx1012;gfx1030")
-      endif()
-    else()
-      set(target_list "gfx803;gfx900;gfx906;gfx908")
-    endif()
+    set(target_list "gfx803;gfx900;gfx906;gfx908")
   endif()
+endif()
 
-  set(ROCBLAS_ALL_GPUS "${target_list}" CACHE STRING "List of specific machine types for library to target")
+set(ROCBLAS_ALL_GPUS "${target_list}" CACHE STRING "List of specific machine types for library to target")
 
-  # gpu architectures to build for we may FORCE overwrite expanded "all", AMDGPU_TARGETS always defined by install.sh
-  if (AMDGPU_TARGETS)
-    if( AMDGPU_TARGETS STREQUAL "all" )
-      set( gpus "${ROCBLAS_ALL_GPUS}")
-    else()
-      set( gpus "${AMDGPU_TARGETS}")
-    endif()
-    # must FORCE set this AMDGPU_TARGETS before any find_package( hip ...), via tensile or in this file
-    # to override CACHE var and set --offload-arch flags via hip-config.cmake hip::device dependency
-    set( AMDGPU_TARGETS "${gpus}" CACHE STRING "AMD GPU targets to compile for" FORCE )
+# gpu architectures to build for we may FORCE overwrite expanded "all", AMDGPU_TARGETS always defined by install.sh
+if (AMDGPU_TARGETS)
+  if( AMDGPU_TARGETS STREQUAL "all" )
+    set( gpus "${ROCBLAS_ALL_GPUS}")
+  else()
+    set( gpus "${AMDGPU_TARGETS}")
   endif()
+  # must FORCE set this AMDGPU_TARGETS before any find_package( hip ...), via tensile or in this file
+  # to override CACHE var and set --offload-arch flags via hip-config.cmake hip::device dependency
+  set( AMDGPU_TARGETS "${gpus}" CACHE STRING "AMD GPU targets to compile for" FORCE )
+endif()
 
+if(NOT SKIP_LIBRARY)
   option( BUILD_WITH_TENSILE "Build full functionality which requires tensile?" ON )
-  option( BUILD_WITH_TENSILE_HOST "Use the new tensile client for gemm?" ON )
 
   if( BUILD_WITH_TENSILE )
     # we will have expanded "all" for tensile to ensure consistency as we have local rules
@@ -280,7 +288,7 @@ if(NOT SKIP_LIBRARY)
     if (TENSILE_VERSION)
       find_package(Tensile ${TENSILE_VERSION} EXACT REQUIRED HIP LLVM OpenMP PATHS "${INSTALLED_TENSILE_PATH}")
     else()
-      find_package(Tensile 4.30.0 EXACT REQUIRED HIP LLVM OpenMP PATHS "${INSTALLED_TENSILE_PATH}")
+      find_package(Tensile 4.31.0 EXACT REQUIRED HIP LLVM OpenMP PATHS "${INSTALLED_TENSILE_PATH}")
     endif()
   endif()
 endif()
@@ -295,9 +303,6 @@ message(STATUS "Using AMDGPU_TARGETS: ${AMDGPU_TARGETS}")
 # setup rocblas defines used for both the library and clients
 if( BUILD_WITH_TENSILE )
     list(APPEND TENSILE_DEFINES BUILD_WITH_TENSILE=1)
-    if ( BUILD_WITH_TENSILE_HOST )
-        list(APPEND TENSILE_DEFINES USE_TENSILE_HOST)
-    endif()
 else()
     list(APPEND TENSILE_DEFINES BUILD_WITH_TENSILE=0)
 endif()

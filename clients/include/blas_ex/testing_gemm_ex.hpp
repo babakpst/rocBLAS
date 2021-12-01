@@ -551,8 +551,11 @@ void testing_gemm_ex(const Arguments& arg)
     using To_hpa = std::conditional_t<std::is_same<To, rocblas_bfloat16>{}, float, To>;
     host_vector<To_hpa> hD_gold(size_D_copy);
 
-    // Initial Data on CPU
+    bool alt = (rocblas_gemm_flags_fp16_alt_impl & flags);
+
     rocblas_seedrand();
+
+    // Initial Data on CPU
     if(alpha_isnan)
     {
         rocblas_init_nan<Ti>(hA, A_row, A_col, lda);
@@ -560,22 +563,60 @@ void testing_gemm_ex(const Arguments& arg)
     }
     else
     {
-        rocblas_init<Ti>(hA, A_row, A_col, lda);
-        rocblas_init_alternating_sign<Ti>(hB, B_row, B_col, ldb);
+        if(arg.initialization == rocblas_initialization::rand_int)
+        {
+            rocblas_init<Ti>(hA, A_row, A_col, lda);
+            rocblas_init_alternating_sign<Ti>(hB, B_row, B_col, ldb);
+        }
+        else if(arg.initialization == rocblas_initialization::trig_float)
+        {
+            rocblas_init_sin<Ti>(hA, A_row, A_col, lda);
+            rocblas_init_cos<Ti>(hB, B_row, B_col, ldb);
+        }
+        else if(arg.initialization == rocblas_initialization::hpl)
+        {
+            rocblas_init_hpl<Ti>(hA, A_row, A_col, lda);
+            rocblas_init_hpl<Ti>(hB, B_row, B_col, ldb);
+        }
+        else if(arg.initialization == rocblas_initialization::special)
+        {
+            rocblas_init_alt_impl_big<Ti>(hA, A_row, A_col, lda);
+            rocblas_init_alt_impl_small<Ti>(hB, B_row, B_col, ldb);
+        }
+        else
+        {
+#ifdef GOOGLE_TEST
+            FAIL() << "unknown initialization type";
+            return;
+#else
+            rocblas_cerr << "unknown initialization type" << std::endl;
+            rocblas_abort();
+#endif
+        }
     }
-
     if(beta_isnan)
+    {
         rocblas_init_nan<To>(hC, M, N, ldc);
+    }
     else
-        rocblas_init<To>(hC, M, N, ldc);
-
+    {
+        if(arg.initialization == rocblas_initialization::rand_int)
+            rocblas_init<To>(hC, M, N, ldc);
+        else if(arg.initialization == rocblas_initialization::trig_float)
+            rocblas_init_sin<To>(hC, M, N, ldc);
+        else if(arg.initialization == rocblas_initialization::hpl)
+            rocblas_init_hpl<To>(hC, M, N, ldc);
+        else if(arg.initialization == rocblas_initialization::special)
+            rocblas_init<To>(hC, M, N, ldc);
+    }
     if(size_D_copy)
     {
         rocblas_init_nan<To>(hD_1, M, N, ldd);
         hD_gold = hD_1;
     }
 
-    if(std::is_same<To, rocblas_half>{} && std::is_same<Tc, float>{})
+    if(std::is_same<To, rocblas_half>{} && std::is_same<Tc, float>{}
+       && arg.initialization != rocblas_initialization::special)
     {
         // half precision IEEE has max and lowest values 65504 and -65504,
         // float precision IEEE has max and lowest values 3.403e+38 and -3.403e+38
@@ -721,7 +762,7 @@ void testing_gemm_ex(const Arguments& arg)
         cpu_time_used = get_time_us_no_sync();
 
         cblas_gemm<Ti, To_hpa, Tc>(
-            transA, transB, M, N, K, h_alpha_Tc, hA, lda, hB, ldb, h_beta_Tc, hD_gold, ldd);
+            transA, transB, M, N, K, h_alpha_Tc, hA, lda, hB, ldb, h_beta_Tc, hD_gold, ldd, alt);
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 

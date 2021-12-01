@@ -8,13 +8,6 @@
 
 extern "C" void rocblas_shutdown();
 
-#ifndef USE_TENSILE_HOST
-
-// In the old Tensile client, rocblas_initialize() is a no-op
-extern "C" void rocblas_initialize() {}
-
-#else
-
 /*****************************************************************************
  * This is the only file in rocBLAS which should #include Tensile headers    *
  * or reference Tensile identifiers. tensile_host.hpp defines the interface. *
@@ -49,17 +42,15 @@ extern "C" void rocblas_initialize() {}
 #include <libloaderapi.h>
 #define ROCBLAS_LIB_PATH "C:/hipSDK/rocblas/bin"
 #else
-#include <dlfcn.h>
 #include <glob.h>
 #include <libgen.h>
+#include <link.h>
 #include <unistd.h>
 #define ROCBLAS_LIB_PATH "/opt/rocm/rocblas/lib"
 #endif
 
 #ifdef WIN32
-//
-// https://en.cppreference.com/w/User:D41D8CD98F/feature_testing_macros
-//
+
 #ifdef __cpp_lib_filesystem
 #include <filesystem>
 #else
@@ -71,10 +62,25 @@ namespace std
 }
 #endif
 
-#endif
+#endif // WIN32
 
 namespace
 {
+#ifndef WIN32
+    std::string rocblas_so_path;
+
+    int rocblas_dl_iterate_phdr_callback(struct dl_phdr_info* hdr_info, size_t size, void* data)
+    {
+        // uncomment to see all dependent .so files
+        //fprintf(stderr, "rocblas so file: %s\n", hdr_info->dlpi_name);
+        if(hdr_info->dlpi_name && strstr(hdr_info->dlpi_name, "rocblas."))
+        {
+            rocblas_so_path = hdr_info->dlpi_name;
+        }
+        return 0;
+    }
+#endif
+
     /******************************************************
      * Map a rocBLAS type to a corresponding Tensile type *
      ******************************************************/
@@ -380,6 +386,14 @@ namespace
         // Add problem predicates for CEqualsD
         tensileProblem.setCEqualsD(prob.C == prob.D);
 
+        static const char* fp16AltImplEnvStr = std::getenv("ROCBLAS_INTERNAL_FP16_ALT_IMPL");
+        static const int   fp16AltImplEnv
+            = (fp16AltImplEnvStr == NULL ? -1 : (std::atoi(fp16AltImplEnvStr) == 0 ? 0 : 1));
+        if(fp16AltImplEnv != -1)
+            tensileProblem.setFp16AltImpl(fp16AltImplEnv);
+        else
+            tensileProblem.setFp16AltImpl(prob.flags & rocblas_gemm_flags_fp16_alt_impl);
+
         return tensileProblem;
     }
 
@@ -541,10 +555,11 @@ namespace
             {
                 path = ROCBLAS_LIB_PATH;
 
+                // Find the location of librocblas.dll/.so
+                // Fall back on hard-coded path if static library or not found
+
 #ifndef ROCBLAS_STATIC_LIB
 #ifdef WIN32
-                // Find the location of librocblas.dll
-                // Fall back on hard-coded path if static library or not found
                 // wchar_t wpath[MAX_PATH + 1] = {0};
                 // if(GetModuleFileNameW(GetModuleHandle("rocblas.dll"), wpath, MAX_PATH + 1))
                 // {
@@ -563,19 +578,9 @@ namespace
                     }
                 }
 #else
-                // Find the location of librocblas.so
-                // Fall back on hard-coded path if static library or not found
-                // [Use a void C API (rocblas_shutdown) *not* defined in this file to
-                // avoid compile-time resolution of the function pointer; cf.
-                // https://man7.org/linux/man-pages/man3/dladdr.3.html "BUGS"]
-                // rocblas_sscal stopped working even though is not defined in this unit
-
-                Dl_info info;
-                if(dladdr((void*)rocblas_shutdown, &info))
-                {
-                    path = info.dli_fname; // may be NULL if symbol not found
-                    path = std::string{dirname(&path[0])};
-                }
+                dl_iterate_phdr(rocblas_dl_iterate_phdr_callback, NULL);
+                if(rocblas_so_path.size())
+                    path = std::string{dirname(&rocblas_so_path[0])};
 #endif
 #endif // ifndef ROCBLAS_STATIC_LIB
 
@@ -825,13 +830,13 @@ rocblas_status runContractionProblem(const RocblasContractionProblem<Ti, To, Tc>
     {
         rocblas_internal_ostream msg;
         print_once(msg << "\nrocBLAS error: " << (solution ? "" : "No ")
-                       << "Tensile solution found, but exception thown for " << prob << e.what());
+                       << "Tensile solution found, but exception thrown for " << prob << e.what());
     }
     catch(...)
     {
         rocblas_internal_ostream msg;
         print_once(msg << "\nrocBLAS error: " << (solution ? "" : "No ")
-                       << "Tensile solution found, but unknown exception thown for " << prob);
+                       << "Tensile solution found, but unknown exception thrown for " << prob);
     }
 
     return status;
@@ -892,4 +897,3 @@ ROCBLAS_INTERNAL_EXPORT std::atomic_bool& rocblas_internal_tensile_is_initialize
     static std::atomic_bool init;
     return init;
 }
-#endif
