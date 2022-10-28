@@ -5,11 +5,11 @@
 # - run this script in master branch
 # - after running this script merge master into staging
 
-OLD_TENSILE_HASH="4ddf088d83d4e287f7bc3fc0631c2c5dba49cf8e"
-NEW_TENSILE_HASH="4ddf088d83d4e287f7bc3fc0631c2c5dba49cf8e"
+OLD_TENSILE_HASH="ed3af9d8bc94258464881c4684daf651bc254a4c"
+NEW_TENSILE_HASH="cdc4ab982d64f9b6ff98cd65dcb4ded610397786"
 
-OLD_ROCBLAS_VERSION="2.42.0"
-NEW_ROCBLAS_VERSION="2.43.0"
+OLD_ROCBLAS_VERSION="2.46.0"
+NEW_ROCBLAS_VERSION="2.47.0"
 
 sed -i "s/${OLD_TENSILE_HASH}/${NEW_TENSILE_HASH}/g" tensile_tag.txt
 

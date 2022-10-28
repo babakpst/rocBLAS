@@ -1,11 +1,39 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #ifndef _ROCBLAS_AUXILIARY_H_
 #define _ROCBLAS_AUXILIARY_H_
 #include "rocblas-export.h"
 #include "rocblas-types.h"
+
+#ifndef ROCBLAS_NO_DEPRECATED_WARNINGS
+#ifndef ROCBLAS_DEPRECATED_MSG
+#define ROCBLAS_DEPRECATED_MSG(MSG) __attribute__((deprecated(#MSG)))
+#endif
+#else
+#ifndef ROCBLAS_DEPRECATED_MSG
+#define ROCBLAS_DEPRECATED_MSG(MSG)
+#endif
+#endif
 
 /*!\file
  * \brief rocblas-auxiliary.h provides auxilary functions in rocblas
@@ -15,43 +43,53 @@
 extern "C" {
 #endif
 
-/*! \brief create handle
+/*! \brief Create handle
  */
 ROCBLAS_EXPORT rocblas_status rocblas_create_handle(rocblas_handle* handle);
 
-/*! \brief destroy handle
+/*! \brief Destroy handle
  */
 ROCBLAS_EXPORT rocblas_status rocblas_destroy_handle(rocblas_handle handle);
 
-/*! \brief set stream for handle
+/*! \brief Set stream for handle
  */
 ROCBLAS_EXPORT rocblas_status rocblas_set_stream(rocblas_handle handle, hipStream_t stream);
 
-/*! \brief get stream [0] from handle
+/*! \brief Get stream [0] from handle
  */
 ROCBLAS_EXPORT rocblas_status rocblas_get_stream(rocblas_handle handle, hipStream_t* stream);
 
-/*! \brief set rocblas_pointer_mode
+/*! \brief Set rocblas_pointer_mode
  */
 ROCBLAS_EXPORT rocblas_status rocblas_set_pointer_mode(rocblas_handle       handle,
                                                        rocblas_pointer_mode pointer_mode);
-
-/*! \brief get rocblas_pointer_mode
+/*! \brief Get rocblas_pointer_mode
  */
 ROCBLAS_EXPORT rocblas_status rocblas_get_pointer_mode(rocblas_handle        handle,
                                                        rocblas_pointer_mode* pointer_mode);
 
-/*! \brief set rocblas_atomics_mode
+ROCBLAS_DEPRECATED_MSG("rocblas_set_int8_type_for_hipblas will be removed in a future release.")
+/*! \brief Set rocblas_int8_type_for_hipblas
+ */
+ROCBLAS_EXPORT rocblas_status rocblas_set_int8_type_for_hipblas(
+    rocblas_handle handle, rocblas_int8_type_for_hipblas int8_type);
+
+ROCBLAS_DEPRECATED_MSG("rocblas_get_int8_type_for_hipblas will be removed in a future release.")
+/*! \brief Get rocblas_int8_type_for_hipblas
+ */
+ROCBLAS_EXPORT rocblas_status rocblas_get_int8_type_for_hipblas(
+    rocblas_handle handle, rocblas_int8_type_for_hipblas* int8_type);
+/*! \brief Set rocblas_atomics_mode
  */
 ROCBLAS_EXPORT rocblas_status rocblas_set_atomics_mode(rocblas_handle       handle,
                                                        rocblas_atomics_mode atomics_mode);
 
-/*! \brief get rocblas_atomics_mode
+/*! \brief Get rocblas_atomics_mode
  */
 ROCBLAS_EXPORT rocblas_status rocblas_get_atomics_mode(rocblas_handle        handle,
                                                        rocblas_atomics_mode* atomics_mode);
 
-/*! \brief query the preferable supported int8 input layout for gemm
+/*! \brief Query the preferable supported int8 input layout for gemm
      \details
     Indicates the supported int8 input layout for gemm according to the device.
     If the device supports packed-int8x4 (1) only, output flag is rocblas_gemm_flags_pack_int8x4
@@ -70,10 +108,13 @@ ROCBLAS_EXPORT rocblas_status rocblas_query_int8_layout_flag(rocblas_handle     
  */
 ROCBLAS_EXPORT rocblas_pointer_mode rocblas_pointer_to_mode(void* ptr);
 
-/*! \brief copy vector from host to device
+/*! \brief Copy vector from host to device
     @param[in]
     n           [rocblas_int]
                 number of elements in the vector
+    @param[in]
+    elem_size   [rocblas_int]
+                number of bytes per element in the matrix
     @param[in]
     x           pointer to vector on the host
     @param[in]
@@ -92,10 +133,13 @@ ROCBLAS_EXPORT rocblas_status rocblas_set_vector(rocblas_int n,
                                                  void*       y,
                                                  rocblas_int incy);
 
-/*! \brief copy vector from device to host
+/*! \brief Copy vector from device to host
     @param[in]
     n           [rocblas_int]
                 number of elements in the vector
+    @param[in]
+    elem_size   [rocblas_int]
+                number of bytes per element in the matrix
     @param[in]
     x           pointer to vector on the device
     @param[in]
@@ -114,7 +158,7 @@ ROCBLAS_EXPORT rocblas_status rocblas_get_vector(rocblas_int n,
                                                  void*       y,
                                                  rocblas_int incy);
 
-/*! \brief copy matrix from host to device
+/*! \brief Copy matrix from host to device
     @param[in]
     rows        [rocblas_int]
                 number of rows in matrices
@@ -143,7 +187,7 @@ ROCBLAS_EXPORT rocblas_status rocblas_set_matrix(rocblas_int rows,
                                                  void*       b,
                                                  rocblas_int ldb);
 
-/*! \brief copy matrix from device to host
+/*! \brief Copy matrix from device to host
     @param[in]
     rows        [rocblas_int]
                 number of rows in matrices
@@ -172,13 +216,16 @@ ROCBLAS_EXPORT rocblas_status rocblas_get_matrix(rocblas_int rows,
                                                  void*       b,
                                                  rocblas_int ldb);
 
-/*! \brief asynchronously copy vector from host to device
+/*! \brief Asynchronously copy vector from host to device
      \details
     rocblas_set_vector_async copies a vector from pinned host memory to device memory asynchronously.
     Memory on the host must be allocated with hipHostMalloc or the transfer will be synchronous.
     @param[in]
     n           [rocblas_int]
                 number of elements in the vector
+    @param[in]
+    elem_size   [rocblas_int]
+                number of bytes per element in the matrix
     @param[in]
     x           pointer to vector on the host
     @param[in]
@@ -200,13 +247,16 @@ ROCBLAS_EXPORT rocblas_status rocblas_set_vector_async(rocblas_int n,
                                                        rocblas_int incy,
                                                        hipStream_t stream);
 
-/*! \brief asynchronously copy vector from device to host
+/*! \brief Asynchronously copy vector from device to host
      \details
     rocblas_get_vector_async copies a vector from pinned host memory to device memory asynchronously.
     Memory on the host must be allocated with hipHostMalloc or the transfer will be synchronous.
     @param[in]
     n           [rocblas_int]
                 number of elements in the vector
+    @param[in]
+    elem_size   [rocblas_int]
+                number of bytes per element in the matrix
     @param[in]
     x           pointer to vector on the device
     @param[in]
@@ -228,7 +278,7 @@ ROCBLAS_EXPORT rocblas_status rocblas_get_vector_async(rocblas_int n,
                                                        rocblas_int incy,
                                                        hipStream_t stream);
 
-/*! \brief asynchronously copy matrix from host to device
+/*! \brief Asynchronously copy matrix from host to device
      \details
     rocblas_set_matrix_async copies a matrix from pinned host memory to device memory asynchronously.
     Memory on the host must be allocated with hipHostMalloc or the transfer will be synchronous.
@@ -304,7 +354,6 @@ ROCBLAS_EXPORT rocblas_status rocblas_get_matrix_async(rocblas_int rows,
 ROCBLAS_EXPORT rocblas_status rocblas_set_start_stop_events(rocblas_handle handle,
                                                             hipEvent_t     startEvent,
                                                             hipEvent_t     stopEvent);
-
 #define ROCBLAS_INVOKE_START_STOP_EVENTS(handle, startEvent, stopEvent, call) \
     do                                                                        \
     {                                                                         \

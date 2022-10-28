@@ -1,5 +1,23 @@
 # ########################################################################
-# Copyright 2018-2021 Advanced Micro Devices, Inc.
+# Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+# ies of the Software, and to permit persons to whom the Software is furnished
+# to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+# PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+# FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+# IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+# CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#
 # ########################################################################
 
 #enable_testing()
@@ -13,8 +31,14 @@ if( BUILD_WITH_TENSILE )
       multiheaded_gtest.cpp
       # use of tensile based functions (gemm)
       atomics_mode_gtest.cpp
-      trsm_gtest.cpp
-      trtri_gtest.cpp
+      # blas3
+      blas3/trsm_gtest.cpp
+      blas3/trtri_gtest.cpp
+      blas3/trmm_gtest.cpp
+      blas3/syrkx_gtest.cpp
+      blas3/herkx_gtest.cpp
+      blas3/syrk_gtest.cpp
+      blas3/herk_gtest.cpp
       )
 endif()
 
@@ -28,59 +52,74 @@ set(rocblas_no_tensile_test_source
     ostream_threadsafety_gtest.cpp
     set_get_vector_gtest.cpp
     set_get_matrix_gtest.cpp
-    blas1_gtest.cpp
-    blas1_ex_gtest.cpp
+    # blas1
+    blas1/asum_gtest.cpp
+    blas1/axpy_gtest.cpp
+    blas1/copy_gtest.cpp
+    blas1/dot_gtest.cpp
+    blas1/iamaxmin_gtest.cpp
+    blas1/nrm2_gtest.cpp
+    blas1/rot_gtest.cpp
+    blas1/scal_gtest.cpp
+    blas1/swap_gtest.cpp
+    # blas1_ex
+    blas_ex/axpy_ex_gtest.cpp
+    blas_ex/dot_ex_gtest.cpp
+    blas_ex/nrm2_ex_gtest.cpp
+    blas_ex/rot_ex_gtest.cpp
+    blas_ex/scal_ex_gtest.cpp
     # blas2
-    trsv_gtest.cpp
-    gbmv_gtest.cpp
-    gemv_gtest.cpp
-    hbmv_gtest.cpp
-    hemv_gtest.cpp
-    her_gtest.cpp
-    her2_gtest.cpp
-    hpmv_gtest.cpp
-    hpr_gtest.cpp
-    hpr2_gtest.cpp
-    trmv_gtest.cpp
-    tpmv_gtest.cpp
-    tbmv_gtest.cpp
-    tbsv_gtest.cpp
-    tpsv_gtest.cpp
-    ger_gtest.cpp
-    geru_gtest.cpp
-    gerc_gtest.cpp
-    spr_gtest.cpp
-    spr2_gtest.cpp
-    syr_gtest.cpp
-    syr2_gtest.cpp
-    sbmv_gtest.cpp
-    spmv_gtest.cpp
-    symv_gtest.cpp
+    blas2/trsv_gtest.cpp
+    blas2/gbmv_gtest.cpp
+    blas2/gemv_gtest.cpp
+    blas2/hbmv_gtest.cpp
+    blas2/hemv_gtest.cpp
+    blas2/her_gtest.cpp
+    blas2/her2_gtest.cpp
+    blas2/hpmv_gtest.cpp
+    blas2/hpr_gtest.cpp
+    blas2/hpr2_gtest.cpp
+    blas2/trmv_gtest.cpp
+    blas2/tpmv_gtest.cpp
+    blas2/tbmv_gtest.cpp
+    blas2/tbsv_gtest.cpp
+    blas2/tpsv_gtest.cpp
+    blas2/ger_gtest.cpp
+    blas2/geru_gtest.cpp
+    blas2/gerc_gtest.cpp
+    blas2/spr_gtest.cpp
+    blas2/spr2_gtest.cpp
+    blas2/syr_gtest.cpp
+    blas2/syr2_gtest.cpp
+    blas2/sbmv_gtest.cpp
+    blas2/spmv_gtest.cpp
+    blas2/symv_gtest.cpp
     # blas3
-    hemm_gtest.cpp
-    herk_gtest.cpp
-    her2k_gtest.cpp
-    herkx_gtest.cpp
-    symm_gtest.cpp
-    syrk_gtest.cpp
-    syr2k_gtest.cpp
-    geam_gtest.cpp
-    dgmm_gtest.cpp
-    gemm_gtest.cpp
-    syrkx_gtest.cpp
-    trmm_gtest.cpp
+    blas3/hemm_gtest.cpp
+    blas3/her2k_gtest.cpp
+    blas3/symm_gtest.cpp
+    blas3/syr2k_gtest.cpp
+    blas3/geam_gtest.cpp
+    blas3/dgmm_gtest.cpp
+    blas3/gemm_gtest.cpp
     )
 
 # Keep ${rocblas_tensile_test_source} first, so that multiheaded tests are the
 # first to initialize Tensile.
-if (NOT WIN32)
+if ( BUILD_FORTRAN_CLIENTS )
   add_executable( rocblas-test ${rocblas_tensile_test_source} ${rocblas_no_tensile_test_source} $<TARGET_OBJECTS:rocblas_fortran> ${rocblas_test_bench_common} )
 else()
   add_executable( rocblas-test ${rocblas_tensile_test_source} ${rocblas_no_tensile_test_source} ${rocblas_test_bench_common} )
+endif()
+
+if (WIN32)
   target_compile_definitions( rocblas-test PRIVATE _SILENCE_EXPERIMENTAL_FILESYSTEM_DEPRECATION_WARNING )
 endif()
 
 target_compile_definitions( rocblas-test PRIVATE ${TENSILE_DEFINES} GOOGLE_TEST )
+if ( NOT BUILD_FORTRAN_CLIENTS )
+  target_compile_definitions( rocblas-test PRIVATE CLIENTS_NO_FORTRAN )
+endif()
 
 # Internal header includes
 target_include_directories( rocblas-test
@@ -90,7 +129,9 @@ target_include_directories( rocblas-test
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas2>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas3>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas_ex>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/blas_ex>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/src/include>
 )
 
 # External header includes included as system files
@@ -102,7 +143,7 @@ target_include_directories( rocblas-test
     $<BUILD_INTERFACE:${GTEST_INCLUDE_DIRS}>
 )
 
-if( NOT WIN32 )
+if( BUILD_FORTRAN_CLIENTS )
   target_link_libraries( rocblas-test PRIVATE rocblas_fortran_client )
 endif( )
 target_link_libraries( rocblas-test PRIVATE ${BLAS_LIBRARY} ${GTEST_BOTH_LIBRARIES} roc::rocblas )
@@ -131,8 +172,10 @@ target_compile_definitions( rocblas-test PRIVATE ROCM_USE_FLOAT16 ROCBLAS_INTERN
 target_compile_options(rocblas-test PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${COMMON_CXX_OPTIONS}>)
 # target_compile_options does not go to linker like CMAKE_CXX_FLAGS does, so manually add
 if (NOT WIN32)
-  target_link_libraries( rocblas-test PRIVATE lapack cblas )
   list( APPEND COMMON_LINK_LIBS "-lm -lstdc++fs")
+  if (NOT BUILD_FORTRAN_CLIENTS)
+    list( APPEND COMMON_LINK_LIBS "-lgfortran") # for lapack
+  endif()
 else()
   list( APPEND COMMON_LINK_LIBS "libomp")
 endif()
@@ -171,3 +214,5 @@ add_custom_target( rocblas-test-data
 
 add_dependencies( rocblas-test rocblas-test-data rocblas-common )
 
+rocm_install(TARGETS rocblas-test COMPONENT tests)
+rocm_install(FILES ${ROCBLAS_TEST_DATA} DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT tests)

@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -28,28 +46,33 @@ template <typename T, typename R>
 void template_testing_reduction_strided_batched_bad_arg(
     const Arguments& arg, rocblas_reduction_strided_batched_t<T, R> func)
 {
-    rocblas_int N = 100, incx = 1, batch_count = 5;
+    for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
+    {
+        rocblas_local_handle handle{arg};
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, pointer_mode));
 
-    static const size_t safe_size = 100;
+        rocblas_int N = 100, incx = 1, batch_count = 2;
 
-    rocblas_local_handle handle{arg};
+        rocblas_stride stride_x = N * incx;
 
-    //
-    // allocate memory on device
-    //
-    device_vector<T> dx(batch_count);
-    CHECK_DEVICE_ALLOCATION(dx.memcheck());
+        // Allocate device memory
+        device_strided_batch_vector<T> dx(N, incx, stride_x, batch_count);
 
-    R h_rocblas_result;
+        // Check device memory allocation
+        CHECK_DEVICE_ALLOCATION(dx.memcheck());
 
-    EXPECT_ROCBLAS_STATUS(func(handle, N, nullptr, incx, incx * N, batch_count, &h_rocblas_result),
-                          rocblas_status_invalid_pointer);
+        R h_rocblas_result; // only quick returns so fine to use only host memory
 
-    EXPECT_ROCBLAS_STATUS(func(handle, N, dx, incx, incx * N, batch_count, nullptr),
-                          rocblas_status_invalid_pointer);
+        EXPECT_ROCBLAS_STATUS(func(nullptr, N, dx, incx, incx * N, batch_count, &h_rocblas_result),
+                              rocblas_status_invalid_handle);
 
-    EXPECT_ROCBLAS_STATUS(func(nullptr, N, dx, incx, incx * N, batch_count, &h_rocblas_result),
-                          rocblas_status_invalid_handle);
+        EXPECT_ROCBLAS_STATUS(
+            func(handle, N, nullptr, incx, incx * N, batch_count, &h_rocblas_result),
+            rocblas_status_invalid_pointer);
+
+        EXPECT_ROCBLAS_STATUS(func(handle, N, dx, incx, incx * N, batch_count, nullptr),
+                              rocblas_status_invalid_pointer);
+    }
 }
 
 template <typename T, typename R>
@@ -68,67 +91,81 @@ void template_testing_reduction_strided_batched(
     // check to prevent undefined memory allocation error
     if(N <= 0 || incx <= 0 || batch_count <= 0)
     {
-        host_vector<R> res(std::max(1, std::abs(batch_count)));
-        CHECK_HIP_ERROR(res.memcheck());
+        device_vector<R> d_rocblas_result(std::max(batch_count, 1));
+        CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
+
+        host_vector<R> h_rocblas_result(std::max(batch_count, 1));
+        CHECK_HIP_ERROR(h_rocblas_result.memcheck());
+
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+        EXPECT_ROCBLAS_STATUS(
+            func(handle, N, nullptr, incx, stridex, batch_count, d_rocblas_result),
+            rocblas_status_success);
+
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        EXPECT_ROCBLAS_STATUS(func(handle, N, nullptr, incx, stridex, batch_count, res),
-                              rocblas_status_success);
+        EXPECT_ROCBLAS_STATUS(
+            func(handle, N, nullptr, incx, stridex, batch_count, h_rocblas_result),
+            rocblas_status_success);
+
+        if(batch_count > 0)
+        {
+            host_vector<R> cpu_0(batch_count);
+            host_vector<R> gpu_0(batch_count);
+            CHECK_HIP_ERROR(gpu_0.transfer_from(d_rocblas_result));
+            unit_check_general<R>(1, 1, 1, 1, cpu_0, gpu_0, batch_count);
+            unit_check_general<R>(1, 1, 1, 1, cpu_0, h_rocblas_result, batch_count);
+        }
+
         return;
     }
 
-    host_vector<R> hr1(batch_count);
-    CHECK_HIP_ERROR(hr1.memcheck());
-    host_vector<R> hr2(batch_count);
-    CHECK_HIP_ERROR(hr2.memcheck());
-    host_vector<R> cpu_result(batch_count);
-    CHECK_HIP_ERROR(cpu_result.memcheck());
-    device_strided_batch_vector<T> dx(N, incx, stridex, batch_count);
-    CHECK_DEVICE_ALLOCATION(dx.memcheck());
+    // Naming: `h` is in CPU (host) memory(eg hx), `d` is in GPU (device) memory (eg dx).
+    // Allocate host memory
     host_strided_batch_vector<T> hx(N, incx, stridex, batch_count);
+    host_vector<R>               hr1(batch_count);
+    host_vector<R>               hr2(batch_count);
+    host_vector<R>               cpu_result(batch_count);
+
+    // Check host memory allocation
     CHECK_HIP_ERROR(hx.memcheck());
-    device_vector<R> dr(batch_count);
+
+    // Check device memory allocation
+    device_strided_batch_vector<T> dx(N, incx, stridex, batch_count);
+    device_vector<R>               dr(batch_count);
+
+    // Check device memory allocation
+    CHECK_DEVICE_ALLOCATION(dx.memcheck());
     CHECK_DEVICE_ALLOCATION(dr.memcheck());
     double gpu_time_used, cpu_time_used;
 
-    //
     // Initialize the host vector.
-    //
     rocblas_init_vector(hx, arg, rocblas_client_alpha_sets_nan, true);
 
-    //
     // Transfer host data to device.
-    //
     CHECK_HIP_ERROR(dx.transfer_from(hx));
 
     if(arg.unit_check || arg.norm_check)
     {
-        //
         // GPU BLAS, rocblas_pointer_mode_host
-        //
         {
             CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
             CHECK_ROCBLAS_ERROR(func(handle, N, dx, incx, stridex, batch_count, hr1));
         }
 
-        //
         // GPU BLAS, rocblas_pointer_mode_device
-        //
         {
             CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+            handle.pre_test(arg);
             CHECK_ROCBLAS_ERROR(func(handle, N, dx, incx, stridex, batch_count, dr));
-            //
+            handle.post_test(arg);
+
             // Copy result back to host.
-            //
             CHECK_HIP_ERROR(hr2.transfer_from(dr));
         }
 
-        //
         // COMPARE WITH CPU BLAS
-        //
         {
-            //
             // Time to execution
-            //
             cpu_time_used = get_time_us_no_sync();
             for(rocblas_int batch_index = 0; batch_index < batch_count; ++batch_index)
             {
@@ -137,18 +174,14 @@ void template_testing_reduction_strided_batched(
             cpu_time_used = get_time_us_no_sync() - cpu_time_used;
         }
 
-        //
         // Check the results
-        //
         if(arg.unit_check)
         {
             unit_check_general<R>(batch_count, 1, 1, cpu_result, hr1);
             unit_check_general<R>(batch_count, 1, 1, cpu_result, hr2);
         }
 
-        //
         // Check the norm.
-        //
         if(arg.norm_check)
         {
             rocblas_error_1 = 0.0;

@@ -2,7 +2,124 @@
 
 Full documentation for rocBLAS is available at [rocblas.readthedocs.io](https://rocblas.readthedocs.io/en/latest/).
 
-## (Unreleased) rocBLAS 2.42.0
+## (Unreleased) rocBLAS 2.46.0
+### Added
+- client smoke test dataset added for quick validation using command rocblas-test --yaml rocblas_smoke.yaml
+- Added stream order device memory allocation as a non-default beta option.
+
+### Optimized
+- Improved trsm performance for small sizes by using a substitution method technique
+- Improved syr2k and her2k performance significantly by using a block-recursive algorithm
+
+### Changed
+- Level 2, Level 1, and Extension functions: argument checking when the handle is set to rocblas_pointer_mode_host now returns the status of rocblas_status_invalid_pointer only for pointers that must be dereferenced based on the alpha and beta argument values.  With handle mode rocblas_pointer_mode_device only pointers that are always dereferenced regardless of alpha and beta values are checked and so may lead to a return status of rocblas_status_invalid_pointer.   This improves consistency with legacy BLAS behaviour.
+- Add variable to turn on/off ieee16/ieee32 tests for mixed precision gemm
+- Allow hipBLAS to select int8 datatype
+- Disallow B == C && ldb != ldc in rocblas_xtrmm_outofplace
+
+### Fixed
+- FORTRAN interfaces generalized for FORTRAN compilers other than gfortran
+- fix for trsm_strided_batched rocblas-bench performance gathering
+- Fix for rocm-smi path in commandrunner.py script to match ROCm 5.2 and above
+
+## rocBLAS 2.45.0 for ROCm 5.3.0
+### Added
+- install.sh option --upgrade_tensile_venv_pip to upgrade Pip in Tensile Virtual Environment. The corresponding CMake option is TENSILE_VENV_UPGRADE_PIP.
+- install.sh option --relocatable or -r adds rpath and removes ldconf entry on rocBLAS build.
+- install.sh option --lazy-library-loading to enable on-demand loading of tensile library files at runtime to speedup rocBLAS initialization.
+- Support for RHEL9 and CS9.
+- Added Numerical checking routine for symmetric, Hermitian, and triangular matrices, so that they could be checked for any numerical abnormalities such as NaN, Zero, infinity and denormal value.
+
+### Optimizations
+- trmm_outofplace performance improvements for all sizes and data types using block-recursive algorithm.
+- herkx performance improvements for all sizes and data types using block-recursive algorithm.
+- syrk/herk performance improvements by utilising optimised syrkx/herkx code.
+- symm/hemm performance improvements for all sizes and datatypes using block-recursive algorithm.
+
+### Changed
+- Unifying library logic file names: affects HBH (->HHS_BH), BBH (->BBS_BH), 4xi8BH (->4xi8II_BH). All HPA types are using the new naming convention now.
+- Level 3 function argument checking when the handle is set to rocblas_pointer_mode_host now returns the status of rocblas_status_invalid_pointer only for pointers that must be dereferenced based on the alpha and beta argument values. With handle mode rocblas_pointer_mode_device only pointers that are always dereferenced regardless of alpha and beta values are checked and so may lead to a return status of rocblas_status_invalid_pointer. This improves consistency with legacy BLAS behaviour.
+- Level 1, 2, and 3 function argument checking for enums is now more rigorously matching legacy BLAS so returns rocblas_status_invalid_value if arguments do not match the accepted subset.
+- Add quick-return for internal trmm and gemm template functions.
+- Moved function block sizes to a shared header file.
+- Level 1, 2, and 3 functions use rocblas_stride datatype for offset.
+- Modified the matrix and vector memory allocation in our test infrastructure for all Level 1, 2, 3 and BLAS_EX functions.
+- Added specific initialization for symmetric, Hermitian, and triangular matrix types in our test infrastructure.
+- Added NaN tests to the test infrastructure for the rest of Level 3, BLAS_EX functions.
+
+### Fixed
+- Improved logic to #include <filesystem> vs <experimental/filesystem>.
+- install.sh -s option to build rocblas as a static library.
+- dot function now sets the device results asynchronously for N <= 0
+
+### Deprecated
+- is_complex helper is now deprecated.  Use rocblas_is_complex instead.
+- The enum truncate_t and the value truncate is now deprecated and will removed from the ROCm release 6.0. It is replaced by rocblas_truncate_t and rocblas_truncate, respectively. The new enum rocblas_truncate_t and the value rocblas_truncate could be used from this ROCm release for an easy transition.
+
+### Removed
+- install.sh options  --hip-clang , --no-hip-clang, --merge-files, --no-merge-files are removed.
+
+## rocBLAS 2.44.0 for ROCm 5.2.0
+### Added
+- Packages for test and benchmark executables on all supported OSes using CPack.
+- Added Denormal number detection to the Numerical checking helper function to detect denormal/subnormal numbers in the input and the output vectors of rocBLAS level 1 and 2 functions.
+- Added Denormal number detection to the Numerical checking helper function to detect denormal/subnormal numbers in the input and the output general matrices of rocBLAS level 2 and 3 functions.
+- Added NaN initialization tests to the yaml files of Level 2 rocBLAS batched and strided-batched functions for testing purposes.
+- Added memory allocation check to avoid disk swapping during rocblas-test runs by skipping tests.
+
+### Optimizations
+- Improved performance of non-batched and batched her2 for all sizes and data types.
+- Improved performance of non-batched and batched amin for all data types using shuffle reductions.
+- Improved performance of non-batched and batched amax for all data types using shuffle reductions.
+- Improved performance of trsv for all sizes and data types.
+
+### Changed
+- Modifying gemm_ex for HBH (High-precision F16). The alpha/beta data type remains as F32 without narrowing to F16 and expanding back to F32 in the kernel. This change prevents rounding errors due to alpha/beta conversion in situations where alpha/beta are not exactly represented as an F16.
+- Modified non-batched and batched asum, nrm2 functions to use shuffle instruction based reductions.
+- For gemm, gemm_ex, gemm_ex2 internal API use rocblas_stride datatype for offset.
+- For symm, hemm, syrk, herk, dgmm, geam internal API use rocblas_stride datatype for offset.
+-  AMD copyright year for all rocBLAS files.
+- For gemv (transpose-case), typecasted the 'lda'(offset) datatype to size_t during offset calculation to avoid overflow and remove duplicate template functions.
+
+### Fixed
+- For function her2 avoid overflow in offset calculation.
+- For trsm when alpha == 0 and on host, allow A to be nullptr.
+- Fixed memory access issue in trsv.
+- Fixed git pre-commit script to update only AMD copyright year.
+- Fixed dgmm, geam test functions to set correct stride values.
+- For functions ssyr2k and dsyr2k allow trans == rocblas_operation_conjugate_transpose.
+- Fixed compilation error for clients-only build.
+
+### Removed
+- Remove Navi12 (gfx1011) from fat binary.
+
+## rocBLAS 2.43.0 for ROCm 5.1.0
+### Added
+- Option to install script for number of jobs to use for rocBLAS and Tensile compilation (-j, --jobs)
+- Option to install script to build clients without using any Fortran (--clients_no_fortran)
+- rocblas_client_initialize function, to perform rocBLAS initialize for clients(benchmark/test) and report the execution time.
+- Added tests for output of reduction functions when given bad input
+- Added user specified initialization (rand_int/trig_float/hpl) for initializing matrices and vectors in rocblas-bench
+
+### Optimizations
+- Improved performance of trsm with side == left and n == 1
+- Improved perforamnce of trsm with side == left and m <= 32 along with side == right and n <= 32
+
+### Changed
+- For syrkx and trmm internal API use rocblas_stride datatype for offset
+- For non-batched and batched gemm_ex functions if the C matrix pointer equals the D matrix pointer (aliased) their respective type and leading dimension arguments must now match
+- Test client dependencies updated to GTest 1.11
+- non-global false positives reported by cppcheck from file based suppression to inline suppression. File based suppression will only be used for global false positives.
+- Help menu messages in install.sh
+- For ger function, typecast the 'lda'(offset) datatype to size_t during offset calculation to avoid overflow and remove duplicate template functions.
+- Modified default initialization from rand_int to hpl for initializing matrices and vectors in rocblas-bench
+
+### Fixed
+- For function trmv (non-transposed cases) avoid overflow in offset calculation
+- Fixed cppcheck errors/warnings
+- Fixed doxygen warnings
+
+## rocBLAS 2.42.0 for ROCm 5.0.0
 ### Added
 - Added rocblas_get_version_string_size convenience function
 - Added rocblas_xtrmm_outofplace, an out-of-place version of rocblas_xtrmm

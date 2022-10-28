@@ -1,11 +1,31 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
 
-#include "rocblas_init.hpp"
 #include <string.h>
+
+#include "host_alloc.hpp"
+#include "rocblas_init.hpp"
 
 //
 // Local declaration of the device batch vector.
@@ -36,30 +56,16 @@ public:
     //! @param inc         The increment.
     //! @param batch_count The batch count.
     //!
-    explicit host_batch_vector(rocblas_int n, rocblas_int inc, rocblas_int batch_count)
+    explicit host_batch_vector(size_t n, rocblas_int inc, rocblas_int batch_count)
         : m_n(n)
         , m_inc(inc)
+        , m_nmemb(n * std::abs(inc))
         , m_batch_count(batch_count)
     {
         if(false == this->try_initialize_memory())
         {
             this->free_memory();
         }
-    }
-
-    //!
-    //! @brief Constructor.
-    //! @param n           The length of the vector.
-    //! @param inc         The increment.
-    //! @param stride      (UNUSED) The stride.
-    //! @param batch_count The batch count.
-    //!
-    explicit host_batch_vector(rocblas_int    n,
-                               rocblas_int    inc,
-                               rocblas_stride stride,
-                               rocblas_int    batch_count)
-        : host_batch_vector(n, inc, batch_count)
-    {
     }
 
     //!
@@ -73,9 +79,9 @@ public:
     //!
     //! @brief Returns the length of the vector.
     //!
-    rocblas_int n() const
+    size_t n() const
     {
-        return this->m_n;
+        return m_n;
     }
 
     //!
@@ -83,7 +89,7 @@ public:
     //!
     rocblas_int inc() const
     {
-        return this->m_inc;
+        return m_inc;
     }
 
     //!
@@ -91,7 +97,7 @@ public:
     //!
     rocblas_int batch_count() const
     {
-        return this->m_batch_count;
+        return m_batch_count;
     }
 
     //!
@@ -110,7 +116,7 @@ public:
     T* operator[](rocblas_int batch_index)
     {
 
-        return this->m_data[batch_index];
+        return m_data[batch_index];
     }
 
     //!
@@ -121,7 +127,7 @@ public:
     const T* operator[](rocblas_int batch_index) const
     {
 
-        return this->m_data[batch_index];
+        return m_data[batch_index];
     }
 
     //!
@@ -131,7 +137,7 @@ public:
     operator T**()
     // clang-format on
     {
-        return this->m_data;
+        return m_data;
     }
 
     //!
@@ -139,7 +145,7 @@ public:
     //!
     operator const T* const *()
     {
-        return this->m_data;
+        return m_data;
     }
 
     //!
@@ -152,11 +158,9 @@ public:
         if((this->batch_count() == that.batch_count()) && (this->n() == that.n())
            && (this->inc() == that.inc()))
         {
-            size_t num_bytes = this->n() * std::abs(this->inc()) * sizeof(T);
-            for(rocblas_int batch_index = 0; batch_index < this->m_batch_count; ++batch_index)
-            {
-                memcpy((*this)[batch_index], that[batch_index], num_bytes);
-            }
+            size_t num_bytes = m_nmemb * sizeof(T) * m_batch_count;
+            if(m_batch_count > 0)
+                memcpy((*this)[0], that[0], num_bytes);
             return true;
         }
         else
@@ -173,20 +177,16 @@ public:
     hipError_t transfer_from(const device_batch_vector<T>& that)
     {
         hipError_t hip_err;
-        size_t     num_bytes = size_t(this->m_n) * std::abs(this->m_inc) * sizeof(T);
+
         if(that.use_HMM && hipSuccess != (hip_err = hipDeviceSynchronize()))
             return hip_err;
 
-#ifdef WIN32
-// TODO remove, this allows batched tests to pass
-//hipDeviceSynchronize();
-#endif
-        hipMemcpyKind kind = that.use_HMM ? hipMemcpyHostToHost : hipMemcpyDeviceToHost;
+        size_t        num_bytes = m_nmemb * sizeof(T) * m_batch_count;
+        hipMemcpyKind kind      = that.use_HMM ? hipMemcpyHostToHost : hipMemcpyDeviceToHost;
 
-        for(rocblas_int batch_index = 0; batch_index < this->m_batch_count; ++batch_index)
+        if(m_batch_count > 0)
         {
-            if(hipSuccess
-               != (hip_err = hipMemcpy((*this)[batch_index], that[batch_index], num_bytes, kind)))
+            if(hipSuccess != (hip_err = hipMemcpy((*this)[0], that[0], num_bytes, kind)))
             {
                 return hip_err;
             }
@@ -200,27 +200,36 @@ public:
     //!
     hipError_t memcheck() const
     {
-        return (nullptr != this->m_data) ? hipSuccess : hipErrorOutOfMemory;
+        return (nullptr != m_data) ? hipSuccess : hipErrorOutOfMemory;
     }
 
 private:
-    rocblas_int m_n{};
+    size_t      m_n{}; // This may hold a matrix so using size_t.
     rocblas_int m_inc{};
+    size_t      m_nmemb{};
     rocblas_int m_batch_count{};
     T**         m_data{};
 
     bool try_initialize_memory()
     {
-        bool success = (nullptr != (this->m_data = (T**)calloc(this->m_batch_count, sizeof(T*))));
+        bool success = (nullptr != (m_data = (T**)host_calloc_throw(m_batch_count, sizeof(T*))));
         if(success)
         {
-            size_t nmemb = size_t(this->m_n) * std::abs(this->m_inc);
-            for(rocblas_int batch_index = 0; batch_index < this->m_batch_count; ++batch_index)
+            for(rocblas_int batch_index = 0; batch_index < m_batch_count; ++batch_index)
             {
-                success = (nullptr != (this->m_data[batch_index] = (T*)calloc(nmemb, sizeof(T))));
-                if(false == success)
+                if(batch_index == 0)
                 {
-                    break;
+                    success = (nullptr
+                               != (m_data[batch_index]
+                                   = (T*)host_malloc_throw(m_nmemb * m_batch_count, sizeof(T))));
+                    if(false == success)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    m_data[batch_index] = m_data[0] + batch_index * m_nmemb;
                 }
             }
         }
@@ -229,19 +238,23 @@ private:
 
     void free_memory()
     {
-        if(nullptr != this->m_data)
+        if(nullptr != m_data)
         {
-            for(rocblas_int batch_index = 0; batch_index < this->m_batch_count; ++batch_index)
+            for(rocblas_int batch_index = 0; batch_index < m_batch_count; ++batch_index)
             {
-                if(nullptr != this->m_data[batch_index])
+                if(batch_index == 0 && nullptr != m_data[batch_index])
                 {
-                    free(this->m_data[batch_index]);
-                    this->m_data[batch_index] = nullptr;
+                    free(m_data[batch_index]);
+                    m_data[batch_index] = nullptr;
+                }
+                else
+                {
+                    m_data[batch_index] = nullptr;
                 }
             }
 
-            free(this->m_data);
-            this->m_data = nullptr;
+            free(m_data);
+            m_data = nullptr;
         }
     }
 };
@@ -262,7 +275,7 @@ rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, const host_ba
     {
         auto batch_data = that[batch_index];
         os << "[" << batch_index << "] = { " << batch_data[0];
-        for(rocblas_int i = 1; i < n; ++i)
+        for(size_t i = 1; i < n; ++i)
         {
             os << ", " << batch_data[i * inc];
         }

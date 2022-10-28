@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2019-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "../blas1/rocblas_copy.hpp"
@@ -118,7 +136,7 @@ __device__ void gbmvx_kernel_calc(rocblas_operation transA,
                                   T*                y,
                                   rocblas_int       incy)
 {
-    rocblas_int thread_id = hipThreadIdx_x + hipThreadIdx_y * hipBlockDim_x;
+    rocblas_int thread_id = threadIdx.x + threadIdx.y * blockDim.x;
 
     // threads are all configurated locally
     // Create "tilted" blocks. With the compaction, each diagonal,
@@ -127,7 +145,7 @@ __device__ void gbmvx_kernel_calc(rocblas_operation transA,
     rocblas_int tx = thread_id % DIM_X;
     rocblas_int ty = thread_id / DIM_X;
 
-    rocblas_int ind = hipBlockIdx_x * DIM_X + tx;
+    rocblas_int ind = blockIdx.x * DIM_X + tx;
 
     __shared__ T sdata[DIM_X * DIM_Y];
 
@@ -152,8 +170,8 @@ __device__ void gbmvx_kernel_calc(rocblas_operation transA,
         __syncthreads();
     }
 
-    thread_id           = hipThreadIdx_x + hipThreadIdx_y * hipBlockDim_x;
-    ind                 = hipBlockIdx_x * DIM_X + thread_id;
+    thread_id           = threadIdx.x + threadIdx.y * blockDim.x;
+    ind                 = blockIdx.x * DIM_X + thread_id;
     rocblas_int max_ind = transA == rocblas_operation_none ? m : n;
     if(thread_id < DIM_X && ind < max_ind)
     {
@@ -196,40 +214,41 @@ __device__ void gbmvx_kernel_calc(rocblas_operation transA,
   *  reside on the same row as the other elements of the same diagonal.
   */
 template <rocblas_int DIM_X, rocblas_int DIM_Y, typename U, typename V, typename W>
-__launch_bounds__(DIM_X* DIM_Y) ROCBLAS_KERNEL void gbmvx_kernel(rocblas_operation transA,
-                                                                 rocblas_int       m,
-                                                                 rocblas_int       n,
-                                                                 rocblas_int       kl,
-                                                                 rocblas_int       ku,
-                                                                 U                 alphaa,
-                                                                 V                 Aa,
-                                                                 ptrdiff_t         shifta,
-                                                                 rocblas_int       lda,
-                                                                 rocblas_stride    strideA,
-                                                                 V                 xa,
-                                                                 ptrdiff_t         shiftx,
-                                                                 rocblas_int       incx,
-                                                                 rocblas_stride    stridex,
-                                                                 U                 betaa,
-                                                                 W                 ya,
-                                                                 ptrdiff_t         shifty,
-                                                                 rocblas_int       incy,
-                                                                 rocblas_stride    stridey)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+gbmvx_kernel(rocblas_operation transA,
+             rocblas_int       m,
+             rocblas_int       n,
+             rocblas_int       kl,
+             rocblas_int       ku,
+             U                 alphaa,
+             V                 Aa,
+             rocblas_stride    shifta,
+             rocblas_int       lda,
+             rocblas_stride    strideA,
+             V                 xa,
+             rocblas_stride    shiftx,
+             rocblas_int       incx,
+             rocblas_stride    stridex,
+             U                 betaa,
+             W                 ya,
+             rocblas_stride    shifty,
+             rocblas_int       incy,
+             rocblas_stride    stridey)
 {
-    rocblas_int num_threads = hipBlockDim_x * hipBlockDim_y * hipBlockDim_z;
+    rocblas_int num_threads = blockDim.x * blockDim.y * blockDim.z;
     if(DIM_X * DIM_Y != num_threads)
         return; // need to launch exactly the same number of threads as template parameters indicate
 
-    auto alpha = load_scalar(alphaa, hipBlockIdx_y, 0);
-    auto beta  = load_scalar(betaa, hipBlockIdx_y, 0);
+    auto alpha = load_scalar(alphaa, blockIdx.y, 0);
+    auto beta  = load_scalar(betaa, blockIdx.y, 0);
 
     if(!alpha && beta == 1)
         return;
 
-    const auto* A = cond_load_ptr_batch(alpha, Aa, hipBlockIdx_y, shifta, strideA);
-    const auto* x = cond_load_ptr_batch(alpha, xa, hipBlockIdx_y, shiftx, stridex);
+    const auto* A = cond_load_ptr_batch(alpha, Aa, blockIdx.y, shifta, strideA);
+    const auto* x = cond_load_ptr_batch(alpha, xa, blockIdx.y, shiftx, stridex);
 
-    auto* y = load_ptr_batch(ya, hipBlockIdx_y, shifty, stridey);
+    auto* y = load_ptr_batch(ya, blockIdx.y, shifty, stridey);
 
     gbmvx_kernel_calc<DIM_X, DIM_Y>(transA, m, n, kl, ku, alpha, A, lda, x, incx, beta, y, incy);
 }
@@ -247,16 +266,16 @@ rocblas_status rocblas_gbmv_template(rocblas_handle    handle,
                                      rocblas_int       ku,
                                      const T*          alpha,
                                      U                 A,
-                                     rocblas_int       offseta,
+                                     rocblas_stride    offseta,
                                      rocblas_int       lda,
                                      rocblas_stride    strideA,
                                      U                 x,
-                                     rocblas_int       offsetx,
+                                     rocblas_stride    offsetx,
                                      rocblas_int       incx,
                                      rocblas_stride    stridex,
                                      const T*          beta,
                                      V                 y,
-                                     rocblas_int       offsety,
+                                     rocblas_stride    offsety,
                                      rocblas_int       incy,
                                      rocblas_stride    stridey,
                                      rocblas_int       batch_count)
@@ -352,15 +371,15 @@ rocblas_status rocblas_gbmv_check_numerics(const char*       function_name,
                                            rocblas_int       m,
                                            rocblas_int       n,
                                            T                 A,
-                                           rocblas_int       offset_a,
+                                           rocblas_stride    offset_a,
                                            rocblas_int       lda,
                                            rocblas_stride    stride_a,
                                            T                 x,
-                                           rocblas_int       offset_x,
+                                           rocblas_stride    offset_x,
                                            rocblas_int       inc_x,
                                            rocblas_stride    stride_x,
                                            U                 y,
-                                           rocblas_int       offset_y,
+                                           rocblas_stride    offset_y,
                                            rocblas_int       inc_y,
                                            rocblas_stride    stride_y,
                                            rocblas_int       batch_count,
@@ -419,16 +438,16 @@ template rocblas_status rocblas_gbmv_template<T_,  U_,  V_>          \
                                      rocblas_int       ku,           \
                                      const T_*         alpha,        \
                                      U_                A,            \
-                                     rocblas_int       offseta,      \
+                                     rocblas_stride    offseta,      \
                                      rocblas_int       lda,          \
                                      rocblas_stride    strideA,      \
                                      U_                x,            \
-                                     rocblas_int       offsetx,      \
+                                     rocblas_stride    offsetx,      \
                                      rocblas_int       incx,         \
                                      rocblas_stride    stridex,      \
                                      const T_*         beta,         \
                                      V_                y,            \
-                                     rocblas_int       offsety,      \
+                                     rocblas_stride    offsety,      \
                                      rocblas_int       incy,         \
                                      rocblas_stride    stridey,      \
                                      rocblas_int       batch_count);
@@ -456,15 +475,15 @@ template rocblas_status rocblas_gbmv_check_numerics<T_,  U_>                 \
                                            rocblas_int       m,              \
                                            rocblas_int       n,              \
                                            T_                A,              \
-                                           rocblas_int       offset_a,       \
+                                           rocblas_stride       offset_a,       \
                                            rocblas_int       lda,            \
                                            rocblas_stride    stride_a,       \
                                            T_                x,              \
-                                           rocblas_int       offset_x,       \
+                                           rocblas_stride       offset_x,       \
                                            rocblas_int       inc_x,          \
                                            rocblas_stride    stride_x,       \
                                            U_                y,              \
-                                           rocblas_int       offset_y,       \
+                                           rocblas_stride       offset_y,       \
                                            rocblas_int       inc_y,          \
                                            rocblas_stride    stride_y,       \
                                            rocblas_int       batch_count,    \

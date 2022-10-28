@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "check_numerics_vector.hpp"
@@ -10,11 +28,11 @@
 template <typename T, typename U>
 __device__ void rotm_kernel_calc(rocblas_int    n,
                                  T              x_in,
-                                 rocblas_int    offset_x,
+                                 rocblas_stride offset_x,
                                  rocblas_int    incx,
                                  rocblas_stride stride_x,
                                  T              y_in,
-                                 rocblas_int    offset_y,
+                                 rocblas_stride offset_y,
                                  rocblas_int    incy,
                                  rocblas_stride stride_y,
                                  U              flag,
@@ -23,9 +41,9 @@ __device__ void rotm_kernel_calc(rocblas_int    n,
                                  U              h12,
                                  U              h22)
 {
-    auto      x   = load_ptr_batch(x_in, hipBlockIdx_y, offset_x, stride_x);
-    auto      y   = load_ptr_batch(y_in, hipBlockIdx_y, offset_y, stride_y);
-    ptrdiff_t tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
+    auto      x   = load_ptr_batch(x_in, blockIdx.y, offset_x, stride_x);
+    auto      y   = load_ptr_batch(y_in, blockIdx.y, offset_y, stride_y);
+    ptrdiff_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     if(tid < n && flag != -2)
     {
@@ -57,21 +75,22 @@ __device__ void rotm_kernel_calc(rocblas_int    n,
     }
 }
 
-template <typename T, typename U>
-ROCBLAS_KERNEL void rotm_kernel_batched(rocblas_int    n,
-                                        T              x_in,
-                                        rocblas_int    offset_x,
-                                        rocblas_int    incx,
-                                        rocblas_stride stride_x,
-                                        T              y_in,
-                                        rocblas_int    offset_y,
-                                        rocblas_int    incy,
-                                        rocblas_stride stride_y,
-                                        U              param,
-                                        rocblas_int    offset_param,
-                                        rocblas_stride stride_param)
+template <rocblas_int NB, typename T, typename U>
+ROCBLAS_KERNEL(NB)
+rotm_kernel_batched(rocblas_int    n,
+                    T              x_in,
+                    rocblas_stride offset_x,
+                    rocblas_int    incx,
+                    rocblas_stride stride_x,
+                    T              y_in,
+                    rocblas_stride offset_y,
+                    rocblas_int    incy,
+                    rocblas_stride stride_y,
+                    U              param,
+                    rocblas_stride offset_param,
+                    rocblas_stride stride_param)
 {
-    auto p    = load_ptr_batch(param, hipBlockIdx_y, offset_param, stride_param);
+    auto p    = load_ptr_batch(param, blockIdx.y, offset_param, stride_param);
     auto flag = p[0];
     auto h11  = p[1];
     auto h21  = p[2];
@@ -93,21 +112,22 @@ ROCBLAS_KERNEL void rotm_kernel_batched(rocblas_int    n,
                      h22);
 }
 
-template <typename T, typename U>
-ROCBLAS_KERNEL void rotm_kernel_regular(rocblas_int    n,
-                                        T*             x_in,
-                                        rocblas_int    offset_x,
-                                        rocblas_int    incx,
-                                        rocblas_stride stride_x,
-                                        T*             y_in,
-                                        rocblas_int    offset_y,
-                                        rocblas_int    incy,
-                                        rocblas_stride stride_y,
-                                        U              flag,
-                                        U              h11,
-                                        U              h21,
-                                        U              h12,
-                                        U              h22)
+template <rocblas_int NB, typename T, typename U>
+ROCBLAS_KERNEL(NB)
+rotm_kernel_regular(rocblas_int    n,
+                    T*             x_in,
+                    rocblas_stride offset_x,
+                    rocblas_int    incx,
+                    rocblas_stride stride_x,
+                    T*             y_in,
+                    rocblas_stride offset_y,
+                    rocblas_int    incy,
+                    rocblas_stride stride_y,
+                    U              flag,
+                    U              h11,
+                    U              h21,
+                    U              h12,
+                    U              h22)
 {
     rotm_kernel_calc(n,
                      x_in,
@@ -145,15 +165,15 @@ template <rocblas_int NB, bool BATCHED_OR_STRIDED, typename T, typename U>
 rocblas_status rocblas_rotm_template(rocblas_handle handle,
                                      rocblas_int    n,
                                      T              x,
-                                     rocblas_int    offset_x,
+                                     rocblas_stride offset_x,
                                      rocblas_int    incx,
                                      rocblas_stride stride_x,
                                      T              y,
-                                     rocblas_int    offset_y,
+                                     rocblas_stride offset_y,
                                      rocblas_int    incy,
                                      rocblas_stride stride_y,
                                      U              param,
-                                     rocblas_int    offset_param,
+                                     rocblas_stride offset_param,
                                      rocblas_stride stride_param,
                                      rocblas_int    batch_count)
 {
@@ -172,7 +192,7 @@ rocblas_status rocblas_rotm_template(rocblas_handle handle,
     hipStream_t rocblas_stream = handle->get_stream();
 
     if(rocblas_pointer_mode_device == handle->pointer_mode)
-        hipLaunchKernelGGL(rotm_kernel_batched,
+        hipLaunchKernelGGL((rotm_kernel_batched<NB>),
                            blocks,
                            threads,
                            0,
@@ -190,7 +210,7 @@ rocblas_status rocblas_rotm_template(rocblas_handle handle,
                            offset_param,
                            stride_param);
     else if(!BATCHED_OR_STRIDED)
-        hipLaunchKernelGGL(rotm_kernel_regular,
+        hipLaunchKernelGGL((rotm_kernel_regular<NB>),
                            blocks,
                            threads,
                            0,
@@ -224,11 +244,11 @@ rocblas_status rocblas_rotm_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
                                            rocblas_int    n,
                                            T              x,
-                                           rocblas_int    offset_x,
+                                           rocblas_stride offset_x,
                                            rocblas_int    inc_x,
                                            rocblas_stride stride_x,
                                            T              y,
-                                           rocblas_int    offset_y,
+                                           rocblas_stride offset_y,
                                            rocblas_int    inc_y,
                                            rocblas_stride stride_y,
                                            rocblas_int    batch_count,
@@ -284,11 +304,11 @@ template rocblas_status rocblas_rotm_check_numerics <T_>                        
                                                      rocblas_handle handle,         \
                                                      rocblas_int    n,              \
                                                      T_             x,              \
-                                                     rocblas_int    offset_x,       \
+                                                     rocblas_stride    offset_x,       \
                                                      rocblas_int    inc_x,          \
                                                      rocblas_stride stride_x,       \
                                                      T_             y,              \
-                                                     rocblas_int    offset_y,       \
+                                                     rocblas_stride    offset_y,       \
                                                      rocblas_int    inc_y,          \
                                                      rocblas_stride stride_y,       \
                                                      rocblas_int    batch_count,    \
@@ -313,15 +333,15 @@ template rocblas_status rocblas_rotm_template <NB_, BATCHED_OR_STRIDED_, T_, U_>
                                               (rocblas_handle handle,            \
                                                rocblas_int    n,                 \
                                                T_             x,                 \
-                                               rocblas_int    offset_x,          \
+                                               rocblas_stride    offset_x,          \
                                                rocblas_int    incx,              \
                                                rocblas_stride stride_x,          \
                                                T_             y,                 \
-                                               rocblas_int    offset_y,          \
+                                               rocblas_stride    offset_y,          \
                                                rocblas_int    incy,              \
                                                rocblas_stride stride_y,          \
                                                U_             param,             \
-                                               rocblas_int    offset_param,      \
+                                               rocblas_stride    offset_param,      \
                                                rocblas_stride stride_param,      \
                                                rocblas_int    batch_count);
 

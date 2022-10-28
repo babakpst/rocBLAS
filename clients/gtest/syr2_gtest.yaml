@@ -84,10 +84,10 @@ Tests:
   category: quick
   function: syr2
   precision: *single_double_precisions_complex_real
-  uplo: [ U ]
+  uplo: [ U, L ]
   N: [ 32 ]
   lda: [ 32 ]
-  incx: [ 1 ]
+  incx_incy: *incx_incy_range_small
   alpha_beta: *alpha_nan
 
 - name: syr2_small
@@ -128,6 +128,17 @@ Tests:
   alpha_beta: *alpha_range_small
   batch_count: [ -1, 0, 3 ]
   fortran: true
+
+- name: syr2_batched_NaN
+  category: quick
+  function: syr2_batched
+  precision: *double_precision
+  uplo: [ U ]
+  N: [ 32 ]
+  lda: [ 32 ]
+  incx_incy: *incx_incy_range_small
+  alpha_beta: *alpha_nan
+  batch_count: [ 2 ]
 
 - name: syr2_batched_small
   category: quick
@@ -172,6 +183,18 @@ Tests:
   stride_scale: [ 2 ]
   fortran: true
 
+- name: syr2_strided_batched_NaN
+  category: quick
+  function: syr2_strided_batched
+  precision: *single_precision
+  uplo: [ U ]
+  N: [ 32 ]
+  lda: [ 32 ]
+  incx_incy: *incx_incy_range_small
+  alpha_beta: *alpha_nan
+  batch_count: [ 2 ]
+  stride_scale: [ 2 ]
+
 - name: syr2_strided_batched_small
   category: quick
   function: syr2_strided_batched
@@ -205,4 +228,19 @@ Tests:
   stride_scale: [ 1.0 ]
   batch_count: [ 1, 3 ]
 
+- name: syr2_graph_test
+  category: pre_checkin
+  function:
+        - syr2
+        - syr2_batched
+        - syr2_strided_batched
+  precision: *single_double_precisions_complex_real
+  matrix_size:
+          - { N:    33, lda:  33 }
+  uplo: [ U ]
+  incx: [ 1 ]
+  alpha: [ 2.0 ]
+  stride_scale: [ 1 ]
+  batch_count: [ 5 ]
+  graph_test: true
 ...

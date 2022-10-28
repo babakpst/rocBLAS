@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  *
  * ************************************************************************ */
 
@@ -44,15 +62,22 @@ ROCBLAS_CLANG_STATIC constexpr double sum_error_tolerance<rocblas_double_complex
 #define NEAR_CHECK_B(M, N, lda, hCPU, hGPU, batch_count, err, NEAR_ASSERT)
 #else
 
-#define NEAR_CHECK(M, N, lda, strideA, hCPU, hGPU, batch_count, err, NEAR_ASSERT) \
-    do                                                                            \
-    {                                                                             \
-        for(size_t k = 0; k < batch_count; k++)                                   \
-            for(size_t j = 0; j < N; j++)                                         \
-                for(size_t i = 0; i < M; i++)                                     \
-                    NEAR_ASSERT(hCPU[i + j * size_t(lda) + k * strideA],          \
-                                hGPU[i + j * size_t(lda) + k * strideA],          \
-                                err);                                             \
+#define NEAR_CHECK(M, N, lda, strideA, hCPU, hGPU, batch_count, err, NEAR_ASSERT)            \
+    do                                                                                       \
+    {                                                                                        \
+        for(size_t k = 0; k < batch_count; k++)                                              \
+            for(size_t j = 0; j < N; j++)                                                    \
+                for(size_t i = 0; i < M; i++)                                                \
+                    if(rocblas_isnan(hCPU[i + j * size_t(lda) + k * strideA]))               \
+                    {                                                                        \
+                        ASSERT_TRUE(rocblas_isnan(hGPU[i + j * size_t(lda) + k * strideA])); \
+                    }                                                                        \
+                    else                                                                     \
+                    {                                                                        \
+                        NEAR_ASSERT(hCPU[i + j * size_t(lda) + k * strideA],                 \
+                                    hGPU[i + j * size_t(lda) + k * strideA],                 \
+                                    err);                                                    \
+                    }                                                                        \
     } while(0)
 
 #define NEAR_CHECK_B(M, N, lda, hCPU, hGPU, batch_count, err, NEAR_ASSERT)                    \

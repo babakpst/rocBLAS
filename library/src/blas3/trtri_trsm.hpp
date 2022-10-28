@@ -1,14 +1,31 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  *
  * ************************************************************************ */
 
 #pragma once
 
 #include "gemm.hpp"
+#include "rocblas_block_sizes.h"
 #include "rocblas_trtri.hpp"
-
-static constexpr rocblas_int ROCBLAS_TRTRI_NB = 16;
 
 /*
     Invert the IB by IB diagonal blocks of A of size n by n, where n is divisible by IB
@@ -22,25 +39,26 @@ static constexpr rocblas_int ROCBLAS_TRTRI_NB = 16;
 
 */
 template <rocblas_int NB, rocblas_int IB, rocblas_int IBD, typename T, typename U, typename V>
-ROCBLAS_KERNEL void trtri_trsm_kernel(rocblas_fill     uplo,
-                                      rocblas_diagonal diag,
-                                      U                A,
-                                      rocblas_int      offset_A,
-                                      rocblas_int      lda,
-                                      rocblas_stride   stride_A,
-                                      V                invA,
-                                      rocblas_int      offset_invA,
-                                      rocblas_stride   stride_invA)
+ROCBLAS_KERNEL(IB* IB)
+trtri_trsm_kernel(rocblas_fill     uplo,
+                  rocblas_diagonal diag,
+                  U                A,
+                  rocblas_stride   offset_A,
+                  rocblas_int      lda,
+                  rocblas_stride   stride_A,
+                  V                invA,
+                  rocblas_stride   offset_invA,
+                  rocblas_stride   stride_invA)
 {
     // get the individual matrix which is processed by device function
     // device function only see one matrix
 
     // each hip thread Block compute a inverse of a IB * IB diagonal block of A
-    rocblas_int offA    = (2 * hipBlockIdx_x) * (IB * lda + IB) + offset_A;
-    rocblas_int offinvA = ((2 * hipBlockIdx_x) / IBD) * (NB * NB)
-                          + ((2 * hipBlockIdx_x) % IBD) * (IB * NB + IB) + offset_invA;
-    const T* a_i    = load_ptr_batch(A, hipBlockIdx_y, offA, stride_A);
-    T*       invA_i = load_ptr_batch(invA, hipBlockIdx_y, offinvA, stride_invA);
+    rocblas_int offA    = (2 * blockIdx.x) * (IB * lda + IB) + offset_A;
+    rocblas_int offinvA = ((2 * blockIdx.x) / IBD) * (NB * NB)
+                          + ((2 * blockIdx.x) % IBD) * (IB * NB + IB) + offset_invA;
+    const T* a_i    = load_ptr_batch(A, blockIdx.y, offA, stride_A);
+    T*       invA_i = load_ptr_batch(invA, blockIdx.y, offinvA, stride_invA);
 
     custom_trtri_device<IB>(uplo, diag, IB, a_i, lda, invA_i, NB);
 }
@@ -96,11 +114,11 @@ rocblas_status rocblas_trtri_trsm_template(rocblas_handle   handle,
                                            rocblas_diagonal diag,
                                            rocblas_int      n,
                                            U                A,
-                                           rocblas_int      offset_Ain,
+                                           rocblas_stride   offset_Ain,
                                            rocblas_int      lda,
                                            rocblas_stride   stride_A,
                                            V                invA,
-                                           rocblas_int      offset_invAin,
+                                           rocblas_stride   offset_invAin,
                                            rocblas_stride   stride_invA,
                                            rocblas_int      batch_count)
 {
@@ -167,10 +185,10 @@ rocblas_status rocblas_trtri_trsm_template(rocblas_handle   handle,
                            offset_invAin,
                            stride_invA);
 
-        size_t sub_blockSize        = 128;
-        size_t tri_elements_to_zero = num_non_tri_elements(NB) * sub_blocks;
-        size_t num_sub_blocks       = (tri_elements_to_zero + sub_blockSize - 1) / sub_blockSize;
-        hipLaunchKernelGGL(rocblas_trtri_fill<T>,
+        static constexpr size_t sub_blockSize        = 128;
+        size_t                  tri_elements_to_zero = num_non_tri_elements(NB) * sub_blocks;
+        size_t num_sub_blocks = (tri_elements_to_zero + sub_blockSize - 1) / sub_blockSize;
+        hipLaunchKernelGGL((rocblas_trtri_fill<sub_blockSize, T>),
                            dim3(num_sub_blocks, batch_count),
                            dim3(sub_blockSize),
                            0,
@@ -286,11 +304,11 @@ rocblas_status rocblas_trtri_trsm_template(rocblas_handle   handle,
     rocblas_int rem = n - sub_blocks * NB;
     if(rem)
     {
-        size_t sub_blockSize        = 128;
-        size_t tri_elements_to_zero = num_non_tri_elements(rem);
-        size_t num_sub_blocks       = (tri_elements_to_zero + sub_blockSize - 1) / sub_blockSize;
+        static constexpr size_t sub_blockSize        = 128;
+        size_t                  tri_elements_to_zero = num_non_tri_elements(rem);
+        size_t num_sub_blocks = (tri_elements_to_zero + sub_blockSize - 1) / sub_blockSize;
 
-        hipLaunchKernelGGL(rocblas_trtri_fill<T>,
+        hipLaunchKernelGGL((rocblas_trtri_fill<sub_blockSize, T>),
                            dim3(num_sub_blocks, batch_count),
                            dim3(sub_blockSize),
                            0,

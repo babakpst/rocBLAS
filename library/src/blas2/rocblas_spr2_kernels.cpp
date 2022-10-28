@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "check_numerics_vector.hpp"
@@ -16,8 +34,8 @@ __device__ void spr2_kernel_calc(bool        upper,
                                  rocblas_int incy,
                                  T*          AP)
 {
-    rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
+    rocblas_int tx = blockIdx.x * blockDim.x + threadIdx.x;
+    rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     int index = upper ? ((ty * (ty + 1)) / 2) + tx : ((ty * (2 * n - ty + 1)) / 2) + (tx - ty);
 
@@ -25,33 +43,31 @@ __device__ void spr2_kernel_calc(bool        upper,
         AP[index] += alpha * x[tx * incx] * y[ty * incy] + alpha * y[tx * incy] * x[ty * incx];
 }
 
-template <rocblas_int DIM_X, rocblas_int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void rocblas_spr2_kernel(bool           upper,
-                                                                        rocblas_int    n,
-                                                                        TScal          alphaa,
-                                                                        TConstPtr      xa,
-                                                                        ptrdiff_t      shift_x,
-                                                                        rocblas_int    incx,
-                                                                        rocblas_stride stride_x,
-                                                                        TConstPtr      ya,
-                                                                        ptrdiff_t      shift_y,
-                                                                        rocblas_int    incy,
-                                                                        rocblas_stride stride_y,
-                                                                        TPtr           APa,
-                                                                        ptrdiff_t      shift_A,
-                                                                        rocblas_stride stride_A)
+template <rocblas_int DIM_X, rocblas_int DIM_Y, typename TStruct, typename TConstPtr, typename TPtr>
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+rocblas_spr2_kernel(bool           host_ptr_mode,
+                    bool           upper,
+                    rocblas_int    n,
+                    TStruct        alpha_device_host,
+                    TConstPtr      xa,
+                    rocblas_stride shift_x,
+                    rocblas_int    incx,
+                    rocblas_stride stride_x,
+                    TConstPtr      ya,
+                    rocblas_stride shift_y,
+                    rocblas_int    incy,
+                    rocblas_stride stride_y,
+                    TPtr           APa,
+                    rocblas_stride shift_A,
+                    rocblas_stride stride_A)
 {
-    rocblas_int num_threads = hipBlockDim_x * hipBlockDim_y * hipBlockDim_z;
-    if(DIM_X * DIM_Y != num_threads)
-        return; // need to launch exactly the number of threads as template parameters indicate.
-
-    auto alpha = load_scalar(alphaa);
+    auto alpha = host_ptr_mode ? alpha_device_host.value : load_scalar(alpha_device_host.ptr);
     if(!alpha)
         return;
 
-    auto*       AP = load_ptr_batch(APa, hipBlockIdx_z, shift_A, stride_A);
-    const auto* x  = load_ptr_batch(xa, hipBlockIdx_z, shift_x, stride_x);
-    const auto* y  = load_ptr_batch(ya, hipBlockIdx_z, shift_y, stride_y);
+    auto*       AP = load_ptr_batch(APa, blockIdx.z, shift_A, stride_A);
+    const auto* x  = load_ptr_batch(xa, blockIdx.z, shift_x, stride_x);
+    const auto* y  = load_ptr_batch(ya, blockIdx.z, shift_y, stride_y);
 
     spr2_kernel_calc(upper, n, alpha, x, incx, y, incy, AP);
 }
@@ -66,17 +82,17 @@ template <typename TScal, typename TConstPtr, typename TPtr>
 rocblas_status rocblas_spr2_template(rocblas_handle handle,
                                      rocblas_fill   uplo,
                                      rocblas_int    n,
-                                     TScal          alpha,
+                                     TScal const*   alpha,
                                      TConstPtr      x,
-                                     rocblas_int    offset_x,
+                                     rocblas_stride offset_x,
                                      rocblas_int    incx,
                                      rocblas_stride stride_x,
                                      TConstPtr      y,
-                                     rocblas_int    offset_y,
+                                     rocblas_stride offset_y,
                                      rocblas_int    incy,
                                      rocblas_stride stride_y,
                                      TPtr           AP,
-                                     rocblas_int    offset_A,
+                                     rocblas_stride offset_A,
                                      rocblas_stride stride_A,
                                      rocblas_int    batch_count)
 {
@@ -96,46 +112,29 @@ rocblas_status rocblas_spr2_template(rocblas_handle handle,
     dim3 spr2_grid(blocksX, blocksY, batch_count);
     dim3 spr2_threads(SPR2_DIM_X, SPR2_DIM_Y);
 
-    if(rocblas_pointer_mode_device == handle->pointer_mode)
-        hipLaunchKernelGGL((rocblas_spr2_kernel<SPR2_DIM_X, SPR2_DIM_Y>),
-                           spr2_grid,
-                           spr2_threads,
-                           0,
-                           handle->get_stream(),
-                           uplo == rocblas_fill_upper,
-                           n,
-                           alpha,
-                           x,
-                           shift_x,
-                           incx,
-                           stride_x,
-                           y,
-                           shift_y,
-                           incy,
-                           stride_y,
-                           AP,
-                           offset_A,
-                           stride_A);
-    else
-        hipLaunchKernelGGL((rocblas_spr2_kernel<SPR2_DIM_X, SPR2_DIM_Y>),
-                           spr2_grid,
-                           spr2_threads,
-                           0,
-                           handle->get_stream(),
-                           uplo == rocblas_fill_upper,
-                           n,
-                           *alpha,
-                           x,
-                           shift_x,
-                           incx,
-                           stride_x,
-                           y,
-                           shift_y,
-                           incy,
-                           stride_y,
-                           AP,
-                           offset_A,
-                           stride_A);
+    bool                            host_mode = handle->pointer_mode == rocblas_pointer_mode_host;
+    rocblas_internal_val_ptr<TScal> alpha_device_host(host_mode, alpha);
+
+    hipLaunchKernelGGL((rocblas_spr2_kernel<SPR2_DIM_X, SPR2_DIM_Y>),
+                       spr2_grid,
+                       spr2_threads,
+                       0,
+                       handle->get_stream(),
+                       host_mode,
+                       uplo == rocblas_fill_upper,
+                       n,
+                       alpha_device_host,
+                       x,
+                       shift_x,
+                       incx,
+                       stride_x,
+                       y,
+                       shift_y,
+                       incy,
+                       stride_y,
+                       AP,
+                       offset_A,
+                       stride_A);
 
     return rocblas_status_success;
 }
@@ -146,14 +145,14 @@ rocblas_status rocblas_spr2_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
                                            rocblas_int    n,
                                            T              A,
-                                           rocblas_int    offset_a,
+                                           rocblas_stride offset_a,
                                            rocblas_stride stride_a,
                                            U              x,
-                                           rocblas_int    offset_x,
+                                           rocblas_stride offset_x,
                                            rocblas_int    inc_x,
                                            rocblas_stride stride_x,
                                            U              y,
-                                           rocblas_int    offset_y,
+                                           rocblas_stride offset_y,
                                            rocblas_int    inc_y,
                                            rocblas_stride stride_y,
                                            rocblas_int    batch_count,
@@ -202,24 +201,24 @@ template rocblas_status rocblas_spr2_template<TScal_, TConstPtr_, TPtr_> \
                                     (rocblas_handle handle,              \
                                      rocblas_fill   uplo,                \
                                      rocblas_int    n,                   \
-                                     TScal_          alpha,              \
+                                     TScal_ const * alpha,               \
                                      TConstPtr_      x,                  \
-                                     rocblas_int    offset_x,            \
+                                     rocblas_stride    offset_x,            \
                                      rocblas_int    incx,                \
                                      rocblas_stride stride_x,            \
                                      TConstPtr_      y,                  \
-                                     rocblas_int    offset_y,            \
+                                     rocblas_stride    offset_y,            \
                                      rocblas_int    incy,                \
                                      rocblas_stride stride_y,            \
                                      TPtr_           AP,                 \
-                                     rocblas_int    offset_A,            \
+                                     rocblas_stride    offset_A,            \
                                      rocblas_stride stride_A,            \
                                      rocblas_int    batch_count);
 
-INSTANTIATE_SPR2_TEMPLATE(float const*, float const*, float*)
-INSTANTIATE_SPR2_TEMPLATE(double const*, double const*, double*)
-INSTANTIATE_SPR2_TEMPLATE(float const*, float const* const*, float* const*)
-INSTANTIATE_SPR2_TEMPLATE(double const*, double const* const*, double* const*)
+INSTANTIATE_SPR2_TEMPLATE(float , float const*, float*)
+INSTANTIATE_SPR2_TEMPLATE(double , double const*, double*)
+INSTANTIATE_SPR2_TEMPLATE(float , float const* const*, float* const*)
+INSTANTIATE_SPR2_TEMPLATE(double , double const* const*, double* const*)
 
 #undef INSTANTIATE_SPR2_TEMPLATE
 
@@ -233,14 +232,14 @@ template rocblas_status rocblas_spr2_check_numerics<T_, U_>               \
                                            rocblas_handle handle,         \
                                            rocblas_int    n,              \
                                            T_             A,              \
-                                           rocblas_int    offset_a,       \
+                                           rocblas_stride    offset_a,       \
                                            rocblas_stride stride_a,       \
                                            U_             x,              \
-                                           rocblas_int    offset_x,       \
+                                           rocblas_stride    offset_x,       \
                                            rocblas_int    inc_x,          \
                                            rocblas_stride stride_x,       \
                                            U_             y,              \
-                                           rocblas_int    offset_y,       \
+                                           rocblas_stride    offset_y,       \
                                            rocblas_int    inc_y,          \
                                            rocblas_stride stride_y,       \
                                            rocblas_int    batch_count,    \

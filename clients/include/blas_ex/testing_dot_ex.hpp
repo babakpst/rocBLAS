@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -29,57 +47,24 @@ void testing_dot_ex_bad_arg(const Arguments& arg)
     rocblas_datatype result_type    = rocblas_datatype_f32_r;
     rocblas_datatype execution_type = rocblas_datatype_f32_r;
 
-    rocblas_int         N         = 100;
-    rocblas_int         incx      = 1;
-    rocblas_int         incy      = 1;
-    static const size_t safe_size = 100; //  arbitrarily set to 100
+    rocblas_int N    = 100;
+    rocblas_int incx = 1;
+    rocblas_int incy = 1;
 
     rocblas_local_handle handle{arg};
-    device_vector<Tx>    dx(safe_size);
-    device_vector<Ty>    dy(safe_size);
-    device_vector<Tr>    d_rocblas_result(1);
+
+    // Allocate device memory
+    device_vector<Tx> dx(N, incx);
+    device_vector<Ty> dy(N, incy);
+    device_vector<Tr> d_rocblas_result(1);
+
+    // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dx.memcheck());
     CHECK_DEVICE_ALLOCATION(dy.memcheck());
     CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
 
     CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
 
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_ex_fn)(handle,
-                                              N,
-                                              nullptr,
-                                              x_type,
-                                              incx,
-                                              dy,
-                                              y_type,
-                                              incy,
-                                              d_rocblas_result,
-                                              result_type,
-                                              execution_type),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_ex_fn)(handle,
-                                              N,
-                                              dx,
-                                              x_type,
-                                              incx,
-                                              nullptr,
-                                              y_type,
-                                              incy,
-                                              d_rocblas_result,
-                                              result_type,
-                                              execution_type),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_ex_fn)(handle,
-                                              N,
-                                              dx,
-                                              x_type,
-                                              incx,
-                                              dy,
-                                              y_type,
-                                              incy,
-                                              nullptr,
-                                              result_type,
-                                              execution_type),
-                          rocblas_status_invalid_pointer);
     EXPECT_ROCBLAS_STATUS((rocblas_dot_ex_fn)(nullptr,
                                               N,
                                               dx,
@@ -92,6 +77,43 @@ void testing_dot_ex_bad_arg(const Arguments& arg)
                                               result_type,
                                               execution_type),
                           rocblas_status_invalid_handle);
+
+    EXPECT_ROCBLAS_STATUS((rocblas_dot_ex_fn)(handle,
+                                              N,
+                                              nullptr,
+                                              x_type,
+                                              incx,
+                                              dy,
+                                              y_type,
+                                              incy,
+                                              d_rocblas_result,
+                                              result_type,
+                                              execution_type),
+                          rocblas_status_invalid_pointer);
+    EXPECT_ROCBLAS_STATUS((rocblas_dot_ex_fn)(handle,
+                                              N,
+                                              dx,
+                                              x_type,
+                                              incx,
+                                              nullptr,
+                                              y_type,
+                                              incy,
+                                              d_rocblas_result,
+                                              result_type,
+                                              execution_type),
+                          rocblas_status_invalid_pointer);
+    EXPECT_ROCBLAS_STATUS((rocblas_dot_ex_fn)(handle,
+                                              N,
+                                              dx,
+                                              x_type,
+                                              incx,
+                                              dy,
+                                              y_type,
+                                              incy,
+                                              nullptr,
+                                              result_type,
+                                              execution_type),
+                          rocblas_status_invalid_pointer);
 }
 
 template <typename Tx, typename Ty = Tx, typename Tr = Ty, typename Tex = Tr>
@@ -115,10 +137,6 @@ void testing_dot_ex(const Arguments& arg)
     rocblas_int incx = arg.incx;
     rocblas_int incy = arg.incy;
 
-    Tr cpu_result;
-    Tr rocblas_result_1;
-    Tr rocblas_result_2;
-
     double               rocblas_error_1;
     double               rocblas_error_2;
     rocblas_local_handle handle{arg};
@@ -128,6 +146,9 @@ void testing_dot_ex(const Arguments& arg)
     {
         device_vector<Tr> d_rocblas_result(1);
         CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
+
+        host_vector<Tr> h_rocblas_result(1);
+        CHECK_HIP_ERROR(h_rocblas_result.memcheck());
 
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
         CHECK_ROCBLAS_ERROR((rocblas_dot_ex_fn)(handle,
@@ -142,51 +163,54 @@ void testing_dot_ex(const Arguments& arg)
                                                 result_type,
                                                 execution_type));
 
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        CHECK_ROCBLAS_ERROR((rocblas_dot_ex_fn)(handle,
+                                                N,
+                                                nullptr,
+                                                x_type,
+                                                incx,
+                                                nullptr,
+                                                y_type,
+                                                incy,
+                                                h_rocblas_result,
+                                                result_type,
+                                                execution_type));
+
         Tr cpu_0 = Tr(0);
-        Tr gpu_0;
+        Tr gpu_0, gpu_1;
         CHECK_HIP_ERROR(hipMemcpy(&gpu_0, d_rocblas_result, sizeof(Tr), hipMemcpyDeviceToHost));
+        gpu_1 = h_rocblas_result[0];
         unit_check_general<Tr>(1, 1, 1, &cpu_0, &gpu_0);
+        unit_check_general<Tr>(1, 1, 1, &cpu_0, &gpu_1);
 
         return;
     }
 
-    rocblas_int abs_incx = incx >= 0 ? incx : -incx;
-    rocblas_int abs_incy = incy >= 0 ? incy : -incy;
-    size_t      size_x   = N * size_t(abs_incx);
-    size_t      size_y   = N * size_t(abs_incy);
-    if(!size_x)
-        size_x = 1;
-    if(!size_y)
-        size_y = 1;
+    // Naming: `h` is in CPU (host) memory(eg hx), `d` is in GPU (device) memory (eg dx).
+    // Allocate host memory
+    host_vector<Tx> hx(N, incx ? incx : 1);
+    host_vector<Ty> hy(N, incy ? incy : 1);
+    host_vector<Tr> cpu_result(1, 1);
+    host_vector<Tr> rocblas_result_1(1, 1);
+    host_vector<Tr> rocblas_result_2(1, 1);
 
-    // allocate memory on device
-    device_vector<Tx> dx(size_x);
-    device_vector<Ty> dy(size_y);
+    // Allocate device memory
+    device_vector<Tx> dx(N, incx ? incx : 1);
+    device_vector<Ty> dy(N, incy ? incy : 1);
     device_vector<Tr> d_rocblas_result_2(1);
+
+    // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dx.memcheck());
     CHECK_DEVICE_ALLOCATION(dy.memcheck());
     CHECK_DEVICE_ALLOCATION(d_rocblas_result_2.memcheck());
 
-    // Naming: dX is in GPU (device) memory. hK is in CPU (host) memory, plz follow this practice
-    host_vector<Tx> hx(size_x);
-    host_vector<Ty> hy(size_y);
-
-    // Initial Data on CPU
-    rocblas_seedrand();
-    if(rocblas_isnan(arg.alpha))
-    {
-        rocblas_init_nan<Tx>(hx, 1, N, abs_incx);
-        rocblas_init_nan<Ty>(hy, 1, N, abs_incy);
-    }
-    else
-    {
-        rocblas_init<Tx>(hx, 1, N, abs_incx);
-        rocblas_init<Ty>(hy, 1, N, abs_incy);
-    }
+    // Initialize data on host memory
+    rocblas_init_vector(hx, arg, rocblas_client_alpha_sets_nan, true);
+    rocblas_init_vector(hy, arg, rocblas_client_alpha_sets_nan, false, true);
 
     // copy data from CPU to device, does not work for incx != 1
-    CHECK_HIP_ERROR(hipMemcpy(dx, hx, sizeof(Tx) * size_x, hipMemcpyHostToDevice));
-    CHECK_HIP_ERROR(hipMemcpy(dy, hy, sizeof(Ty) * size_y, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(dx.transfer_from(hx));
+    CHECK_HIP_ERROR(dy.transfer_from(hy));
 
     double gpu_time_used, cpu_time_used;
 
@@ -209,7 +233,7 @@ void testing_dot_ex(const Arguments& arg)
                                                 dy_ptr,
                                                 y_type,
                                                 incy,
-                                                &rocblas_result_1,
+                                                rocblas_result_1,
                                                 result_type,
                                                 execution_type));
 
@@ -226,12 +250,12 @@ void testing_dot_ex(const Arguments& arg)
                                                 d_rocblas_result_2,
                                                 result_type,
                                                 execution_type));
-        CHECK_HIP_ERROR(
-            hipMemcpy(&rocblas_result_2, d_rocblas_result_2, sizeof(Tr), hipMemcpyDeviceToHost));
+
+        CHECK_HIP_ERROR(rocblas_result_2.transfer_from(d_rocblas_result_2));
 
         // CPU BLAS
         cpu_time_used = get_time_us_no_sync();
-        (CONJ ? cblas_dotc<Tx> : cblas_dot<Tx>)(N, hx, incx, hy_ptr, incy, &cpu_result);
+        (CONJ ? cblas_dotc<Tx> : cblas_dot<Tx>)(N, hx, incx, hy_ptr, incy, cpu_result);
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
         if(arg.unit_check)
@@ -242,20 +266,22 @@ void testing_dot_ex(const Arguments& arg)
                 // Tolerance is slightly greater than 1 / 1024.0
                 const double tol = N * sum_error_tolerance<Tex>;
 
-                near_check_general<Tr>(1, 1, 1, &cpu_result, &rocblas_result_1, tol);
-                near_check_general<Tr>(1, 1, 1, &cpu_result, &rocblas_result_2, tol);
+                near_check_general<Tr>(1, 1, 1, cpu_result, rocblas_result_1, tol);
+                near_check_general<Tr>(1, 1, 1, cpu_result, rocblas_result_2, tol);
             }
             else
             {
-                unit_check_general<Tr>(1, 1, 1, &cpu_result, &rocblas_result_1);
-                unit_check_general<Tr>(1, 1, 1, &cpu_result, &rocblas_result_2);
+                unit_check_general<Tr>(1, 1, 1, cpu_result, rocblas_result_1);
+                unit_check_general<Tr>(1, 1, 1, cpu_result, rocblas_result_2);
             }
         }
 
         if(arg.norm_check)
         {
-            rocblas_error_1 = double(rocblas_abs((cpu_result - rocblas_result_1) / cpu_result));
-            rocblas_error_2 = double(rocblas_abs((cpu_result - rocblas_result_2) / cpu_result));
+            rocblas_error_1
+                = double(rocblas_abs((cpu_result[0] - rocblas_result_1[0]) / cpu_result[0]));
+            rocblas_error_2
+                = double(rocblas_abs((cpu_result[0] - rocblas_result_2[0]) / cpu_result[0]));
         }
     }
 

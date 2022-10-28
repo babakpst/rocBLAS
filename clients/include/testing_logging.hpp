@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -22,15 +40,14 @@
 #include <unistd.h>
 #endif
 
-#ifdef __cpp_lib_filesystem
+#if __has_include(<filesystem>)
 #include <filesystem>
-#else
+namespace fs = std::filesystem;
+#elif __has_include(<experimental/filesystem>)
 #include <experimental/filesystem>
-
-namespace std
-{
-    namespace filesystem = experimental::filesystem;
-}
+namespace fs = std::experimental::filesystem;
+#else
+#error no filesystem found
 #endif
 
 template <typename T>
@@ -94,16 +111,14 @@ void testing_logging(const Arguments& arg)
     // open files
     static std::string tmp_dir = rocblas_tempname();
 
-    const std::filesystem::path trace_fspath1
+    const fs::path trace_fspath1
         = tmp_dir + std::string("trace_") + std::string(precision_letter<T>) + std::string(".csv");
-    const std::filesystem::path trace_fspath2 = tmp_dir + std::string("trace_")
-                                                + std::string(precision_letter<T>)
-                                                + std::string("_gold.csv");
-    const std::filesystem::path bench_fspath1
+    const fs::path trace_fspath2 = tmp_dir + std::string("trace_")
+                                   + std::string(precision_letter<T>) + std::string("_gold.csv");
+    const fs::path bench_fspath1
         = tmp_dir + std::string("bench_") + std::string(precision_letter<T>) + std::string(".txt");
-    const std::filesystem::path bench_fspath2 = tmp_dir + std::string("bench_")
-                                                + std::string(precision_letter<T>)
-                                                + std::string("_gold.txt");
+    const fs::path bench_fspath2 = tmp_dir + std::string("bench_")
+                                   + std::string(precision_letter<T>) + std::string("_gold.txt");
 
     std::string trace_path1 = trace_fspath1.generic_string();
     std::string trace_path2 = trace_fspath2.generic_string();
@@ -1159,8 +1174,8 @@ void testing_logging(const Arguments& arg)
 
     if(!trace_cmp)
     {
-        std::filesystem::remove(trace_fspath1);
-        std::filesystem::remove(trace_fspath2);
+        fs::remove(trace_fspath1);
+        fs::remove(trace_fspath2);
     }
 
     if(test_pointer_mode == rocblas_pointer_mode_host)
@@ -1178,8 +1193,8 @@ void testing_logging(const Arguments& arg)
 
         if(!bench_cmp)
         {
-            std::filesystem::remove(bench_fspath1);
-            std::filesystem::remove(bench_fspath2);
+            fs::remove(bench_fspath1);
+            fs::remove(bench_fspath2);
         }
     }
 }

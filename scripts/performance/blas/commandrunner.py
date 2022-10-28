@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+
+"""Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+   ies of the Software, and to permit persons to whom the Software is furnished
+   to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+   PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+   FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+   COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+   CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+
 '''
 This tool is meant to manage running commands related to a single project,
 but from multiple versions of that project and/or multiple hardware configurations.
@@ -52,6 +73,7 @@ import string
 import subprocess
 import sys
 import time
+from decimal import Decimal
 
 import getspecs
 
@@ -93,8 +115,13 @@ def import_rocm_smi(install_path):
     global smi_imported
     if not smi_imported:
         smi_imported = True
+        host_rocm_ver = Decimal('.'.join(getspecs.getrocmversion().split('.')[0:2])) # get host's rocm major.minor version
+        rocm_5_2_ver = Decimal('5.2')
         try:
-            sys.path.append(os.path.join(install_path, 'bin'))
+            if rocm_5_2_ver.compare(host_rocm_ver) == 1:
+                sys.path.append(os.path.join(install_path, 'bin')) # For versions below ROCm 5.2
+            else:
+                sys.path.append(os.path.join(install_path, 'libexec/rocm_smi')) # For versions equal or above ROCm 5.2
             import rocm_smi
             smi = rocm_smi
 
@@ -133,6 +160,10 @@ class SystemMonitor(object):
         if smi is None:
             return 0.0
         elif metric == 'fan_speed_percent':
+            gfx = getspecs.getgfx(device, cuda)
+            # Not querying fan speed on 908 or 90a
+            if gfx == 'gfx908' or gfx == 'gfx90a' or gfx == 'N/A':
+                return 'N/A'
             return getspecs.getfanspeedpercent(device, cuda, smi)[1]
         elif metric.find('clk') >=0 and metric.split('_')[0] in getspecs.validclocknames(cuda, smi):
             return int(getspecs.getcurrentclockfreq(device, metric.split('_')[0], cuda, smi).strip('Mhz'))
@@ -637,7 +668,10 @@ class MachineSpecs(dict):
                 total_bytes_int = total_bytes.split()[0] if cuda else total_bytes
                 smi_info[key] = '{} / {}'.format(to_mem_units(used_bytes_int), to_mem_units(total_bytes_int))
             for component in getspecs.validversioncomponents(cuda, smi):
-                smi_info[component.capitalize() + ' Version'] = getspecs.getversion(device, component, cuda, smi)
+                if cuda:
+                    smi_info[component.capitalize() + ' Version'] = getspecs.getversion(device, component, cuda, smi)
+                else:
+                    smi_info[smi.component_str(component).capitalize() + ' Version'] = getspecs.getversion(device, component, cuda, smi)
             rv['Card' + str(device)] = smi_info
 
         return rv

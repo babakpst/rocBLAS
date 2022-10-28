@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -86,6 +104,8 @@ struct Arguments
 
     rocblas_initialization initialization;
 
+    rocblas_arithmetic_check arithmetic_check;
+
     rocblas_atomics_mode atomics_mode;
 
     // memory padding for testing write out of bounds
@@ -111,6 +131,7 @@ struct Arguments
     bool c_noalias_d;
     bool HMM;
     bool fortran;
+    bool graph_test;
 
     /*************************************************************************
      *                     End Of Arguments                                  *
@@ -164,6 +185,7 @@ struct Arguments
     OPER(d_type) SEP                 \
     OPER(compute_type) SEP           \
     OPER(initialization) SEP         \
+    OPER(arithmetic_check) SEP       \
     OPER(atomics_mode) SEP           \
     OPER(pad) SEP                    \
     OPER(threads) SEP                \
@@ -179,7 +201,8 @@ struct Arguments
     OPER(diag) SEP                   \
     OPER(c_noalias_d) SEP            \
     OPER(HMM) SEP                    \
-    OPER(fortran)
+    OPER(fortran) SEP                \
+    OPER(graph_test)
 
     // clang-format on
 
@@ -195,23 +218,6 @@ struct Arguments
 
     // Function to read Arguments data from stream
     friend std::istream& operator>>(std::istream& str, Arguments& arg);
-
-#ifdef WIN32
-    // Clang specific code
-    template <typename T>
-    friend rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os,
-                                                std::pair<char const*, T> p);
-
-    friend rocblas_internal_ostream& operator<<(rocblas_internal_ostream&                os,
-                                                std::pair<char const*, rocblas_datatype> p);
-
-    friend rocblas_internal_ostream& operator<<(rocblas_internal_ostream&                      os,
-                                                std::pair<char const*, rocblas_initialization> p);
-
-    friend rocblas_internal_ostream& operator<<(rocblas_internal_ostream&    os,
-                                                std::pair<char const*, bool> p);
-// End of Clang specific code
-#endif
 
     // Convert (alpha, alphai) and (beta, betai) to a particular type
     // Return alpha, beta adjusted to 0 for when they are NaN
@@ -230,23 +236,23 @@ struct Arguments
     template <typename T>
     bool alpha_isnan() const
     {
-        return rocblas_isnan(alpha) || (is_complex<T> && rocblas_isnan(alphai));
+        return rocblas_isnan(alpha) || (rocblas_is_complex<T> && rocblas_isnan(alphai));
     }
 
     template <typename T>
     bool beta_isnan() const
     {
-        return rocblas_isnan(beta) || (is_complex<T> && rocblas_isnan(betai));
+        return rocblas_isnan(beta) || (rocblas_is_complex<T> && rocblas_isnan(betai));
     }
 
 private:
-    template <typename T, typename U, std::enable_if_t<!is_complex<T>, int> = 0>
+    template <typename T, typename U, std::enable_if_t<!rocblas_is_complex<T>, int> = 0>
     static T convert_alpha_beta(U r, U i)
     {
         return T(r);
     }
 
-    template <typename T, typename U, std::enable_if_t<+is_complex<T>, int> = 0>
+    template <typename T, typename U, std::enable_if_t<+rocblas_is_complex<T>, int> = 0>
     static T convert_alpha_beta(U r, U i)
     {
         return T(r, i);

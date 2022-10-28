@@ -38,6 +38,9 @@ Definitions:
     - { M: 1025, N: 4011, lda: 1025, stride_a:   4111275 }
     - { M: 7000, N: 2000, lda: 7000, stride_a:   14000000 }
 
+  - &double_buffered_size_range
+    - { M:  2560, N:  2560, lda:  2570, stride_a:  6579200 }
+
   - &incx_incy_range
     - { incx:   1, incy:   1}
     - { incx:  -1, incy:  -1}
@@ -45,6 +48,9 @@ Definitions:
     - { incx:   1, incy:   2}
     - { incx:   2, incy:   1}
     - { incx:  10, incy:  99}
+
+  - &size_t_index
+    - { M: 46431, N: 46431, lda: 46431, stride_a: 2147488281 }
 
   - &incx_incy_range_small
     - { incx: 2, incy: 2 }
@@ -69,6 +75,18 @@ Tests:
   precision: *single_double_precisions
   transA: N
   matrix_size: *special_case_range
+
+- name: ger_size_t_M
+  category: nightly
+  function:
+  - ger
+  # shared code for size_t with non-batched
+  #- ger_batched
+  #- ger_strided_batched
+  precision: *single_double_precisions
+  matrix_size: *size_t_index
+  incx_incy: *incx_incy_range_small
+  alpha: [ -0.5 ]
 
 # Regular ger
 - name: ger_fortran
@@ -105,6 +123,14 @@ Tests:
   incx_incy: *incx_incy_range
   alpha: [ -0.5, 2.0, 0.0 ]
 
+- name: ger_medium
+  category: pre_checkin
+  function: ger
+  precision: *single_double_precisions
+  matrix_size: *double_buffered_size_range
+  incx_incy: *incx_incy_range
+  alpha: [ -0.5 ]
+
 - name: ger_large
   category: nightly
   function: ger
@@ -123,6 +149,15 @@ Tests:
   alpha: [ 2.0 ]
   batch_count: [ -1, 0, 3 ]
   fortran: [ true ]
+
+- name: ger_batched_NaN
+  category: quick
+  function: ger_batched
+  precision: *double_precision
+  matrix_size: *tiny_matrix
+  incx_incy: *incx_incy_range_small
+  alpha: [ .NaN ]
+  batch_count: [ 2 ]
 
 - name: ger_batched_small
   category: quick
@@ -163,6 +198,16 @@ Tests:
   stride_scale: [ 2 ]
   fortran: [ true ]
 
+- name: ger_strided_batched_NaN
+  category: quick
+  function: ger_strided_batched
+  precision: *single_precision
+  matrix_size: *tiny_matrix
+  incx_incy: *incx_incy_range_small
+  alpha: [ .NaN ]
+  batch_count: [ 2 ]
+  stride_scale: [ 2 ]
+
 - name: ger_strided_batched_small
   category: quick
   function: ger_strided_batched
@@ -183,6 +228,16 @@ Tests:
   stride_scale: [ 1 ]
   batch_count: [ 1, 10 ]
 
+- name: ger_strided_batched_medium
+  category: pre_checkin
+  function: ger_strided_batched
+  precision: *single_double_precisions
+  matrix_size: *double_buffered_size_range
+  incx_incy: *incx_incy_range_small
+  alpha: [ 2.0 ]
+  stride_scale: [ 1 ]
+  batch_count: [ 5 ]
+
 - name: ger_strided_batched_large
   category: nightly
   function: ger_strided_batched
@@ -192,4 +247,18 @@ Tests:
   alpha: [ -0.5, 0.0 ]
   stride_scale: [ 1 ]
   batch_count: [ 3 ]
+
+- name: ger_graph_test
+  category: pre_checkin
+  function:
+        - ger
+        - ger_batched
+        - ger_strided_batched
+  precision: *single_double_precisions
+  matrix_size:
+        - { M:   33, N:   32, lda:   33, stride_a: 1056 }
+  alpha: [ 2.0 ]
+  stride_scale: [ 1 ]
+  batch_count: [ 5 ]
+  graph_test: true
 ...

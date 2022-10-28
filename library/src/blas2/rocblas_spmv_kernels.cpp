@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2019-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "check_numerics_vector.hpp"
@@ -23,11 +41,11 @@ __device__ void spmv_kernel_calc(bool        upper,
                                  T* __restrict__ y,
                                  rocblas_int incy)
 {
-    rocblas_int thread_id = hipThreadIdx_x + hipThreadIdx_y * hipBlockDim_x;
+    rocblas_int thread_id = threadIdx.x + threadIdx.y * blockDim.x;
 
     if(!alpha)
     {
-        rocblas_int ind = hipBlockIdx_x * DIM_X + thread_id;
+        rocblas_int ind = blockIdx.x * DIM_X + thread_id;
         if(thread_id < DIM_X && ind < n)
         {
             y[ind * incy] = beta ? (beta * y[ind * incy]) : 0;
@@ -39,7 +57,7 @@ __device__ void spmv_kernel_calc(bool        upper,
     rocblas_int tx = thread_id % DIM_X;
     rocblas_int ty = thread_id / DIM_X;
 
-    rocblas_int ind = hipBlockIdx_x * DIM_X + tx;
+    rocblas_int ind = blockIdx.x * DIM_X + tx;
 
     __shared__ T sdata[DIM_X * DIM_Y];
     T            res_A = 0.0;
@@ -72,7 +90,7 @@ __device__ void spmv_kernel_calc(bool        upper,
 
     __syncthreads();
 
-    ind = hipBlockIdx_x * DIM_X + thread_id;
+    ind = blockIdx.x * DIM_X + thread_id;
     if(thread_id < DIM_X && ind < n)
     {
         // Add the partial sums and store
@@ -90,37 +108,38 @@ __device__ void spmv_kernel_calc(bool        upper,
   *  Loads pointers and launches the actual calculation kernel.
   */
 template <rocblas_int DIM_X, rocblas_int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void spmv_kernel(bool           upper,
-                                                                rocblas_int    n,
-                                                                TScal          alpha_device_host,
-                                                                rocblas_stride stride_alpha,
-                                                                TConstPtr __restrict__ APa,
-                                                                ptrdiff_t      shifta,
-                                                                rocblas_stride strideA,
-                                                                TConstPtr __restrict__ xa,
-                                                                ptrdiff_t      shiftx,
-                                                                rocblas_int    incx,
-                                                                rocblas_stride stridex,
-                                                                TScal          beta_device_host,
-                                                                rocblas_stride stride_beta,
-                                                                TPtr __restrict__ ya,
-                                                                ptrdiff_t      shifty,
-                                                                rocblas_int    incy,
-                                                                rocblas_stride stridey)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+spmv_kernel(bool           upper,
+            rocblas_int    n,
+            TScal          alpha_device_host,
+            rocblas_stride stride_alpha,
+            TConstPtr __restrict__ APa,
+            rocblas_stride shifta,
+            rocblas_stride strideA,
+            TConstPtr __restrict__ xa,
+            rocblas_stride shiftx,
+            rocblas_int    incx,
+            rocblas_stride stridex,
+            TScal          beta_device_host,
+            rocblas_stride stride_beta,
+            TPtr __restrict__ ya,
+            rocblas_stride shifty,
+            rocblas_int    incy,
+            rocblas_stride stridey)
 {
-    rocblas_int num_threads = hipBlockDim_x * hipBlockDim_y * hipBlockDim_z;
+    rocblas_int num_threads = blockDim.x * blockDim.y * blockDim.z;
     if(DIM_X * DIM_Y != num_threads)
         return; // need to launch exactly the same number of threads as template parameters indicate
 
-    auto alpha = load_scalar(alpha_device_host, hipBlockIdx_y, stride_alpha);
-    auto beta  = load_scalar(beta_device_host, hipBlockIdx_y, stride_beta);
+    auto alpha = load_scalar(alpha_device_host, blockIdx.y, stride_alpha);
+    auto beta  = load_scalar(beta_device_host, blockIdx.y, stride_beta);
     if(!alpha && beta == 1)
         return;
 
-    auto AP = cond_load_ptr_batch(alpha, APa, hipBlockIdx_y, shifta, strideA);
-    auto x  = cond_load_ptr_batch(alpha, xa, hipBlockIdx_y, shiftx, stridex);
+    auto AP = cond_load_ptr_batch(alpha, APa, blockIdx.y, shifta, strideA);
+    auto x  = cond_load_ptr_batch(alpha, xa, blockIdx.y, shiftx, stridex);
 
-    auto y = load_ptr_batch(ya, hipBlockIdx_y, shifty, stridey);
+    auto y = load_ptr_batch(ya, blockIdx.y, shifty, stridey);
 
     spmv_kernel_calc<DIM_X, DIM_Y>(upper, n, alpha, AP, x, incx, beta, y, incy);
 }
@@ -132,16 +151,16 @@ rocblas_status rocblas_spmv_template(rocblas_handle handle,
                                      const V*       alpha,
                                      rocblas_stride stride_alpha,
                                      const U*       A,
-                                     rocblas_int    offseta,
+                                     rocblas_stride offseta,
                                      rocblas_stride strideA,
                                      const U*       x,
-                                     rocblas_int    offsetx,
+                                     rocblas_stride offsetx,
                                      rocblas_int    incx,
                                      rocblas_stride stridex,
                                      const V*       beta,
                                      rocblas_stride stride_beta,
                                      W*             y,
-                                     rocblas_int    offsety,
+                                     rocblas_stride offsety,
                                      rocblas_int    incy,
                                      rocblas_stride stridey,
                                      rocblas_int    batch_count)
@@ -227,14 +246,14 @@ rocblas_status rocblas_spmv_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
                                            rocblas_int    n,
                                            T              A,
-                                           rocblas_int    offset_a,
+                                           rocblas_stride offset_a,
                                            rocblas_stride stride_a,
                                            T              x,
-                                           rocblas_int    offset_x,
+                                           rocblas_stride offset_x,
                                            rocblas_int    inc_x,
                                            rocblas_stride stride_x,
                                            U              y,
-                                           rocblas_int    offset_y,
+                                           rocblas_stride offset_y,
                                            rocblas_int    inc_y,
                                            rocblas_stride stride_y,
                                            rocblas_int    batch_count,
@@ -286,16 +305,16 @@ template rocblas_status rocblas_spmv_template<T_, U_, V_, W_>         \
                                      V_ const*       alpha,           \
                                      rocblas_stride stride_alpha,     \
                                      U_ const*       A,               \
-                                     rocblas_int    offseta,          \
+                                     rocblas_stride offseta,          \
                                      rocblas_stride strideA,          \
                                      U_ const*       x,               \
-                                     rocblas_int    offsetx,          \
+                                     rocblas_stride offsetx,          \
                                      rocblas_int    incx,             \
                                      rocblas_stride stridex,          \
                                      V_ const*       beta,            \
                                      rocblas_stride stride_beta,      \
                                      W_*             y,               \
-                                     rocblas_int    offsety,          \
+                                     rocblas_stride offsety,          \
                                      rocblas_int    incy,             \
                                      rocblas_stride stridey,          \
                                      rocblas_int    batch_count);
@@ -317,14 +336,14 @@ template rocblas_status rocblas_spmv_check_numerics<T_, U_>                 \
                                            rocblas_handle handle,           \
                                            rocblas_int    n,                \
                                            T_             A,                \
-                                           rocblas_int    offset_a,         \
+                                           rocblas_stride    offset_a,         \
                                            rocblas_stride stride_a,         \
                                            T_             x,                \
-                                           rocblas_int    offset_x,         \
+                                           rocblas_stride    offset_x,         \
                                            rocblas_int    inc_x,            \
                                            rocblas_stride stride_x,         \
                                            U_             y,                \
-                                           rocblas_int    offset_y,         \
+                                           rocblas_stride    offset_y,         \
                                            rocblas_int    inc_y,            \
                                            rocblas_stride stride_y,         \
                                            rocblas_int    batch_count,      \

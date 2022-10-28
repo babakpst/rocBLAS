@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2020-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "rocblas_gemm_ext2.hpp"
@@ -356,9 +374,17 @@ namespace
                 return rocblas_status_invalid_pointer;
             if(k && (!a || !b) && alpha)
                 return rocblas_status_invalid_pointer;
+            // added from gemm_ex
+            // pointers must be valid
+            if((k && !alpha) || !beta || !d)
+                return rocblas_status_invalid_pointer;
+
+            // Consider gemm_ex constraints which allow null pointers if alpha/beta are zero
+            // If C is nullptr, beta must be zero
+            // If k != 0 and either A or B is nullptr, alpha must be zero
 
             rocblas_stride batch_stride = 1; // can be changed to 0 when Tensile bug is fixed
-            rocblas_int    offset       = 0;
+            rocblas_stride offset       = 0;
             rocblas_int    batch_count  = 1;
 
             auto status = rocblas_status_not_implemented;
@@ -403,16 +429,8 @@ namespace
                                                   flags);
             };
 
-            if(HPA && !handle->is_device_memory_size_query())
-            {
-                // Allocate GSU workspace in handle
-                auto gsu_malloc = handle->gsu_malloc();
-                status          = gemm_ext2();
-            }
-            else
-            {
-                status = gemm_ext2();
-            }
+            status = gemm_ext2();
+
             if(status == rocblas_status_success || handle->is_device_memory_size_query())
                 return status;
 

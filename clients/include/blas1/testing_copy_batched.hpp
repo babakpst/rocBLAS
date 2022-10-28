@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -20,16 +38,15 @@
 template <typename T>
 void testing_copy_batched_bad_arg(const Arguments& arg)
 {
-    const bool FORTRAN = arg.fortran;
-    auto       rocblas_copy_batched_fn
-        = FORTRAN ? rocblas_copy_batched<T, true> : rocblas_copy_batched<T, false>;
+    auto rocblas_copy_batched_fn
+        = arg.fortran ? rocblas_copy_batched<T, true> : rocblas_copy_batched<T, false>;
+
+    rocblas_local_handle handle{arg};
 
     rocblas_int       N           = 100;
     rocblas_int       incx        = 1;
     rocblas_int       incy        = 1;
-    const rocblas_int batch_count = 5;
-
-    rocblas_local_handle handle{arg};
+    const rocblas_int batch_count = 2;
 
     // allocate memory on device
     device_batch_vector<T> dx(N, incx, batch_count);
@@ -38,23 +55,23 @@ void testing_copy_batched_bad_arg(const Arguments& arg)
     CHECK_DEVICE_ALLOCATION(dy.memcheck());
 
     EXPECT_ROCBLAS_STATUS(
+        rocblas_copy_batched_fn(
+            nullptr, N, dx.ptr_on_device(), incx, dy.ptr_on_device(), incy, batch_count),
+        rocblas_status_invalid_handle);
+
+    EXPECT_ROCBLAS_STATUS(
         rocblas_copy_batched_fn(handle, N, nullptr, incx, dy.ptr_on_device(), incy, batch_count),
         rocblas_status_invalid_pointer);
     EXPECT_ROCBLAS_STATUS(
         rocblas_copy_batched_fn(handle, N, dx.ptr_on_device(), incx, nullptr, incy, batch_count),
         rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS(
-        rocblas_copy_batched_fn(
-            nullptr, N, dx.ptr_on_device(), incx, dy.ptr_on_device(), incy, batch_count),
-        rocblas_status_invalid_handle);
 }
 
 template <typename T>
 void testing_copy_batched(const Arguments& arg)
 {
-    const bool FORTRAN = arg.fortran;
-    auto       rocblas_copy_batched_fn
-        = FORTRAN ? rocblas_copy_batched<T, true> : rocblas_copy_batched<T, false>;
+    auto rocblas_copy_batched_fn
+        = arg.fortran ? rocblas_copy_batched<T, true> : rocblas_copy_batched<T, false>;
 
     rocblas_int          N    = arg.N;
     rocblas_int          incx = arg.incx;
@@ -73,16 +90,24 @@ void testing_copy_batched(const Arguments& arg)
 
     rocblas_int abs_incy = incy >= 0 ? incy : -incy;
 
-    //Device-arrays of pointers to device memory
-    device_batch_vector<T> dx(N, incx ? incx : 1, batch_count);
-    device_batch_vector<T> dy(N, incy ? incy : 1, batch_count);
-    CHECK_DEVICE_ALLOCATION(dx.memcheck());
-    CHECK_DEVICE_ALLOCATION(dy.memcheck());
-
-    // Naming: dK is in GPU (device) memory. hK is in CPU (host) memory, plz follow this practice
+    // Naming: `h` is in CPU (host) memory(eg hx), `d` is in GPU (device) memory (eg dx).
+    // Allocate host memory
+    host_batch_vector<T> hx(N, incx ? incx : 1, batch_count);
     host_batch_vector<T> hy(N, incy ? incy : 1, batch_count);
     host_batch_vector<T> hy_gold(N, incy ? incy : 1, batch_count);
-    host_batch_vector<T> hx(N, incx ? incx : 1, batch_count);
+
+    // Check host memory allocation
+    CHECK_HIP_ERROR(hx.memcheck());
+    CHECK_HIP_ERROR(hy.memcheck());
+    CHECK_HIP_ERROR(hy_gold.memcheck());
+
+    // Allocate device memory
+    device_batch_vector<T> dx(N, incx ? incx : 1, batch_count);
+    device_batch_vector<T> dy(N, incy ? incy : 1, batch_count);
+
+    // Check device memory allocation
+    CHECK_DEVICE_ALLOCATION(dx.memcheck());
+    CHECK_DEVICE_ALLOCATION(dy.memcheck());
 
     // Initialize data on host memory
     rocblas_init_vector(hx, arg, rocblas_client_alpha_sets_nan, true);
@@ -98,9 +123,11 @@ void testing_copy_batched(const Arguments& arg)
 
     if(arg.unit_check || arg.norm_check)
     {
+        handle.pre_test(arg);
         // GPU BLAS
         CHECK_ROCBLAS_ERROR(rocblas_copy_batched_fn(
             handle, N, dx.ptr_on_device(), incx, dy.ptr_on_device(), incy, batch_count));
+        handle.post_test(arg);
 
         CHECK_HIP_ERROR(hy.transfer_from(dy));
 

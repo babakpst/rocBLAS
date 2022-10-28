@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "check_numerics_vector.hpp"
@@ -10,8 +28,8 @@ template <typename T, typename U>
 __device__ void
     hpr_kernel_calc(bool upper, rocblas_int n, U alpha, const T* x, rocblas_int incx, T* AP)
 {
-    rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
+    rocblas_int tx = blockIdx.x * blockDim.x + threadIdx.x;
+    rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     int index = upper ? ((ty * (ty + 1)) / 2) + tx : ((ty * (2 * n - ty + 1)) / 2) + (tx - ty);
 
@@ -26,18 +44,19 @@ __device__ void
 }
 
 template <rocblas_int DIM_X, rocblas_int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void rocblas_hpr_kernel(bool           upper,
-                                                                       rocblas_int    n,
-                                                                       TScal          alphaa,
-                                                                       TConstPtr      xa,
-                                                                       ptrdiff_t      shift_x,
-                                                                       rocblas_int    incx,
-                                                                       rocblas_stride stride_x,
-                                                                       TPtr           APa,
-                                                                       ptrdiff_t      shift_A,
-                                                                       rocblas_stride stride_A)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+rocblas_hpr_kernel(bool           upper,
+                   rocblas_int    n,
+                   TScal          alphaa,
+                   TConstPtr      xa,
+                   rocblas_stride shift_x,
+                   rocblas_int    incx,
+                   rocblas_stride stride_x,
+                   TPtr           APa,
+                   rocblas_stride shift_A,
+                   rocblas_stride stride_A)
 {
-    rocblas_int num_threads = hipBlockDim_x * hipBlockDim_y * hipBlockDim_z;
+    rocblas_int num_threads = blockDim.x * blockDim.y * blockDim.z;
     if(DIM_X * DIM_Y != num_threads)
         return; // need to launch exactly the number of threads as template parameters indicate.
 
@@ -45,8 +64,8 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void rocblas_hpr_kernel(bool     
     if(!alpha)
         return;
 
-    auto*       AP = load_ptr_batch(APa, hipBlockIdx_z, shift_A, stride_A);
-    const auto* x  = load_ptr_batch(xa, hipBlockIdx_z, shift_x, stride_x);
+    auto*       AP = load_ptr_batch(APa, blockIdx.z, shift_A, stride_A);
+    const auto* x  = load_ptr_batch(xa, blockIdx.z, shift_x, stride_x);
 
     hpr_kernel_calc(upper, n, alpha, x, incx, AP);
 }
@@ -64,11 +83,11 @@ rocblas_status rocblas_hpr_template(rocblas_handle handle,
                                     rocblas_int    n,
                                     TScal          alpha,
                                     TConstPtr      x,
-                                    rocblas_int    offset_x,
+                                    rocblas_stride offset_x,
                                     rocblas_int    incx,
                                     rocblas_stride stride_x,
                                     TPtr           AP,
-                                    rocblas_int    offset_A,
+                                    rocblas_stride offset_A,
                                     rocblas_stride stride_A,
                                     rocblas_int    batch_count)
 {
@@ -131,10 +150,10 @@ rocblas_status rocblas_hpr_check_numerics(const char*    function_name,
                                           rocblas_handle handle,
                                           rocblas_int    n,
                                           T              AP,
-                                          rocblas_int    offset_a,
+                                          rocblas_stride offset_a,
                                           rocblas_stride stride_a,
                                           U              x,
-                                          rocblas_int    offset_x,
+                                          rocblas_stride offset_x,
                                           rocblas_int    inc_x,
                                           rocblas_stride stride_x,
                                           rocblas_int    batch_count,
@@ -172,11 +191,11 @@ template rocblas_status rocblas_hpr_template<TScal_, TConstPtr_, TPtr_>  \
                                     rocblas_int    n,                    \
                                     TScal_          alpha,               \
                                     TConstPtr_      x,                   \
-                                    rocblas_int    offset_x,             \
+                                    rocblas_stride offset_x,             \
                                     rocblas_int    incx,                 \
                                     rocblas_stride stride_x,             \
                                     TPtr_           AP,                  \
-                                    rocblas_int    offset_A,             \
+                                    rocblas_stride  offset_A,             \
                                     rocblas_stride stride_A,             \
                                     rocblas_int    batch_count);
 
@@ -197,10 +216,10 @@ template rocblas_status rocblas_hpr_check_numerics<T_, U_>                 \
                                           rocblas_handle handle,           \
                                           rocblas_int    n,                \
                                           T_             AP,               \
-                                          rocblas_int    offset_a,         \
+                                          rocblas_stride    offset_a,         \
                                           rocblas_stride stride_a,         \
                                           U_             x,                \
-                                          rocblas_int    offset_x,         \
+                                          rocblas_stride    offset_x,         \
                                           rocblas_int    inc_x,            \
                                           rocblas_stride stride_x,         \
                                           rocblas_int    batch_count,      \

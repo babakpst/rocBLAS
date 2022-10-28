@@ -1,3 +1,27 @@
+"""Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+   ies of the Software, and to permit persons to whom the Software is furnished
+   to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+   PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+   FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+   COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+   CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+
+import os
+from pathlib import Path as path
+
+
 def _subprocess_helper(cmd, *args, **kwargs):
     import subprocess
     import tempfile
@@ -22,6 +46,17 @@ def get_smi_exec(cuda):
         return "nvidia-smi"
     else:
         return "/opt/rocm/bin/rocm-smi"
+
+def getgfx(devicenum, cuda):
+    if cuda:
+        return "N/A"
+    else:
+        cmd = ["/opt/rocm/bin/rocm_agent_enumerator"]
+        success, cout = _subprocess_helper(cmd)
+        if not success:
+            return "N/A"
+        # Add 1 to devicenum since rocm-agent-enum always prints gfx000 first
+        return cout.splitlines()[devicenum+1]
 
 # Get the hostname
 def gethostname():
@@ -78,15 +113,14 @@ def getdistro():
 
 # Get the version number for rocm
 def getrocmversion():
-    cmd = ["apt", "show", "rocm-libs"]
-    success, cout = _subprocess_helper(cmd)
-    if not success:
+    if os.path.isfile("/opt/rocm/.info/version-utils"):
+        rocm_info = path("/opt/rocm/.info/version-utils").read_text()
+    elif os.path.isfile("/opt/rocm/.info/version"):
+        rocm_info = path("/opt/rocm/.info/version").read_text()
+    else:
         return "N/A"
-    searchstr = "Version:"
-    for line in cout.split("\n"):
-        if line.startswith(searchstr):
-            return line[len(searchstr):].strip()
 
+    return rocm_info.strip()
 
 # Get the vbios version for the specified device
 def getvbios(devicenum, cuda):
@@ -397,11 +431,13 @@ def getmeminfo(devicenum, mem_type, cuda, smi=None):
         return smi.getMemInfo(devicenum, mem_type)
 
 def validversioncomponents(cuda, smi=None):
+    # currently only driver according to /opt/rocm/bin/rocm_smi.py
+    # driver corresponds to 0 in /opt/rocm/bin/rocm_smi.py
     if cuda:
         return ['driver']
     else:
         # currently only driver according to /opt/rocm/bin/rocm_smi.py
-        return ['driver']
+        return [0]
 
 def getversion(devicenum, component, cuda, smi=None):
     if cuda:

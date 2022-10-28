@@ -1,23 +1,42 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "handle.hpp"
 #include "rocblas.h"
 #include "rocblas_scal.hpp"
 
-template <typename Tex, typename Ta, typename Tx>
-ROCBLAS_KERNEL void rocblas_scal_kernel(rocblas_int    n,
-                                        Ta             alpha_device_host,
-                                        rocblas_stride stride_alpha,
-                                        Tx             xa,
-                                        ptrdiff_t      offset_x,
-                                        rocblas_int    incx,
-                                        rocblas_stride stride_x)
+template <rocblas_int NB, typename Tex, typename Ta, typename Tx>
+ROCBLAS_KERNEL(NB)
+rocblas_scal_kernel(rocblas_int    n,
+                    Ta             alpha_device_host,
+                    rocblas_stride stride_alpha,
+                    Tx             xa,
+                    rocblas_stride offset_x,
+                    rocblas_int    incx,
+                    rocblas_stride stride_x)
 {
-    auto*     x     = load_ptr_batch(xa, hipBlockIdx_y, offset_x, stride_x);
-    auto      alpha = load_scalar(alpha_device_host, hipBlockIdx_y, stride_alpha);
-    ptrdiff_t tid   = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
+    auto*     x     = load_ptr_batch(xa, blockIdx.y, offset_x, stride_x);
+    auto      alpha = load_scalar(alpha_device_host, blockIdx.y, stride_alpha);
+    ptrdiff_t tid   = blockIdx.x * blockDim.x + threadIdx.x;
 
     // bound
     if(tid < n)
@@ -32,16 +51,17 @@ ROCBLAS_KERNEL void rocblas_scal_kernel(rocblas_int    n,
 //! @remark Increment are required to be equal to one, that's why they are unspecified.
 //!
 template <rocblas_int NB, typename Tex, typename Ta, typename Tx>
-ROCBLAS_KERNEL __launch_bounds__(NB) void sscal_2_kernel(rocblas_int    n,
-                                                         Ta             alpha_device_host,
-                                                         rocblas_stride stride_alpha,
-                                                         Tx __restrict__ xa,
-                                                         ptrdiff_t      offset_x,
-                                                         rocblas_stride stride_x)
+ROCBLAS_KERNEL(NB)
+sscal_2_kernel(rocblas_int    n,
+               Ta             alpha_device_host,
+               rocblas_stride stride_alpha,
+               Tx __restrict__ xa,
+               rocblas_stride offset_x,
+               rocblas_stride stride_x)
 {
-    auto*     x     = load_ptr_batch(xa, hipBlockIdx_y, offset_x, stride_x);
-    auto      alpha = load_scalar(alpha_device_host, hipBlockIdx_y, stride_alpha);
-    ptrdiff_t tid   = (hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x) * 2;
+    auto*     x     = load_ptr_batch(xa, blockIdx.y, offset_x, stride_x);
+    auto      alpha = load_scalar(alpha_device_host, blockIdx.y, stride_alpha);
+    ptrdiff_t tid   = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 
     if(tid < n - 1)
     {
@@ -66,27 +86,27 @@ ROCBLAS_KERNEL __launch_bounds__(NB) void sscal_2_kernel(rocblas_int    n,
 //! @remark Increments are required to be equal to one, that's why they are unspecified.
 //!
 template <rocblas_int NB, typename Ta, typename Tx>
-ROCBLAS_KERNEL __launch_bounds__(NB) void hscal_mlt_4_kernel(rocblas_int    n,
-                                                             rocblas_int    n_mod_4,
-                                                             rocblas_int    n_mlt_4,
-                                                             Ta             alpha_device_host,
-                                                             rocblas_stride stride_alpha,
-                                                             Tx __restrict__ xa,
-                                                             ptrdiff_t      offset_x,
-                                                             rocblas_stride stride_x)
+ROCBLAS_KERNEL(NB)
+hscal_mlt_4_kernel(rocblas_int    n,
+                   rocblas_int    n_mod_4,
+                   rocblas_int    n_mlt_4,
+                   Ta             alpha_device_host,
+                   rocblas_stride stride_alpha,
+                   Tx __restrict__ xa,
+                   rocblas_stride offset_x,
+                   rocblas_stride stride_x)
 {
 
-    auto alpha = load_scalar(alpha_device_host, hipBlockIdx_y, stride_alpha);
+    auto alpha = load_scalar(alpha_device_host, blockIdx.y, stride_alpha);
 
     rocblas_half2 x0, x1;
     rocblas_half2 z0, z1;
 
-    ptrdiff_t tid = (hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x) * 4;
+    ptrdiff_t tid = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
 
     if(tid < n - 3)
     {
-        rocblas_half4* x
-            = (rocblas_half4*)load_ptr_batch(xa, hipBlockIdx_y, offset_x + tid, stride_x);
+        rocblas_half4* x = (rocblas_half4*)load_ptr_batch(xa, blockIdx.y, offset_x + tid, stride_x);
 
         x0[0] = (*x)[0];
         x0[1] = (*x)[1];
@@ -110,7 +130,7 @@ ROCBLAS_KERNEL __launch_bounds__(NB) void hscal_mlt_4_kernel(rocblas_int    n,
         //The last ThreadID which is a multiple of 4 should complete the computation of last few elements of vector `x`
         if(tid == n_mlt_4)
         {
-            auto* x = load_ptr_batch(xa, hipBlockIdx_y, offset_x, stride_x);
+            auto* x = load_ptr_batch(xa, blockIdx.y, offset_x, stride_x);
             for(rocblas_int j = 0; j < n_mod_4; ++j)
             {
                 x[tid + j] = x[tid + j] * alpha;
@@ -126,7 +146,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                                    const Ta*      alpha,
                                    rocblas_stride stride_alpha,
                                    Tx             x,
-                                   rocblas_int    offset_x,
+                                   rocblas_stride offset_x,
                                    rocblas_int    incx,
                                    rocblas_stride stride_x,
                                    rocblas_int    batch_count)
@@ -221,7 +241,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
         dim3 threads(NB);
 
         if(rocblas_pointer_mode_device == handle->pointer_mode)
-            hipLaunchKernelGGL(rocblas_scal_kernel<Tex>,
+            hipLaunchKernelGGL((rocblas_scal_kernel<NB, Tex>),
                                grid,
                                threads,
                                0,
@@ -234,7 +254,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                                incx,
                                stride_x);
         else // single alpha is on host
-            hipLaunchKernelGGL(rocblas_scal_kernel<Tex>,
+            hipLaunchKernelGGL((rocblas_scal_kernel<NB, Tex>),
                                grid,
                                threads,
                                0,
@@ -264,7 +284,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                                                             const Ta_*     alpha,        \
                                                             rocblas_stride stride_alpha, \
                                                             Tx_            x,            \
-                                                            rocblas_int    offset_x,     \
+                                                            rocblas_stride offset_x,     \
                                                             rocblas_int    incx,         \
                                                             rocblas_stride stride_x,     \
                                                             rocblas_int    batch_count);

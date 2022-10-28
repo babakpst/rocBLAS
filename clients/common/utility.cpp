@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #ifdef WIN32
@@ -19,19 +37,20 @@
 
 #ifdef WIN32
 #define strcasecmp(A, B) _stricmp(A, B)
-#else
-#include <fcntl.h>
-#endif
+#define setenv(A, B, C) _putenv_s(A, B)
+#define unsetenv(A) _putenv_s(A, "")
 
 #ifdef __cpp_lib_filesystem
 #include <filesystem>
+namespace fs = std::filesystem;
 #else
 #include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#endif
 
-namespace std
-{
-    namespace filesystem = experimental::filesystem;
-}
+// Not WIN32
+#else
+#include <fcntl.h>
 #endif
 
 /* ============================================================================================ */
@@ -59,9 +78,9 @@ std::string rocblas_exepath()
     }
 
     // std::wstring          wspath(result.data());
-    // std::filesystem::path exepath(wspath.begin(), wspath.end());
+    // fs::path exepath(wspath.begin(), wspath.end());
 
-    std::filesystem::path exepath(result.begin(), result.end());
+    fs::path exepath(result.begin(), result.end());
     exepath = exepath.remove_filename();
     // Add trailing "/" to exepath if required
     exepath += exepath.empty() ? "" : "/";
@@ -96,7 +115,7 @@ std::string rocblas_tempname()
     for(auto n : {0, 1, 2, 3, 4, 5})
         uniquestr += alphanum.at(rand() % stringlength);
 
-    std::filesystem::path tmpname = std::filesystem::temp_directory_path() / uniquestr;
+    fs::path tmpname = fs::temp_directory_path() / uniquestr;
 
     return tmpname.string();
 #else
@@ -291,4 +310,83 @@ rocblas_local_handle::~rocblas_local_handle()
     if(m_memory)
         (hipFree)(m_memory);
     rocblas_destroy_handle(m_handle);
+}
+
+void rocblas_local_handle::rocblas_stream_begin_capture()
+{
+    int setenv_status;
+    setenv_status = setenv("ROCBLAS_STREAM_ORDER_ALLOC", "1", true);
+#ifdef GOOGLE_TEST
+    ASSERT_EQ(setenv_status, 0);
+#endif
+
+    CHECK_HIP_ERROR(hipStreamCreate(&this->graph_stream));
+    CHECK_ROCBLAS_ERROR(rocblas_get_stream(*this, &this->old_stream));
+    CHECK_ROCBLAS_ERROR(rocblas_set_stream(*this, this->graph_stream));
+
+    // BEGIN GRAPH CAPTURE
+    CHECK_HIP_ERROR(hipStreamBeginCapture(this->graph_stream, hipStreamCaptureModeGlobal));
+}
+
+void rocblas_local_handle::rocblas_stream_end_capture()
+{
+    hipGraph_t     graph;
+    hipGraphExec_t instance;
+
+    // END GRAPH CAPTURE
+    CHECK_HIP_ERROR(hipStreamEndCapture(this->graph_stream, &graph));
+    CHECK_HIP_ERROR(hipGraphInstantiate(&instance, graph, NULL, NULL, 0));
+
+    CHECK_HIP_ERROR(hipGraphDestroy(graph));
+    CHECK_HIP_ERROR(hipGraphLaunch(instance, this->graph_stream));
+
+    CHECK_HIP_ERROR(hipGraphExecDestroy(instance));
+
+    CHECK_ROCBLAS_ERROR(rocblas_set_stream(*this, this->old_stream));
+    CHECK_HIP_ERROR(hipStreamDestroy(this->graph_stream));
+
+    int setenv_status = unsetenv("ROCBLAS_STREAM_ORDER_ALLOC");
+#ifdef GOOGLE_TEST
+    ASSERT_EQ(setenv_status, 0);
+#endif
+}
+
+/*!
+ * Initialize rocBLAS for the current HIP device and report
+ * the time taken to complete the initialization. This is to
+ * avoid costly startup time at the first call on that device.
+ * Internal use for benchmark & testing.
+ */
+void rocblas_client_initialize()
+{
+    // when executed on a CPU under normal load( Disk I/O, memory etc.),
+    // this routine completes execution under max limit of 12 seconds.
+    // The minimum time it takes to complete varies based on
+    // the architecture & build options used while building the library.
+    // Setting a max duration of 5 seconds for rocblas library initialization to complete.
+    constexpr static int max_duration = 5;
+
+    // Store the start timepoint of rocblas initialize
+    auto start_time = std::chrono::steady_clock::now();
+
+    rocblas_initialize();
+
+    // Store the end timepoint of rocblas initialize
+    auto end_time = std::chrono::steady_clock::now();
+
+    // Compute the time taken to load the Tensile kernels (in seconds).
+    auto total_library_initialize_time
+        = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+
+    // Compute the time taken to load the Tensile kernels (in milliseconds).
+    auto init_time_in_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+    rocblas_cout << "\nrocBLAS info: Time taken to complete rocBLAS library initialization is "
+                 << init_time_in_ms << " milliseconds." << std::endl;
+
+    // If initialization time exceeds the max duration, display the following info message.
+    if(total_library_initialize_time > max_duration)
+        rocblas_cerr << "\nrocBLAS info: rocBLAS initialization exceeded the max duration of "
+                     << max_duration << " seconds. Check CPU's load metrics." << std::endl;
 }

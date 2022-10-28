@@ -9,7 +9,10 @@ endif()
 
 set(CMAKE_CXX_COMPILER "${rocm_bin}/clang++.exe")
 set(CMAKE_C_COMPILER "${rocm_bin}/clang.exe")
-set(python "python")
+
+if (NOT python)
+  set(python "python") # take default for windows
+endif()
 
 # working
 #set(CMAKE_Fortran_COMPILER "C:/Strawberry/c/bin/gfortran.exe")
@@ -52,3 +55,5 @@ set(CMAKE_STATIC_LIBRARY_SUFFIX ".a")
 set(CMAKE_STATIC_LIBRARY_PREFIX "static_")
 set(CMAKE_SHARED_LIBRARY_SUFFIX ".dll")
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
+
+set(BUILD_FORTRAN_CLIENTS OFF)

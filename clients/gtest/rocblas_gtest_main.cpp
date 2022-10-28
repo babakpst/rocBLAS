@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include <string>
@@ -71,10 +89,16 @@ public:
 
     void OnTestPartResult(const TestPartResult& result) override
     {
-        if(!strcmp(result.message(), LIMITED_MEMORY_STRING_GTEST))
+        if(!strcmp(result.message(), LIMITED_RAM_STRING_GTEST))
         {
             if(showInlineSkips)
-                rocblas_cout << "Skipped test due to limited memory environment." << std::endl;
+                rocblas_cout << "Skipped test due to limited RAM environment." << std::endl;
+            ++skipped_tests;
+        }
+        else if(!strcmp(result.message(), LIMITED_MEMORY_STRING_GTEST))
+        {
+            if(showInlineSkips)
+                rocblas_cout << "Skipped test due to limited GPU memory environment." << std::endl;
             ++skipped_tests;
         }
         else if(!strcmp(result.message(), TOO_MANY_DEVICES_STRING_GTEST))
@@ -215,8 +239,16 @@ int main(int argc, char** argv)
 {
     std::string args = rocblas_capture_args(argc, argv);
 
-    // Set signal handler
-    rocblas_test_sigaction();
+    auto* no_signal_handling = getenv("ROCBLAS_TEST_NO_SIGACTION");
+    if(no_signal_handling)
+    {
+        rocblas_cout << "rocblas-test INFO: sigactions disabled." << std::endl;
+    }
+    else
+    {
+        // Set signal handler
+        rocblas_test_sigaction();
+    }
 
     rocblas_print_version();
 

@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -47,7 +65,7 @@ typedef long long ssize_t; /* x64 only supported */
         if(error__ != hipSuccess)                        \
         {                                                \
             if(error__ == hipErrorOutOfMemory)           \
-                SUCCEED() << LIMITED_MEMORY_STRING;      \
+                GTEST_SKIP() << LIMITED_MEMORY_STRING;   \
             else                                         \
                 FAIL() << hipGetErrorString(error__);    \
             return;                                      \
@@ -152,7 +170,7 @@ bool match_test_category(const Arguments& arg, const char* category);
                                                RocBLAS_TestData::end()),                          \
                              testclass::PrintToStringParamName());
 
-#if !defined(WIN32) && defined(GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST)
+#if defined(GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST)
 #define ROCBLAS_ALLOW_UNINSTANTIATED_GTEST(testclass) \
     GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(testclass);
 #else
@@ -211,7 +229,7 @@ void launch_test_on_streams(std::function<void()> test, size_t numStreams, size_
         hipGetDeviceCount(&availDevices);                                                    \
         if(devices > availDevices)                                                           \
         {                                                                                    \
-            SUCCEED() << TOO_MANY_DEVICES_STRING;                                            \
+            GTEST_SKIP() << TOO_MANY_DEVICES_STRING;                                         \
             return;                                                                          \
         }                                                                                    \
         else if(HMM)                                                                         \
@@ -223,7 +241,7 @@ void launch_test_on_streams(std::function<void()> test, size_t numStreams, size_
                     &flag, hipDeviceAttribute_t(hipDeviceAttributeManagedMemory), devices)); \
                 if(!flag)                                                                    \
                 {                                                                            \
-                    SUCCEED() << HMM_NOT_SUPPORTED;                                          \
+                    GTEST_SKIP() << HMM_NOT_SUPPORTED;                                       \
                     return;                                                                  \
                 }                                                                            \
             }                                                                                \

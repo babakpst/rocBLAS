@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 #include "handle.hpp"
 #include <cstdarg>
@@ -66,10 +84,20 @@ static inline int getActiveArch(int deviceId)
  * constructor
  ******************************************************************************/
 _rocblas_handle::_rocblas_handle()
-    : device(getActiveDevice())
-    , // active device is handle device
-    arch(getActiveArch(device))
+    : device(getActiveDevice()) // active device is handle device
+    , arch(getActiveArch(device))
 {
+    archMajor = arch / 100; // this may need to switch to string handling in the future
+
+    //ROCBLAS_STREAM_ORDER_ALLOC
+    const char* stream_order_alloc_env = read_env("ROCBLAS_STREAM_ORDER_ALLOC");
+
+    if(stream_order_alloc_env)
+    {
+        int stream_order_alloc_env_val = strtoul(stream_order_alloc_env, nullptr, 0);
+        stream_order_alloc             = stream_order_alloc_env_val ? true : false;
+    }
+
     // Device memory size
     const char* env = read_env("ROCBLAS_DEVICE_MEMORY_SIZE");
     if(env)
@@ -97,9 +125,31 @@ _rocblas_handle::_rocblas_handle()
         }
     }
 
-    // Allocate device memory
-    if(device_memory_size)
-        THROW_IF_HIP_ERROR((hipMalloc)(&device_memory, device_memory_size));
+    if(!stream_order_alloc)
+    { // Allocate device memory
+        if(device_memory_size)
+            THROW_IF_HIP_ERROR((hipMalloc)(&device_memory, device_memory_size));
+    }
+    else
+    {
+// hipMallocAsync and hipFreeAsync are defined in hip version 5.2.0
+// Support for default stream added in hip version 5.3.0
+#if HIP_VERSION >= 50300000
+        // The following allocation & free of device memory using hipMallocAsync/hipFreeAsync will allocate memory from
+        // the OS and release it to default memory pool. Further allocation of memory using hipMallocAsync
+        // will be from the memory pool and it will be faster.
+        THROW_IF_HIP_ERROR((hipMallocAsync)(&device_memory, device_memory_size, stream));
+
+        THROW_IF_HIP_ERROR((hipFreeAsync)(device_memory, stream));
+
+        device_memory = nullptr;
+#else
+        rocblas_cerr
+            << "rocBLAS internal error: Stream order allocation is supported on ROCm 5.3 and above."
+            << std::endl;
+        rocblas_abort();
+#endif
+    }
 
     // Initialize logging
     init_logging();
@@ -120,18 +170,61 @@ _rocblas_handle::~_rocblas_handle()
             << std::endl;
         rocblas_abort();
     }
-
     // Free device memory unless it's user-owned
     if(device_memory_owner != rocblas_device_memory_ownership::user_owned)
     {
-        auto hipStatus = (hipFree)(device_memory);
-        if(hipStatus != hipSuccess)
+        hipError_t hipStatus;
+        if(!stream_order_alloc)
         {
-            rocblas_cerr << "rocBLAS error during hipFree in handle destructor: "
-                         << rocblas_status_to_string(get_rocblas_status_for_hip_status(hipStatus))
-                         << std::endl;
-            rocblas_abort();
-        };
+            hipStatus = (hipFree)(device_memory);
+            if(hipStatus != hipSuccess)
+            {
+                rocblas_cerr
+                    << "rocBLAS error during freeing of allocated memory in handle destructor: "
+                    << rocblas_status_to_string(get_rocblas_status_for_hip_status(hipStatus))
+                    << std::endl;
+                rocblas_abort();
+            };
+        }
+        else
+        {
+// hipMallocAsync and hipFreeAsync are defined in hip version 5.2.0
+// Support for default stream added in hip version 5.3.0
+#if HIP_VERSION >= 50300000
+            hipStatus = (device_memory) ? (hipFreeAsync)(device_memory, stream) : hipSuccess;
+            if(hipStatus != hipSuccess)
+            {
+                rocblas_cerr << "rocBLAS error during freeing of allocated memory in handle "
+                                "destructor (stream order allocation): "
+                             << rocblas_status_to_string(
+                                    get_rocblas_status_for_hip_status(hipStatus))
+                             << std::endl;
+                rocblas_abort();
+            };
+
+            for(auto dev_mem : dev_mem_pointers)
+            {
+                hipStatus = (dev_mem) ? (hipFreeAsync)(dev_mem, stream) : hipSuccess;
+
+                if(hipStatus != hipSuccess)
+                {
+                    rocblas_cerr << "rocBLAS error during freeing of allocated memory (during "
+                                    "stream capture) in handle destructor: "
+                                 << rocblas_status_to_string(
+                                        get_rocblas_status_for_hip_status(hipStatus))
+                                 << std::endl;
+                    rocblas_abort();
+                };
+            }
+            hipMemPool_t mem_pool;
+            int          device;
+            hipGetDevice(&device);
+            hipDeviceGetDefaultMemPool(&mem_pool, device);
+
+            //Releases device memory back to OS
+            hipMemPoolTrimTo(mem_pool, 0);
+#endif
+        }
     }
 }
 
@@ -240,8 +333,18 @@ static rocblas_status free_existing_device_memory(rocblas_handle handle)
         return rocblas_status_internal_error;
 
     // Free existing device memory in handle, unless owned by user
-    if(handle->device_memory_owner != rocblas_device_memory_ownership::user_owned)
-        RETURN_IF_HIP_ERROR((hipFree)(handle->device_memory));
+    if(handle->device_memory
+       && handle->device_memory_owner != rocblas_device_memory_ownership::user_owned)
+    {
+        if(!handle->stream_order_alloc)
+            RETURN_IF_HIP_ERROR((hipFree)(handle->device_memory));
+// hipMallocAsync and hipFreeAsync are defined in hip version 5.2.0
+// Support for default stream added in hip version 5.3.0
+#if HIP_VERSION >= 50300000
+        else
+            RETURN_IF_HIP_ERROR((hipFreeAsync)(handle->device_memory, handle->stream));
+#endif
+    }
 
     // Clear the memory size and address, and set the memory to be rocBLAS-managed
     handle->device_memory_size  = 0;
@@ -274,8 +377,17 @@ try
         return rocblas_status_success;
 
     // Allocate size rounded up to MIN_CHUNK_SIZE
-    size           = roundup_device_memory_size(size);
-    auto hipStatus = (hipMalloc)(&handle->device_memory, size);
+    size = roundup_device_memory_size(size);
+
+    hipError_t hipStatus;
+    if(!handle->stream_order_alloc)
+        hipStatus = (hipMalloc)(&handle->device_memory, size);
+// hipMallocAsync and hipFreeAsync are defined in hip version 5.2.0
+// Support for default stream added in hip version 5.3.0
+#if HIP_VERSION >= 50300000
+    else
+        hipStatus = (hipMallocAsync)(&handle->device_memory, size, handle->stream);
+#endif
 
     if(hipStatus != hipSuccess)
     {

@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2020 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -11,6 +29,7 @@
 #include "rocblas_datatype2string.hpp"
 #include "rocblas_init.hpp"
 #include "rocblas_math.hpp"
+#include "rocblas_matrix.hpp"
 #include "rocblas_random.hpp"
 #include "rocblas_test.hpp"
 #include "rocblas_vector.hpp"
@@ -31,6 +50,199 @@ void printMatrix(const char* name, T* A, rocblas_int m, rocblas_int n, rocblas_i
         for(int j = 0; j < n; j++)
             rocblas_cout << A[i + j * lda] << " ";
         rocblas_cout << "\n";
+    }
+}
+
+template <typename T>
+void testing_trsm_ex_bad_arg(const Arguments& arg)
+{
+    auto rocblas_trsm_ex_fn = arg.fortran ? rocblas_trsm_ex_fortran : rocblas_trsm_ex;
+
+    for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
+    {
+        rocblas_local_handle handle{arg};
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, pointer_mode));
+
+        const rocblas_int M   = 100;
+        const rocblas_int N   = 100;
+        const rocblas_int lda = 100;
+        const rocblas_int ldb = 100;
+
+        device_vector<T> alpha_d(1), zero_d(1);
+
+        const T alpha_h(1), zero_h(0);
+
+        const T* alpha = &alpha_h;
+        const T* zero  = &zero_h;
+
+        if(pointer_mode == rocblas_pointer_mode_device)
+        {
+            CHECK_HIP_ERROR(hipMemcpy(alpha_d, alpha, sizeof(*alpha), hipMemcpyHostToDevice));
+            alpha = alpha_d;
+            CHECK_HIP_ERROR(hipMemcpy(zero_d, zero, sizeof(*zero), hipMemcpyHostToDevice));
+            zero = zero_d;
+        }
+
+        const rocblas_side      side   = rocblas_side_left;
+        const rocblas_fill      uplo   = rocblas_fill_upper;
+        const rocblas_operation transA = rocblas_operation_none;
+        const rocblas_diagonal  diag   = rocblas_diagonal_non_unit;
+
+        rocblas_int K        = side == rocblas_side_left ? M : N;
+        size_t      sizeInvA = TRSM_BLOCK * K;
+
+        // Allocate device memory
+        device_matrix<T> dA(K, K, lda);
+        device_matrix<T> dB(M, N, ldb);
+        device_vector<T> dinvA(TRSM_BLOCK, TRSM_BLOCK, K);
+
+        // Check device memory allocation
+        CHECK_DEVICE_ALLOCATION(dA.memcheck());
+        CHECK_DEVICE_ALLOCATION(dB.memcheck());
+        CHECK_DEVICE_ALLOCATION(dinvA.memcheck());
+
+        EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(nullptr,
+                                                 side,
+                                                 uplo,
+                                                 transA,
+                                                 diag,
+                                                 M,
+                                                 N,
+                                                 alpha,
+                                                 dA,
+                                                 lda,
+                                                 dB,
+                                                 ldb,
+                                                 dinvA,
+                                                 sizeInvA,
+                                                 rocblas_datatype_f32_r),
+                              rocblas_status_invalid_handle);
+
+        EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(handle,
+                                                 side,
+                                                 uplo,
+                                                 transA,
+                                                 diag,
+                                                 M,
+                                                 N,
+                                                 nullptr,
+                                                 dA,
+                                                 lda,
+                                                 dB,
+                                                 ldb,
+                                                 dinvA,
+                                                 sizeInvA,
+                                                 rocblas_datatype_f32_r),
+                              rocblas_status_invalid_pointer);
+
+        if(pointer_mode == rocblas_pointer_mode_host)
+        {
+            EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(handle,
+                                                     side,
+                                                     uplo,
+                                                     transA,
+                                                     diag,
+                                                     M,
+                                                     N,
+                                                     alpha,
+                                                     nullptr,
+                                                     lda,
+                                                     dB,
+                                                     ldb,
+                                                     dinvA,
+                                                     sizeInvA,
+                                                     rocblas_datatype_f32_r),
+                                  rocblas_status_invalid_pointer);
+        }
+
+        EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(handle,
+                                                 side,
+                                                 uplo,
+                                                 transA,
+                                                 diag,
+                                                 M,
+                                                 N,
+                                                 alpha,
+                                                 dA,
+                                                 lda,
+                                                 nullptr,
+                                                 ldb,
+                                                 dinvA,
+                                                 sizeInvA,
+                                                 rocblas_datatype_f32_r),
+                              rocblas_status_invalid_pointer);
+
+        // If M==0, then all pointers can be nullptr without error
+        EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(handle,
+                                                 side,
+                                                 uplo,
+                                                 transA,
+                                                 diag,
+                                                 0,
+                                                 N,
+                                                 nullptr,
+                                                 nullptr,
+                                                 lda,
+                                                 nullptr,
+                                                 ldb,
+                                                 dinvA,
+                                                 sizeInvA,
+                                                 rocblas_datatype_f32_r),
+                              rocblas_status_success);
+
+        // If N==0, then all pointers can be nullptr without error
+        EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(handle,
+                                                 side,
+                                                 uplo,
+                                                 transA,
+                                                 diag,
+                                                 M,
+                                                 0,
+                                                 nullptr,
+                                                 nullptr,
+                                                 lda,
+                                                 nullptr,
+                                                 ldb,
+                                                 dinvA,
+                                                 sizeInvA,
+                                                 rocblas_datatype_f32_r),
+                              rocblas_status_success);
+
+        // If alpha==0, then A can be nullptr without error
+        EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(handle,
+                                                 side,
+                                                 uplo,
+                                                 transA,
+                                                 diag,
+                                                 M,
+                                                 N,
+                                                 zero,
+                                                 nullptr,
+                                                 lda,
+                                                 dB,
+                                                 ldb,
+                                                 dinvA,
+                                                 sizeInvA,
+                                                 rocblas_datatype_f32_r),
+                              rocblas_status_success);
+
+        // Unsupported datatype
+        EXPECT_ROCBLAS_STATUS(rocblas_trsm_ex_fn(handle,
+                                                 side,
+                                                 uplo,
+                                                 transA,
+                                                 diag,
+                                                 M,
+                                                 N,
+                                                 alpha,
+                                                 dA,
+                                                 lda,
+                                                 dB,
+                                                 ldb,
+                                                 dinvA,
+                                                 sizeInvA,
+                                                 rocblas_datatype_bf16_r),
+                              rocblas_status_not_implemented);
     }
 }
 
@@ -85,35 +297,30 @@ void testing_trsm_ex(const Arguments& arg)
         return;
     }
 
-    // Naming: dK is in GPU (device) memory. hK is in CPU (host) memory
-    host_vector<T> hA(size_A);
-    host_vector<T> AAT(size_A);
-    host_vector<T> hB(size_B);
-    host_vector<T> hX(size_B);
-    host_vector<T> hXorB_1(size_B);
-    host_vector<T> hXorB_2(size_B);
-    host_vector<T> cpuXorB(size_B);
-    host_vector<T> invATemp1(TRSM_BLOCK * K);
-    host_vector<T> invATemp2(TRSM_BLOCK * K);
-    host_vector<T> hinvAI(TRSM_BLOCK * K);
+    // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
+    // Allocate host memory
+    host_matrix<T> hA(K, K, lda);
+    host_matrix<T> hAAT(K, K, lda);
+    host_matrix<T> hB(M, N, ldb);
+    host_matrix<T> hX(M, N, ldb);
+    host_matrix<T> hXorB_1(M, N, ldb);
+    host_matrix<T> hXorB_2(M, N, ldb);
+    host_matrix<T> cpuXorB(M, N, ldb);
+    host_matrix<T> invATemp1(TRSM_BLOCK, TRSM_BLOCK, K);
+    host_matrix<T> invATemp2(TRSM_BLOCK, TRSM_BLOCK, K);
+    host_matrix<T> hinvAI(TRSM_BLOCK, TRSM_BLOCK, K);
 
-    double gpu_time_used, cpu_time_used;
-    gpu_time_used = cpu_time_used  = 0.0;
-    double error_eps_multiplier    = ERROR_EPS_MULTIPLIER;
-    double residual_eps_multiplier = RESIDUAL_EPS_MULTIPLIER;
-    double eps                     = std::numeric_limits<real_t<T>>::epsilon();
-
-    // allocate memory on device
-    device_vector<T> dA(size_A);
-    device_vector<T> dXorB(size_B);
+    // Allocate device memory
+    device_matrix<T> dA(K, K, lda);
+    device_matrix<T> dXorB(M, N, ldb);
+    device_matrix<T> dinvA(TRSM_BLOCK, TRSM_BLOCK, K);
     device_vector<T> alpha_d(1);
-    device_vector<T> dinvA(TRSM_BLOCK * K);
-    device_vector<T> dX_tmp(M * N);
+
+    // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dA.memcheck());
     CHECK_DEVICE_ALLOCATION(dXorB.memcheck());
     CHECK_DEVICE_ALLOCATION(alpha_d.memcheck());
     CHECK_DEVICE_ALLOCATION(dinvA.memcheck());
-    CHECK_DEVICE_ALLOCATION(dX_tmp.memcheck());
 
     //  Random lower triangular matrices have condition number
     //  that grows exponentially with matrix size. Random full
@@ -122,21 +329,20 @@ void testing_trsm_ex(const Arguments& arg)
     //
     //  We want a triangular matrix with condition number that grows
     //  lineary with matrix size. We start with full random matrix A.
-    //  Calculate symmetric AAT <- A A^T. Make AAT strictly diagonal
+    //  Calculate symmetric hAAT <- A A^T. Make hAAT strictly diagonal
     //  dominant. A strictly diagonal dominant matrix is SPD so we
-    //  can use Cholesky to calculate L L^T = AAT. These L factors
+    //  can use Cholesky to calculate L L^T = hAAT. These L factors
     //  should have condition number approximately equal to
     //  the condition number of the original matrix A.
 
-    //  initialize full random matrix hA with all entries in [1, 10]
-    rocblas_init<T>(hA, K, K, lda);
+    // Initialize data on host memory
+    rocblas_init_matrix(
+        hA, arg, rocblas_client_never_set_nan, rocblas_client_triangular_matrix, true);
+    rocblas_init_matrix(
+        hX, arg, rocblas_client_never_set_nan, rocblas_client_general_matrix, false, true);
+    hB = hX;
 
-    //  pad untouched area into zero
-    for(int i = K; i < lda; i++)
-        for(int j = 0; j < K; j++)
-            hA[i + j * lda] = 0.0;
-
-    //  calculate AAT = hA * hA ^ T or AAT = hA * hA ^ H if complex
+    //  calculate hAAT = hA * hA ^ T or hAAT = hA * hA ^ H if complex
     cblas_gemm<T>(rocblas_operation_none,
                   rocblas_operation_conjugate_transpose,
                   K,
@@ -148,50 +354,20 @@ void testing_trsm_ex(const Arguments& arg)
                   hA,
                   lda,
                   T(0.0),
-                  AAT,
+                  hAAT,
                   lda);
 
-    //  copy AAT into hA, make hA strictly diagonal dominant, and therefore SPD
-    for(int i = 0; i < K; i++)
-    {
-        T t = 0.0;
-        for(int j = 0; j < K; j++)
-        {
-            hA[i + j * lda] = AAT[i + j * lda];
-            t += rocblas_abs(AAT[i + j * lda]);
-        }
-        hA[i + i * lda] = t;
-    }
+    //  copy hhAAT into hA, make hA strictly diagonal dominant, and therefore SPD
+    copy_hAAT_to_hA<T>((T*)hAAT, (T*)hA, K, size_t(lda));
 
     //  calculate Cholesky factorization of SPD (or Hermitian if complex) matrix hA
     cblas_potrf<T>(char_uplo, K, hA, lda);
 
     //  make hA unit diagonal if diag == rocblas_diagonal_unit
-    if(char_diag == 'U' || char_diag == 'u')
+    if(diag == rocblas_diagonal_unit)
     {
-        if('L' == char_uplo || 'l' == char_uplo)
-            for(int i = 0; i < K; i++)
-            {
-                T diag = hA[i + i * lda];
-                for(int j = 0; j <= i; j++)
-                    hA[i + j * lda] = hA[i + j * lda] / diag;
-            }
-        else
-            for(int j = 0; j < K; j++)
-            {
-                T diag = hA[j + j * lda];
-                for(int i = 0; i <= j; i++)
-                    hA[i + j * lda] = hA[i + j * lda] / diag;
-            }
+        make_unit_diagonal(uplo, (T*)hA, lda, K);
     }
-
-    // Initialize "exact" answer hX
-    rocblas_init<T>(hX, M, N, ldb);
-    // pad untouched area into zero
-    for(int i = M; i < ldb; i++)
-        for(int j = 0; j < N; j++)
-            hX[i + j * ldb] = 0.0;
-    hB = hX;
 
     // Calculate hB = hA*hX;
     cblas_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA, lda, hB, ldb);
@@ -201,8 +377,8 @@ void testing_trsm_ex(const Arguments& arg)
     cpuXorB = hB; // cpuXorB <- B
 
     // copy data from CPU to device
-    CHECK_HIP_ERROR(hipMemcpy(dA, hA, sizeof(T) * size_A, hipMemcpyHostToDevice));
-    CHECK_HIP_ERROR(hipMemcpy(dXorB, hXorB_1, sizeof(T) * size_B, hipMemcpyHostToDevice));
+    CHECK_HIP_ERROR(dA.transfer_from(hA));
+    CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_1));
 
     rocblas_int stride_A    = TRSM_BLOCK * lda + TRSM_BLOCK;
     rocblas_int stride_invA = TRSM_BLOCK * TRSM_BLOCK;
@@ -211,6 +387,11 @@ void testing_trsm_ex(const Arguments& arg)
 
     double max_err_1 = 0.0;
     double max_err_2 = 0.0;
+    double gpu_time_used, cpu_time_used;
+    gpu_time_used = cpu_time_used  = 0.0;
+    double error_eps_multiplier    = ERROR_EPS_MULTIPLIER;
+    double residual_eps_multiplier = RESIDUAL_EPS_MULTIPLIER;
+    double eps                     = std::numeric_limits<real_t<T>>::epsilon();
 
     if(!ROCBLAS_REALLOC_ON_DEMAND)
     {
@@ -274,7 +455,7 @@ void testing_trsm_ex(const Arguments& arg)
     {
         // calculate dXorB <- A^(-1) B   rocblas_device_pointer_host
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        CHECK_HIP_ERROR(hipMemcpy(dXorB, hXorB_1, sizeof(T) * size_B, hipMemcpyHostToDevice));
+        CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_1));
 
         hipStream_t rocblas_stream;
         CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &rocblas_stream));
@@ -321,11 +502,11 @@ void testing_trsm_ex(const Arguments& arg)
                                                TRSM_BLOCK * K,
                                                arg.compute_type));
 
-        CHECK_HIP_ERROR(hipMemcpy(hXorB_1, dXorB, sizeof(T) * size_B, hipMemcpyDeviceToHost));
+        CHECK_HIP_ERROR(hXorB_1.transfer_from(dXorB));
 
         // calculate dXorB <- A^(-1) B   rocblas_device_pointer_device
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_HIP_ERROR(hipMemcpy(dXorB, hXorB_2, sizeof(T) * size_B, hipMemcpyHostToDevice));
+        CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_2));
         CHECK_HIP_ERROR(hipMemcpy(alpha_d, &alpha_h, sizeof(T), hipMemcpyHostToDevice));
 
         CHECK_ROCBLAS_ERROR(rocblas_trsm_ex_fn(handle,
@@ -344,7 +525,7 @@ void testing_trsm_ex(const Arguments& arg)
                                                TRSM_BLOCK * K,
                                                arg.compute_type));
 
-        CHECK_HIP_ERROR(hipMemcpy(hXorB_2, dXorB, sizeof(T) * size_B, hipMemcpyDeviceToHost));
+        CHECK_HIP_ERROR(hXorB_2.transfer_from(dXorB));
 
         //computed result is in hx_or_b, so forward error is E = hx - hx_or_b
         // calculate vector-induced-norm 1 of matrix E
@@ -370,7 +551,7 @@ void testing_trsm_ex(const Arguments& arg)
     if(arg.timing)
     {
         // GPU rocBLAS
-        CHECK_HIP_ERROR(hipMemcpy(dXorB, hXorB_1, sizeof(T) * size_B, hipMemcpyHostToDevice));
+        CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_1));
 
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
 

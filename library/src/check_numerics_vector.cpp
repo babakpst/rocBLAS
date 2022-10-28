@@ -8,16 +8,16 @@
   * Info about rocblas_check_numerics_abnormal_struct function:
   *
   *    It is the host function which accepts the 'h_abnormal' structure and
-  *    also helps in debugging based on the different types of flags in rocblas_check_numerics_mode that users set to debug potential NaN/zero/Infinity.
+  *    also helps in debugging based on the different types of flags in rocblas_check_numerics_mode that users set to debug potential NaN/zero/Inf/denormal value.
   *
   * Parameters   : function_name         : Name of the rocBLAS math function
   *                check_numerics        : User defined flag for debugging
   *                is_input              : To check if the vector under consideration is an Input or an Output vector
-  *                h_abnormal            : Structure holding the boolean NaN/zero/Inf
+  *                h_abnormal            : Structure holding the boolean NaN/zero/Inf/denormal
   *
   * Return Value : rocblas_status
-  *        rocblas_status_success        : Return status if the vector does not have a NaN/Inf
-  *   rocblas_status_check_numerics_fail : Return status if the vector contains a NaN/Inf and 'check_numerics' enum is set to 'rocblas_check_numerics_mode_fail'
+  *        rocblas_status_success        : Return status if the vector does not have a NaN/Inf/denormal value
+  *   rocblas_status_check_numerics_fail : Return status if the vector contains a NaN/Inf/denormal value and 'check_numerics' enum is set to 'rocblas_check_numerics_mode_fail'
   *
 **/
 
@@ -26,8 +26,9 @@ rocblas_status rocblas_check_numerics_abnormal_struct(const char*               
                                                       bool                      is_input,
                                                       rocblas_check_numerics_t* h_abnormal)
 {
-    //is_abnormal will be set if the vector has a NaN or an Infinity
-    bool is_abnormal = (h_abnormal->has_NaN != 0) || (h_abnormal->has_Inf != 0);
+    //is_abnormal will be set if the vector has a NaN/Inf/denormal value
+    bool is_abnormal
+        = (h_abnormal->has_NaN != 0) || (h_abnormal->has_Inf != 0) || (h_abnormal->has_denorm != 0);
 
     //Fully informative message will be printed if 'check_numerics == ROCBLAS_CHECK_NUMERICS_INFO' or 'check_numerics == ROCBLAS_CHECK_NUMERICS_WARN' and 'is_abnormal'
     if(((check_numerics & rocblas_check_numerics_mode_info) != 0)
@@ -37,19 +38,21 @@ rocblas_status rocblas_check_numerics_abnormal_struct(const char*               
         {
             rocblas_cerr << "Funtion name:\t" << function_name << " :- Input :\t"
                          << " has_NaN " << h_abnormal->has_NaN << " has_zero "
-                         << h_abnormal->has_zero << " has_Inf " << h_abnormal->has_Inf << std::endl;
+                         << h_abnormal->has_zero << " has_Inf " << h_abnormal->has_Inf
+                         << " has_denorm " << h_abnormal->has_denorm << std::endl;
         }
         else
         {
             rocblas_cerr << "Funtion name:\t" << function_name << " :- Output :\t"
                          << " has_NaN " << h_abnormal->has_NaN << " has_zero "
-                         << h_abnormal->has_zero << " has_Inf " << h_abnormal->has_Inf << std::endl;
+                         << h_abnormal->has_zero << " has_Inf " << h_abnormal->has_Inf
+                         << " has_denorm " << h_abnormal->has_denorm << std::endl;
         }
     }
 
     if(is_abnormal)
     { //If 'check_numerics ==rocblas_check_numerics_mode_fail' then the 'rocblas_status_check_numerics_fail' status
-        //is returned which signifies that the vector has a NaN/Inf
+        //is returned which signifies that the vector has a NaN/Inf/denormal value
         if((check_numerics & rocblas_check_numerics_mode_fail) != 0)
             return rocblas_status_check_numerics_fail;
     }
@@ -62,8 +65,8 @@ rocblas_status rocblas_check_numerics_abnormal_struct(const char*               
   * Info about rocblas_internal_check_numerics_vector_template function:
   *
   *    It is the host function which accepts a vector and calls the 'rocblas_check_numerics_vector_kernel' kernel function
-  *    to check for numerical abnormalities such as NaN/zero/Infinity in that vector.
-  *    It also helps in debugging based on the different types of flags in rocblas_check_numerics_mode that users set to debug potential NaN/zero/Infinity.
+  *    to check for numerical abnormalities such as NaN/zero/Inf/denormal value in that vector.
+  *    It also helps in debugging based on the different types of flags in rocblas_check_numerics_mode that users set to debug potential NaN/zero/Inf/denormal value.
   *
   * Parameters   : function_name         : Name of the rocBLAS math function
   *                handle                : Handle to the rocblas library context queue
@@ -76,8 +79,8 @@ rocblas_status rocblas_check_numerics_abnormal_struct(const char*               
   *                is_input              : To check if the vector under consideration is an Input or an Output vector
   *
   * Return Value : rocblas_status
-  *        rocblas_status_success        : Return status if the vector does not have a NaN/Inf
-  *   rocblas_status_check_numerics_fail : Return status if the vector contains a NaN/Inf and 'check_numerics' enum is set to 'rocblas_check_numerics_mode_fail'
+  *        rocblas_status_success        : Return status if the vector does not have a NaN/Inf/denormal value
+  *   rocblas_status_check_numerics_fail : Return status if the vector contains a NaN/Inf/denormal value and 'check_numerics' enum is set to 'rocblas_check_numerics_mode_fail'
   *
 **/
 
@@ -87,7 +90,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                                                     rocblas_handle handle,
                                                     rocblas_int    n,
                                                     T              x,
-                                                    rocblas_int    offset_x,
+                                                    rocblas_stride offset_x,
                                                     rocblas_int    inc_x,
                                                     rocblas_stride stride_x,
                                                     rocblas_int    batch_count,
@@ -117,7 +120,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     dim3                  blocks((n - 1) / NB + 1, batch_count);
     dim3                  threads(NB);
 
-    hipLaunchKernelGGL(rocblas_check_numerics_vector_kernel,
+    hipLaunchKernelGGL((rocblas_check_numerics_vector_kernel<NB>),
                        blocks,
                        threads,
                        0,
@@ -139,7 +142,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
         function_name, check_numerics, is_input, &h_abnormal);
 }
 
-//ADDED INSTANTIATION TO SUPPORT T* AND T* CONST*
+// INSTANTIATIONS TO SUPPORT output: T*, T* const*, and input: const T*, const T* const*
 
 #ifdef INST
 #error INST IS ALREADY DEFINED
@@ -150,34 +153,40 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                                                         rocblas_handle handle,         \
                                                         rocblas_int    n,              \
                                                         typet_         x,              \
-                                                        rocblas_int    offset_x,       \
+                                                        rocblas_stride offset_x,       \
                                                         rocblas_int    incx,           \
                                                         rocblas_stride stride_x,       \
                                                         rocblas_int    batch_count,    \
                                                         const int      check_numerics, \
                                                         bool           is_input)
 INST(float*);
-INST(double*);
 INST(float* const*);
-INST(double* const*);
 INST(float const*);
+INST(float const* const*);
+
+INST(double*);
+INST(double* const*);
 INST(double const*);
-INST(const float* const*);
-INST(const double* const*);
+INST(double const* const*);
+
 INST(rocblas_float_complex*);
-INST(rocblas_double_complex*);
 INST(rocblas_float_complex* const*);
-INST(rocblas_double_complex* const*);
-INST(const rocblas_float_complex* const*);
-INST(const rocblas_double_complex* const*);
 INST(rocblas_float_complex const*);
+INST(rocblas_float_complex const* const*);
+
+INST(rocblas_double_complex*);
+INST(rocblas_double_complex* const*);
 INST(rocblas_double_complex const*);
+INST(rocblas_double_complex const* const*);
+
 INST(rocblas_half*);
-INST(rocblas_bfloat16*);
 INST(rocblas_half* const*);
-INST(rocblas_bfloat16* const*);
-INST(const rocblas_half* const*);
-INST(const rocblas_bfloat16* const*);
 INST(rocblas_half const*);
+INST(rocblas_half const* const*);
+
+INST(rocblas_bfloat16*);
+INST(rocblas_bfloat16* const*);
 INST(rocblas_bfloat16 const*);
+INST(rocblas_bfloat16 const* const*);
+
 #undef INST

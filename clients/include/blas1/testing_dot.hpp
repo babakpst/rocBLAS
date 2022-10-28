@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -24,29 +42,38 @@ void testing_dot_bad_arg(const Arguments& arg)
     auto rocblas_dot_fn = arg.fortran ? (CONJ ? rocblas_dotc<T, true> : rocblas_dot<T, true>)
                                       : (CONJ ? rocblas_dotc<T, false> : rocblas_dot<T, false>);
 
-    rocblas_int         N         = 100;
-    rocblas_int         incx      = 1;
-    rocblas_int         incy      = 1;
-    static const size_t safe_size = 100; //  arbitrarily set to 100
+    for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
+    {
+        rocblas_local_handle handle{arg};
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, pointer_mode));
 
-    rocblas_local_handle handle{arg};
-    device_vector<T>     dx(safe_size);
-    device_vector<T>     dy(safe_size);
-    device_vector<T>     d_rocblas_result(1);
-    CHECK_DEVICE_ALLOCATION(dx.memcheck());
-    CHECK_DEVICE_ALLOCATION(dy.memcheck());
-    CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
+        rocblas_int N    = 100;
+        rocblas_int incx = 1;
+        rocblas_int incy = 1;
 
-    CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+        // Allocate device memory
+        device_vector<T> dx(N, incx);
+        device_vector<T> dy(N, incy);
+        device_vector<T> d_rocblas_result(1, 1);
 
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_fn)(handle, N, nullptr, incx, dy, incy, d_rocblas_result),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_fn)(handle, N, dx, incx, nullptr, incy, d_rocblas_result),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_fn)(handle, N, dx, incx, dy, incy, nullptr),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_fn)(nullptr, N, dx, incx, dy, incy, d_rocblas_result),
-                          rocblas_status_invalid_handle);
+        // Check device memory allocation
+        CHECK_DEVICE_ALLOCATION(dx.memcheck());
+        CHECK_DEVICE_ALLOCATION(dy.memcheck());
+        CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
+
+        // don't write to result so device pointer fine for both host and device mode
+
+        EXPECT_ROCBLAS_STATUS((rocblas_dot_fn)(nullptr, N, dx, incx, dy, incy, d_rocblas_result),
+                              rocblas_status_invalid_handle);
+        EXPECT_ROCBLAS_STATUS(
+            (rocblas_dot_fn)(handle, N, nullptr, incx, dy, incy, d_rocblas_result),
+            rocblas_status_invalid_pointer);
+        EXPECT_ROCBLAS_STATUS(
+            (rocblas_dot_fn)(handle, N, dx, incx, nullptr, incy, d_rocblas_result),
+            rocblas_status_invalid_pointer);
+        EXPECT_ROCBLAS_STATUS((rocblas_dot_fn)(handle, N, dx, incx, dy, incy, nullptr),
+                              rocblas_status_invalid_pointer);
+    }
 }
 
 template <typename T>
@@ -80,48 +107,51 @@ void testing_dot(const Arguments& arg)
         device_vector<T> d_rocblas_result(1);
         CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
 
+        host_vector<T> h_rocblas_result(1);
+        CHECK_HIP_ERROR(h_rocblas_result.memcheck());
+
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
         CHECK_ROCBLAS_ERROR(
             (rocblas_dot_fn)(handle, N, nullptr, incx, nullptr, incy, d_rocblas_result));
 
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        CHECK_ROCBLAS_ERROR(
+            (rocblas_dot_fn)(handle, N, nullptr, incx, nullptr, incy, h_rocblas_result));
+
         T cpu_0 = T(0);
-        T gpu_0;
+        T gpu_0, gpu_1;
         CHECK_HIP_ERROR(hipMemcpy(&gpu_0, d_rocblas_result, sizeof(T), hipMemcpyDeviceToHost));
+        gpu_1 = h_rocblas_result[0];
         unit_check_general<T>(1, 1, 1, &cpu_0, &gpu_0);
+        unit_check_general<T>(1, 1, 1, &cpu_0, &gpu_1);
 
         return;
     }
 
-    rocblas_int abs_incx = incx >= 0 ? incx : -incx;
-    rocblas_int abs_incy = incy >= 0 ? incy : -incy;
-    size_t      size_x   = N * size_t(abs_incx);
-    size_t      size_y   = N * size_t(abs_incy);
-    if(!size_x)
-        size_x = 1;
-    if(!size_y)
-        size_y = 1;
+    // Naming: `h` is in CPU (host) memory(eg hx), `d` is in GPU (device) memory (eg dx).
+    // Allocate host memory
+    host_vector<T> hx(N, incx ? incx : 1);
+    host_vector<T> hy(N, incy ? incy : 1);
 
-    // allocate memory on device
-    device_vector<T> dx(size_x, 1, HMM);
-    device_vector<T> dy(size_y, 1, HMM);
+    // Allocate device memory
+    device_vector<T> dx(N, incx ? incx : 1, HMM);
+    device_vector<T> dy(N, incy ? incy : 1, HMM);
     device_vector<T> d_rocblas_result_2(1, 1, HMM);
+
+    // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dx.memcheck());
     CHECK_DEVICE_ALLOCATION(dy.memcheck());
     CHECK_DEVICE_ALLOCATION(d_rocblas_result_2.memcheck());
 
-    // Naming: dX is in GPU (device) memory. hK is in CPU (host) memory, plz follow this practice
-    host_vector<T> hx(size_x);
-    host_vector<T> hy(size_y);
-
     // Initialize data on host memory
-    rocblas_init_vector(hx, arg, N, abs_incx, 0, 1, rocblas_client_alpha_sets_nan, true);
-    rocblas_init_vector(hy, arg, N, abs_incy, 0, 1, rocblas_client_alpha_sets_nan, false);
+    rocblas_init_vector(hx, arg, rocblas_client_alpha_sets_nan, true);
+    rocblas_init_vector(hy, arg, rocblas_client_alpha_sets_nan, false, true);
 
     // copy data from CPU to device, does not work for incx != 1
     CHECK_HIP_ERROR(dx.transfer_from(hx));
     CHECK_HIP_ERROR(dy.transfer_from(hy));
 
-    double gpu_time_used, cpu_time_used;
+    double cpu_time_used;
 
     // arg.algo indicates to force optimized x dot x kernel algorithm with equal inc
     auto dy_ptr = (arg.algo) ? (T*)(dx) : (T*)(dy);
@@ -133,12 +163,16 @@ void testing_dot(const Arguments& arg)
     {
         // GPU BLAS, rocblas_pointer_mode_host
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR((rocblas_dot_fn)(handle, N, dx, incx, dy_ptr, incy, &rocblas_result_1));
+        handle.post_test(arg);
 
         // GPU BLAS, rocblas_pointer_mode_device
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+        handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR(
             (rocblas_dot_fn)(handle, N, dx, incx, dy_ptr, incy, d_rocblas_result_2));
+        handle.post_test(arg);
         CHECK_HIP_ERROR(
             hipMemcpy(&rocblas_result_2, d_rocblas_result_2, sizeof(T), hipMemcpyDeviceToHost));
 
@@ -167,9 +201,6 @@ void testing_dot(const Arguments& arg)
 
         if(arg.norm_check)
         {
-            rocblas_cout << "cpu=" << cpu_result << ", gpu_host_ptr=" << rocblas_result_1
-                         << ", gpu_device_ptr=" << rocblas_result_2 << std::endl;
-
             rocblas_error_1 = double(rocblas_abs((cpu_result - rocblas_result_1) / cpu_result));
             rocblas_error_2 = double(rocblas_abs((cpu_result - rocblas_result_2) / cpu_result));
         }
@@ -177,8 +208,9 @@ void testing_dot(const Arguments& arg)
 
     if(arg.timing)
     {
-        int number_cold_calls = arg.cold_iters;
-        int number_hot_calls  = arg.iters;
+        double gpu_time_used;
+        int    number_cold_calls = arg.cold_iters;
+        int    number_hot_calls  = arg.iters;
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
 
         for(int iter = 0; iter < number_cold_calls; iter++)

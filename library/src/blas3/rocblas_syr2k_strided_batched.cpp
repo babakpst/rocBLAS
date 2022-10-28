@@ -1,7 +1,27 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
+#include "Tensile/gemm.hpp"
 #include "logging.hpp"
+#include "rocblas_block_sizes.h"
 #include "rocblas_syr2k_her2k.hpp"
 #include "utility.hpp"
 
@@ -18,7 +38,7 @@ namespace
     template <>
     constexpr char rocblas_syr2k_name<rocblas_double_complex>[] = "rocblas_zsyr2k_strided_batched";
 
-    template <typename T>
+    template <rocblas_int MIN_NB, typename T>
     rocblas_status rocblas_syr2k_strided_batched_impl(rocblas_handle    handle,
                                                       rocblas_fill      uplo,
                                                       rocblas_operation transA,
@@ -42,7 +62,16 @@ namespace
 
         RETURN_ZERO_DEVICE_MEMORY_SIZE_IF_QUERIED(handle);
 
-        auto layer_mode = handle->layer_mode;
+        // Copy alpha and beta to host if on device. This is because gemm is called and it
+        // requires alpha and beta to be on host
+        T alpha_h;
+        T beta_h;
+        RETURN_IF_ROCBLAS_ERROR(
+            copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h, beta_h, k));
+        auto saved_pointer_mode = handle->push_pointer_mode(rocblas_pointer_mode_host);
+
+        auto layer_mode     = handle->layer_mode;
+        auto check_numerics = handle->check_numerics;
         if(layer_mode
            & (rocblas_layer_mode_log_trace | rocblas_layer_mode_log_bench
               | rocblas_layer_mode_log_profile))
@@ -151,28 +180,89 @@ namespace
         if(arg_status != rocblas_status_continue)
             return arg_status;
 
+        static constexpr bool Hermetian = false;
+        if(check_numerics)
+        {
+            bool           is_input = true;
+            rocblas_status syr2k_check_numerics_status
+                = rocblas_her2k_syr2k_check_numerics<Hermetian>(rocblas_syr2k_name<T>,
+                                                                handle,
+                                                                uplo,
+                                                                transA,
+                                                                n,
+                                                                k,
+                                                                A,
+                                                                lda,
+                                                                stride_a,
+                                                                B,
+                                                                ldb,
+                                                                stride_b,
+                                                                C,
+                                                                ldc,
+                                                                stride_c,
+                                                                batch_count,
+                                                                check_numerics,
+                                                                is_input);
+
+            if(syr2k_check_numerics_status != rocblas_status_success)
+                return syr2k_check_numerics_status;
+        }
+
         static constexpr bool is2K    = true;
         static constexpr bool BATCHED = false;
-        return rocblas_internal_syr2k_template<BATCHED, is2K>(handle,
-                                                              uplo,
-                                                              transA,
-                                                              n,
-                                                              k,
-                                                              alpha,
-                                                              A,
-                                                              offset_A,
-                                                              lda,
-                                                              stride_a,
-                                                              B,
-                                                              offset_B,
-                                                              ldb,
-                                                              stride_b,
-                                                              beta,
-                                                              C,
-                                                              offset_C,
-                                                              ldc,
-                                                              stride_c,
-                                                              batch_count);
+        static constexpr bool HERK    = false;
+        rocblas_status        status  = rocblas_status_success;
+        status = rocblas_internal_syr2k_her2k_template<MIN_NB, BATCHED, is2K, HERK, T>(handle,
+                                                                                       uplo,
+                                                                                       transA,
+                                                                                       n,
+                                                                                       k,
+                                                                                       alpha,
+                                                                                       A,
+                                                                                       offset_A,
+                                                                                       lda,
+                                                                                       stride_a,
+                                                                                       B,
+                                                                                       offset_B,
+                                                                                       ldb,
+                                                                                       stride_b,
+                                                                                       beta,
+                                                                                       C,
+                                                                                       offset_C,
+                                                                                       ldc,
+                                                                                       stride_c,
+                                                                                       batch_count);
+
+        if(status != rocblas_status_success)
+            return status;
+
+        if(check_numerics)
+        {
+            bool           is_input = false;
+            rocblas_status syr2k_check_numerics_status
+                = rocblas_her2k_syr2k_check_numerics<Hermetian>(rocblas_syr2k_name<T>,
+                                                                handle,
+                                                                uplo,
+                                                                transA,
+                                                                n,
+                                                                k,
+                                                                A,
+                                                                lda,
+                                                                stride_a,
+                                                                B,
+                                                                ldb,
+                                                                stride_b,
+                                                                C,
+                                                                ldc,
+                                                                stride_c,
+                                                                batch_count,
+                                                                check_numerics,
+                                                                is_input);
+
+            if(syr2k_check_numerics_status != rocblas_status_success)
+                return syr2k_check_numerics_status;
+        }
+        return status;
     }
 
 }
@@ -188,53 +278,53 @@ extern "C" {
 #error IMPL ALREADY DEFINED
 #endif
 
-#define IMPL(routine_name_, T_)                                 \
-    rocblas_status routine_name_(rocblas_handle    handle,      \
-                                 rocblas_fill      uplo,        \
-                                 rocblas_operation transA,      \
-                                 rocblas_int       n,           \
-                                 rocblas_int       k,           \
-                                 const T_*         alpha,       \
-                                 const T_*         A,           \
-                                 rocblas_int       lda,         \
-                                 rocblas_stride    stride_a,    \
-                                 const T_*         B,           \
-                                 rocblas_int       ldb,         \
-                                 rocblas_stride    stride_b,    \
-                                 const T_*         beta,        \
-                                 T_*               C,           \
-                                 rocblas_int       ldc,         \
-                                 rocblas_stride    stride_c,    \
-                                 rocblas_int       batch_count) \
-    try                                                         \
-    {                                                           \
-        return rocblas_syr2k_strided_batched_impl(handle,       \
-                                                  uplo,         \
-                                                  transA,       \
-                                                  n,            \
-                                                  k,            \
-                                                  alpha,        \
-                                                  A,            \
-                                                  lda,          \
-                                                  stride_a,     \
-                                                  B,            \
-                                                  ldb,          \
-                                                  stride_b,     \
-                                                  beta,         \
-                                                  C,            \
-                                                  ldc,          \
-                                                  stride_c,     \
-                                                  batch_count); \
-    }                                                           \
-    catch(...)                                                  \
-    {                                                           \
-        return exception_to_rocblas_status();                   \
+#define IMPL(routine_name_, T_, MIN_NB)                                 \
+    rocblas_status routine_name_(rocblas_handle    handle,              \
+                                 rocblas_fill      uplo,                \
+                                 rocblas_operation transA,              \
+                                 rocblas_int       n,                   \
+                                 rocblas_int       k,                   \
+                                 const T_*         alpha,               \
+                                 const T_*         A,                   \
+                                 rocblas_int       lda,                 \
+                                 rocblas_stride    stride_a,            \
+                                 const T_*         B,                   \
+                                 rocblas_int       ldb,                 \
+                                 rocblas_stride    stride_b,            \
+                                 const T_*         beta,                \
+                                 T_*               C,                   \
+                                 rocblas_int       ldc,                 \
+                                 rocblas_stride    stride_c,            \
+                                 rocblas_int       batch_count)         \
+    try                                                                 \
+    {                                                                   \
+        return rocblas_syr2k_strided_batched_impl<MIN_NB>(handle,       \
+                                                          uplo,         \
+                                                          transA,       \
+                                                          n,            \
+                                                          k,            \
+                                                          alpha,        \
+                                                          A,            \
+                                                          lda,          \
+                                                          stride_a,     \
+                                                          B,            \
+                                                          ldb,          \
+                                                          stride_b,     \
+                                                          beta,         \
+                                                          C,            \
+                                                          ldc,          \
+                                                          stride_c,     \
+                                                          batch_count); \
+    }                                                                   \
+    catch(...)                                                          \
+    {                                                                   \
+        return exception_to_rocblas_status();                           \
     }
 
-IMPL(rocblas_ssyr2k_strided_batched, float);
-IMPL(rocblas_dsyr2k_strided_batched, double);
-IMPL(rocblas_csyr2k_strided_batched, rocblas_float_complex);
-IMPL(rocblas_zsyr2k_strided_batched, rocblas_double_complex);
+IMPL(rocblas_ssyr2k_strided_batched, float, ROCBLAS_SSYR2K_NB);
+IMPL(rocblas_dsyr2k_strided_batched, double, ROCBLAS_DCZSYR2K_NB);
+IMPL(rocblas_csyr2k_strided_batched, rocblas_float_complex, ROCBLAS_DCZSYR2K_NB);
+IMPL(rocblas_zsyr2k_strided_batched, rocblas_double_complex, ROCBLAS_DCZSYR2K_NB);
 
 #undef IMPL
 

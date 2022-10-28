@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -34,16 +52,22 @@ __device__ inline rocblas_half2
 
 // Conjugate a value. For most types, simply return argument; for
 // rocblas_float_complex and rocblas_double_complex, return std::conj(z)
-template <typename T, std::enable_if_t<!is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<!rocblas_is_complex<T>, int> = 0>
 __device__ __host__ inline T conj(const T& z)
 {
     return z;
 }
 
-template <typename T, std::enable_if_t<is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<rocblas_is_complex<T>, int> = 0>
 __device__ __host__ inline T conj(const T& z)
 {
     return std::conj(z);
+}
+
+template <bool CONJ, typename T>
+__device__ __host__ inline T conj_if_true(const T& z)
+{
+    return CONJ ? conj(z) : z;
 }
 
 // Load a scalar. If the argument is a pointer, dereference it; otherwise copy
@@ -160,10 +184,11 @@ __forceinline__ __device__ __host__ T*
 
 // Helper for batched functions with temporary memory, currently just trsm and trsv.
 // Copys addresses to array of pointers for batched versions.
-template <typename T>
-ROCBLAS_KERNEL void setup_batched_array_kernel(T* src, rocblas_stride src_stride, T* dst[])
+template <rocblas_int NB, typename T>
+ROCBLAS_KERNEL(NB)
+setup_batched_array_kernel(T* src, rocblas_stride src_stride, T* dst[])
 {
-    dst[hipBlockIdx_x] = src + hipBlockIdx_x * src_stride;
+    dst[blockIdx.x] = src + blockIdx.x * src_stride;
 }
 
 template <rocblas_int BLOCK, typename T>
@@ -174,16 +199,17 @@ void setup_batched_array(
     dim3 threads(BLOCK);
 
     hipLaunchKernelGGL(
-        setup_batched_array_kernel<T>, grid, threads, 0, stream, src, src_stride, dst);
+        (setup_batched_array_kernel<BLOCK, T>), grid, threads, 0, stream, src, src_stride, dst);
 }
 
-template <typename T>
-ROCBLAS_KERNEL void setup_device_pointer_array_kernel(T*             src,
-                                                      rocblas_stride src_stride,
-                                                      T*             dst[],
-                                                      rocblas_int    batch_count)
+template <rocblas_int NB, typename T>
+ROCBLAS_KERNEL(NB)
+setup_device_pointer_array_kernel(T*             src,
+                                  rocblas_stride src_stride,
+                                  T*             dst[],
+                                  rocblas_int    batch_count)
 {
-    ptrdiff_t tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
+    ptrdiff_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if(tid < batch_count)
         dst[tid] = src + tid * src_stride;
 }
@@ -195,7 +221,7 @@ void setup_device_pointer_array(
     int  NB = 256;
     dim3 grid((batch_count - 1) / NB + 1);
     dim3 threads(NB);
-    hipLaunchKernelGGL(setup_device_pointer_array_kernel<T>,
+    hipLaunchKernelGGL((setup_device_pointer_array_kernel<NB, T>),
                        grid,
                        threads,
                        0,
@@ -266,22 +292,23 @@ constexpr const char* rocblas_datatype_string(rocblas_datatype type)
 {
     switch(type)
     {
-    case rocblas_datatype_f16_r:  return "f16_r";
-    case rocblas_datatype_f32_r:  return "f32_r";
-    case rocblas_datatype_f64_r:  return "f64_r";
-    case rocblas_datatype_f16_c:  return "f16_c";
-    case rocblas_datatype_f32_c:  return "f32_c";
-    case rocblas_datatype_f64_c:  return "f64_c";
-    case rocblas_datatype_i8_r:   return "i8_r";
-    case rocblas_datatype_u8_r:   return "u8_r";
-    case rocblas_datatype_i32_r:  return "i32_r";
-    case rocblas_datatype_u32_r:  return "u32_r";
-    case rocblas_datatype_i8_c:   return "i8_c";
-    case rocblas_datatype_u8_c:   return "u8_c";
-    case rocblas_datatype_i32_c:  return "i32_c";
-    case rocblas_datatype_u32_c:  return "u32_c";
-    case rocblas_datatype_bf16_r: return "bf16_r";
-    case rocblas_datatype_bf16_c: return "bf16_c";
+    case rocblas_datatype_f16_r:   return "f16_r";
+    case rocblas_datatype_f32_r:   return "f32_r";
+    case rocblas_datatype_f64_r:   return "f64_r";
+    case rocblas_datatype_f16_c:   return "f16_c";
+    case rocblas_datatype_f32_c:   return "f32_c";
+    case rocblas_datatype_f64_c:   return "f64_c";
+    case rocblas_datatype_i8_r:    return "i8_r";
+    case rocblas_datatype_u8_r:    return "u8_r";
+    case rocblas_datatype_i32_r:   return "i32_r";
+    case rocblas_datatype_u32_r:   return "u32_r";
+    case rocblas_datatype_i8_c:    return "i8_c";
+    case rocblas_datatype_u8_c:    return "u8_c";
+    case rocblas_datatype_i32_c:   return "i32_c";
+    case rocblas_datatype_u32_c:   return "u32_c";
+    case rocblas_datatype_bf16_r:  return "bf16_r";
+    case rocblas_datatype_bf16_c:  return "bf16_c";
+    case rocblas_datatype_invalid: return "invalid";
     }
     return "invalid";
 }
@@ -291,22 +318,23 @@ constexpr size_t rocblas_sizeof_datatype(rocblas_datatype type)
 {
     switch(type)
     {
-    case rocblas_datatype_f16_r:  return 2;
-    case rocblas_datatype_f32_r:  return 4;
-    case rocblas_datatype_f64_r:  return 8;
-    case rocblas_datatype_f16_c:  return 4;
-    case rocblas_datatype_f32_c:  return 8;
-    case rocblas_datatype_f64_c:  return 16;
-    case rocblas_datatype_i8_r:   return 1;
-    case rocblas_datatype_u8_r:   return 1;
-    case rocblas_datatype_i32_r:  return 4;
-    case rocblas_datatype_u32_r:  return 4;
-    case rocblas_datatype_i8_c:   return 2;
-    case rocblas_datatype_u8_c:   return 2;
-    case rocblas_datatype_i32_c:  return 8;
-    case rocblas_datatype_u32_c:  return 8;
-    case rocblas_datatype_bf16_r: return 2;
-    case rocblas_datatype_bf16_c: return 4;
+    case rocblas_datatype_f16_r:   return 2;
+    case rocblas_datatype_f32_r:   return 4;
+    case rocblas_datatype_f64_r:   return 8;
+    case rocblas_datatype_f16_c:   return 4;
+    case rocblas_datatype_f32_c:   return 8;
+    case rocblas_datatype_f64_c:   return 16;
+    case rocblas_datatype_i8_r:    return 1;
+    case rocblas_datatype_u8_r:    return 1;
+    case rocblas_datatype_i32_r:   return 4;
+    case rocblas_datatype_u32_r:   return 4;
+    case rocblas_datatype_i8_c:    return 2;
+    case rocblas_datatype_u8_c:    return 2;
+    case rocblas_datatype_i32_c:   return 8;
+    case rocblas_datatype_u32_c:   return 8;
+    case rocblas_datatype_bf16_r:  return 2;
+    case rocblas_datatype_bf16_c:  return 4;
+    case rocblas_datatype_invalid: return 4;
     }
     return 0;
 }
@@ -331,7 +359,7 @@ constexpr const char* rocblas_gemm_flags_to_string(rocblas_gemm_flags type)
 }
 
 // return rocblas_datatype from type
-template <typename> static constexpr rocblas_datatype rocblas_datatype_from_type     = rocblas_datatype(-1);
+template <typename> static constexpr rocblas_datatype rocblas_datatype_from_type                   = rocblas_datatype_invalid;
 template <> ROCBLAS_CLANG_STATIC constexpr auto rocblas_datatype_from_type<rocblas_half>           = rocblas_datatype_f16_r;
 template <> ROCBLAS_CLANG_STATIC constexpr auto rocblas_datatype_from_type<float>                  = rocblas_datatype_f32_r;
 template <> ROCBLAS_CLANG_STATIC constexpr auto rocblas_datatype_from_type<double>                 = rocblas_datatype_f64_r;
@@ -403,9 +431,9 @@ constexpr rocblas_status get_rocblas_status_for_hip_status(hipError_t status)
     }
 }
 
-/*********************************************************************************************************
- * \brief The main structure for Numerical checking to detect numerical abnormalities such as NaN/zero/Inf
- *********************************************************************************************************/
+/*************************************************************************************************************************
+ * \brief The main structure for Numerical checking to detect numerical abnormalities such as NaN/zero/Inf/denormal values
+ ************************************************************************************************************************/
 typedef struct rocblas_check_numerics_s
 {
     // Set to true if there is a NaN in the vector/matrix
@@ -416,7 +444,30 @@ typedef struct rocblas_check_numerics_s
 
     // Set to true if there is an Infinity in the vector/matrix
     bool has_Inf = false;
+
+    // Set to true if there is an denormal/subnormal value in the vector/matrix
+    bool has_denorm = false;
+
 } rocblas_check_numerics_t;
+
+/*************************************************************************************************************************
+//! @brief enum to check the type of matrix
+ ************************************************************************************************************************/
+typedef enum rocblas_check_matrix_type_
+{
+    // General matrix
+    rocblas_client_general_matrix,
+
+    // Hermitian matrix
+    rocblas_client_hermitian_matrix,
+
+    // Symmetric matrix
+    rocblas_client_symmetric_matrix,
+
+    // Triangular matrix
+    rocblas_client_triangular_matrix,
+
+} rocblas_check_matrix_type;
 
 /*******************************************************************************
 * \brief  returns true if arg is NaN
@@ -427,13 +478,13 @@ __host__ __device__ inline bool rocblas_isnan(T)
     return false;
 }
 
-template <typename T, std::enable_if_t<!std::is_integral<T>{} && !is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<!std::is_integral<T>{} && !rocblas_is_complex<T>, int> = 0>
 __host__ __device__ inline bool rocblas_isnan(T arg)
 {
     return std::isnan(arg);
 }
 
-template <typename T, std::enable_if_t<is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<rocblas_is_complex<T>, int> = 0>
 __host__ __device__ inline bool rocblas_isnan(const T& arg)
 {
     return rocblas_isnan(std::real(arg)) || rocblas_isnan(std::imag(arg));
@@ -459,13 +510,13 @@ __host__ __device__ inline bool rocblas_isinf(T)
     return false;
 }
 
-template <typename T, std::enable_if_t<!std::is_integral<T>{} && !is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<!std::is_integral<T>{} && !rocblas_is_complex<T>, int> = 0>
 __host__ __device__ inline bool rocblas_isinf(T arg)
 {
     return std::isinf(arg);
 }
 
-template <typename T, std::enable_if_t<is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<rocblas_is_complex<T>, int> = 0>
 __host__ __device__ inline bool rocblas_isinf(const T& arg)
 {
     return rocblas_isinf(std::real(arg)) || rocblas_isinf(std::imag(arg));
@@ -492,14 +543,14 @@ __host__ __device__ inline bool rocblas_iszero(T arg)
 }
 
 // Absolute value
-template <typename T, std::enable_if_t<!is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<!rocblas_is_complex<T>, int> = 0>
 __device__ __host__ inline T rocblas_abs(T x)
 {
     return x < 0 ? -x : x;
 }
 
 // For complex, we have defined a __device__ __host__ compatible std::abs
-template <typename T, std::enable_if_t<is_complex<T>, int> = 0>
+template <typename T, std::enable_if_t<rocblas_is_complex<T>, int> = 0>
 __device__ __host__ inline auto rocblas_abs(T x)
 {
     return std::abs(x);
@@ -524,6 +575,55 @@ __device__ __host__ inline rocblas_half rocblas_abs(rocblas_half x)
     return t.x;
 }
 
+/*******************************************************************************
+* \brief  returns true if arg is denormal/subnormal
+********************************************************************************/
+
+template <typename T, std::enable_if_t<std::is_integral<T>{}, int> = 0>
+__host__ __device__ inline bool rocblas_isdenorm(T)
+{
+    return false;
+}
+
+template <typename T, std::enable_if_t<!std::is_integral<T>{} && !rocblas_is_complex<T>, int> = 0>
+__host__ __device__ inline bool rocblas_isdenorm(T arg)
+{
+    return ((rocblas_abs(arg) >= std::numeric_limits<T>::denorm_min())
+            && (rocblas_abs(arg) < std::numeric_limits<T>::min()));
+}
+
+template <typename T, std::enable_if_t<rocblas_is_complex<T>, int> = 0>
+__host__ __device__ inline bool rocblas_isdenorm(const T& arg)
+{
+    return rocblas_isdenorm(std::real(arg)) || rocblas_isdenorm(std::imag(arg));
+}
+
+__host__ __device__ inline bool rocblas_isdenorm(rocblas_half arg)
+{
+    union
+    {
+        rocblas_half fp;
+        uint16_t     data;
+    } x = {rocblas_abs(arg)};
+    return (
+        (x.data >= 0x0001)
+        && (x.data
+            < 0x0400)); //0x0001 is the smallest positive subnormal number and 0x0400 is the smallest positive normal number represented by rocblas_half
+}
+
+__host__ __device__ inline bool rocblas_isdenorm(rocblas_bfloat16 arg)
+{
+    union
+    {
+        rocblas_bfloat16 fp;
+        uint16_t         data;
+    } x = {rocblas_abs(arg)};
+    return (
+        (x.data >= 0x0001)
+        && (x.data
+            < 0x0080)); //0x0001 is the smallest positive subnormal number and 0x0080 is the smallest positive normal number represented by rocblas_bfloat16
+}
+
 // Is power of two
 __device__ __host__ constexpr bool rocblas_is_po2(rocblas_int x)
 {
@@ -544,7 +644,7 @@ struct rocblas_real_t_impl
 };
 
 template <typename T>
-struct rocblas_real_t_impl<T, std::enable_if_t<is_complex<T>>>
+struct rocblas_real_t_impl<T, std::enable_if_t<rocblas_is_complex<T>>>
 {
     using type = decltype(std::real(T{}));
 };
@@ -606,3 +706,21 @@ ROCBLAS_INTERNAL_EXPORT std::string rocblas_internal_get_arch_name();
 
 // for internal use during testing, whether to skip actual kernel launch
 ROCBLAS_INTERNAL_EXPORT bool rocblas_internal_tensile_debug_skip_launch();
+
+template <typename T>
+struct rocblas_internal_val_ptr
+{
+    union
+    {
+        T        value;
+        const T* ptr;
+    };
+
+    inline rocblas_internal_val_ptr(bool host_mode, const T* val_ptr)
+    {
+        if(host_mode)
+            value = *val_ptr;
+        else
+            ptr = val_ptr;
+    }
+};

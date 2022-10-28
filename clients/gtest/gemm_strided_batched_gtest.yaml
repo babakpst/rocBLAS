@@ -4,6 +4,9 @@ include: known_bugs.yaml
 
 Definitions:
   - &small_matrix_size_range
+    - { M:     0, N:     8, K:     8, lda:     8, ldb:     8, ldc:     8, ldd:     8, stride_a:       64, stride_b:       64, stride_c:       64, stride_d:       64 } # m==0
+    - { M:     8, N:     0, K:     8, lda:     8, ldb:     8, ldc:     8, ldd:     8, stride_a:       64, stride_b:       64, stride_c:       64, stride_d:       64 } # n==0
+    - { M:     8, N:     8, K:     0, lda:     8, ldb:     8, ldc:     8, ldd:     8, stride_a:       64, stride_b:       64, stride_c:       64, stride_d:       64 } # k==0
     - { M:    -1, N:    -1, K:    -1, lda:    -1, ldb:     1, ldc:     1, ldd:     1, stride_a:        1, stride_b:        1, stride_c:        1, stride_d:        1 }
     - { M:     8, N:     9, K:    10, lda:     8, ldb:    10, ldc:     8, ldd:     8, stride_a:       80, stride_b:       90, stride_c:       82, stride_d:       82 }
     - { M:     4, N:     3, K:     4, lda:     4, ldb:     4, ldc:     4, ldd:     4, stride_a:       16, stride_b:       12, stride_c:       12, stride_d:       12 }
@@ -231,18 +234,12 @@ Definitions:
     - { alpha: 2, alphai: 2, beta: -1.0, betai: 2.0 }
 
 Tests:
-- name: gemm_strided_batched_bad_arg
+- name: gemm_strided_batched_xx_bad_arg
   category: pre_checkin
   function:
+    - gemm_strided_batched_bad_arg: *half_single_double_complex_real_precisions
     - gemm_strided_batched_ex_bad_arg: *real_precisions
-  transA: N
-  transB: N
-  fortran: [ false, true ]
-
-- name: gemm_strided_batched_bad_arg
-  category: pre_checkin
-  function:
-    - gemm_strided_batched_ex_bad_arg: *single_double_precisions_complex
+    - gemm_strided_batched_ex_bad_arg: *complex_precisions
   transA: N
   transB: N
   fortran: [ false, true ]
@@ -610,11 +607,33 @@ Tests:
   transB: N
   batch_count: 1
 
-- name: gemm_strided_batched_zerok
+- name: gemm_strided_batched_ex_hpa_fp16
   category: quick
   function:
-    gemm_strided_batched: { <<: *half_single_double_precisions, <<: *complex_precisions }
-    gemm_strided_batched_ex: { <<: *real_precisions, <<: *complex_precisions }
+    gemm_strided_batched_ex: *hpa_half_precision
+  M: 128
+  N: 128
+  K: 1000
+  transA: N
+  transB: N
+  alpha: 0.001
+  beta: 1
+  batch_count: [ 1, 10, 12 ]
+  lda: 128
+  ldb: 1000
+  ldc: 128
+  ldd: 128
+  stride_a: 128000
+  stride_b: 128000
+  stride_c: 16384
+  stride_d: 16384
+
+- name: gemm_strided_batched_xx_zerok
+  category: quick
+  function:
+    gemm_strided_batched: *half_single_double_precisions_complex_real
+    gemm_strided_batched_ex: *complex_precisions
+    gemm_strided_batched_ex: *real_precisions
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
   K: 0

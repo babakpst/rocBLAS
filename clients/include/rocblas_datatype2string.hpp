@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -7,12 +25,21 @@
 #include "rocblas.h"
 #include <string>
 
+// these enum should have unique value names including those defined in the rocblas library
+// API enums as yaml data file processing doesn't have class scoping so can get confused to values
+
 enum class rocblas_initialization
 {
     rand_int   = 111,
     trig_float = 222,
     hpl        = 333,
     special    = 444,
+};
+
+enum class rocblas_arithmetic_check
+{
+    no_check      = 111,
+    ieee16_ieee32 = 222,
 };
 
 /* ============================================================================================ */
@@ -109,6 +136,8 @@ constexpr auto rocblas_datatype2string(rocblas_datatype type)
         return "bf16_r";
     case rocblas_datatype_bf16_c:
         return "bf16_c";
+    case rocblas_datatype_invalid:
+        return "invalid";
     }
     return "invalid";
 }
@@ -129,11 +158,76 @@ constexpr auto rocblas_initialization2string(rocblas_initialization init)
     return "invalid";
 }
 
+constexpr auto rocblas_arithmetic_check2string(rocblas_arithmetic_check check)
+{
+    switch(check)
+    {
+    case rocblas_arithmetic_check::no_check:
+        return "no_check";
+    case rocblas_arithmetic_check::ieee16_ieee32:
+        return "ieee16_ieee32";
+    }
+    return "invalid";
+}
+
 inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os,
                                             rocblas_initialization    init)
 {
     return os << rocblas_initialization2string(init);
 }
+
+inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os,
+                                            rocblas_arithmetic_check  check)
+{
+    return os << rocblas_arithmetic_check2string(check);
+}
+
+inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, uint8_t val)
+{
+    return os << (unsigned int)(val); // avoid 0 btye in stream as passed to gtest
+}
+
+inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, int8_t val)
+{
+    return os << (int)(val); // avoid 0 btye in stream as passed to gtest
+}
+
+// these next two << instantiations for std::pair simply allow the enums to be logged without quotes
+// like the rocblas API enums
+
+inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream&                      os,
+                                            std::pair<char const*, rocblas_initialization> p)
+{
+    os << p.first << ": ";
+#define CASE(x) \
+    case x:     \
+        return os << rocblas_initialization2string(x)
+    switch(p.second)
+    {
+        CASE(rocblas_initialization::rand_int);
+        CASE(rocblas_initialization::trig_float);
+        CASE(rocblas_initialization::hpl);
+        CASE(rocblas_initialization::special);
+    }
+    return os << "invalid";
+}
+#undef CASE
+
+inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream&                        os,
+                                            std::pair<char const*, rocblas_arithmetic_check> p)
+{
+    os << p.first << ": ";
+#define CASE(x) \
+    case x:     \
+        return os << rocblas_arithmetic_check2string(x)
+    switch(p.second)
+    {
+        CASE(rocblas_arithmetic_check::ieee16_ieee32);
+        CASE(rocblas_arithmetic_check::no_check);
+    }
+    return os << "invalid";
+}
+#undef CASE
 
 /* ============================================================================================ */
 /*  Convert lapack char constants to rocblas type. */
@@ -152,7 +246,7 @@ constexpr rocblas_operation char2rocblas_operation(char value)
     case 'c':
         return rocblas_operation_conjugate_transpose;
     default:
-        return static_cast<rocblas_operation>(-1);
+        return static_cast<rocblas_operation>(0); // zero not in enum
     }
 }
 
@@ -167,7 +261,7 @@ constexpr rocblas_fill char2rocblas_fill(char value)
     case 'l':
         return rocblas_fill_lower;
     default:
-        return static_cast<rocblas_fill>(-1);
+        return static_cast<rocblas_fill>(0); // zero not in enum
     }
 }
 
@@ -182,7 +276,7 @@ constexpr rocblas_diagonal char2rocblas_diagonal(char value)
     case 'n':
         return rocblas_diagonal_non_unit;
     default:
-        return static_cast<rocblas_diagonal>(-1);
+        return static_cast<rocblas_diagonal>(0); // zero not in enum
     }
 }
 
@@ -197,7 +291,7 @@ constexpr rocblas_side char2rocblas_side(char value)
     case 'r':
         return rocblas_side_right;
     default:
-        return static_cast<rocblas_side>(-1);
+        return static_cast<rocblas_side>(0); // zero not in enum
     }
 }
 
@@ -208,8 +302,16 @@ inline rocblas_initialization string2rocblas_initialization(const std::string& v
         value == "rand_int"   ? rocblas_initialization::rand_int   :
         value == "trig_float" ? rocblas_initialization::trig_float :
         value == "hpl"        ? rocblas_initialization::hpl        :
-        value == "special"    ? rocblas_initialization::special        :
-        static_cast<rocblas_initialization>(-1);
+        value == "special"    ? rocblas_initialization::special    :
+        static_cast<rocblas_initialization>(0); // zero not in enum
+}
+
+inline rocblas_arithmetic_check string2rocblas_arithmetic_check(const std::string& value)
+{
+    return
+        value == "ieee16_ieee32"   ? rocblas_arithmetic_check::ieee16_ieee32 :
+        value == "no_check"        ? rocblas_arithmetic_check::no_check :
+        static_cast<rocblas_arithmetic_check>(0); // zero not in enum
 }
 
 inline rocblas_datatype string2rocblas_datatype(const std::string& value)
@@ -231,6 +333,6 @@ inline rocblas_datatype string2rocblas_datatype(const std::string& value)
         value == "u32_r"                 ? rocblas_datatype_u32_r  :
         value == "u8_c"                  ? rocblas_datatype_u8_c   :
         value == "u32_c"                 ? rocblas_datatype_u32_c  :
-        static_cast<rocblas_datatype>(-1);
+        rocblas_datatype_invalid;
 }
 // clang-format on

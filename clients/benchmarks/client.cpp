@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "program_options.hpp"
@@ -9,6 +27,7 @@
 #include "rocblas_data.hpp"
 #include "rocblas_datatype2string.hpp"
 #include "rocblas_parse_data.hpp"
+#include "tensile_host.hpp"
 #include "type_dispatch.hpp"
 #include "utility.hpp"
 #include <algorithm>
@@ -895,9 +914,13 @@ struct perf_blas_rotg<
     }
 };
 
-int run_bench_test(Arguments& arg, const std::string& filter, bool any_stride, bool yaml = false)
+int run_bench_test(
+    bool init, Arguments& arg, const std::string& filter, bool any_stride, bool yaml = false)
 {
-    static int runOnce = (rocblas_initialize(), 0); // Initialize rocBLAS
+    if(init)
+    {
+        static int runOnce = (rocblas_client_initialize(), 0); // Initialize rocBLAS
+    }
 
     rocblas_cout << std::setiosflags(std::ios::fixed)
                  << std::setprecision(7); // Set precision to 7 digits
@@ -1112,9 +1135,64 @@ int rocblas_bench_datafile(const std::string& filter, bool any_stride)
 {
     int ret = 0;
     for(Arguments arg : RocBLAS_TestData())
-        ret |= run_bench_test(arg, filter, any_stride, true);
+        ret |= run_bench_test(true, arg, filter, any_stride, true);
     test_cleanup::cleanup();
     return ret;
+}
+
+void gpu_thread_init_device(int                id,
+                            const Arguments&   arg,
+                            const std::string& filter,
+                            bool               any_stride)
+{
+    CHECK_HIP_ERROR(hipSetDevice(id));
+
+    rocblas_client_initialize();
+
+    Arguments a(arg);
+    a.cold_iters = 1;
+    a.iters      = 0;
+    run_bench_test(false, a, filter, any_stride, false);
+}
+
+void gpu_thread_run_bench(int id, const Arguments& arg, const std::string& filter, bool any_stride)
+{
+    CHECK_HIP_ERROR(hipSetDevice(id));
+
+    Arguments a(arg);
+    run_bench_test(false, a, filter, any_stride, false);
+}
+
+int run_bench_gpu_test(int                parallel_devices,
+                       Arguments&         arg,
+                       const std::string& filter,
+                       bool               any_stride)
+{
+    int count;
+    CHECK_HIP_ERROR(hipGetDeviceCount(&count));
+
+    if(parallel_devices > count || parallel_devices < 1)
+        return 1;
+
+    // initialization
+    auto thread_init = std::make_unique<std::thread[]>(parallel_devices);
+
+    for(int id = 0; id < parallel_devices; ++id)
+        thread_init[id] = std::thread(::gpu_thread_init_device, id, arg, filter, any_stride);
+
+    for(int id = 0; id < parallel_devices; ++id)
+        thread_init[id].join();
+
+    // synchronzied launch of cold & hot calls
+    auto thread = std::make_unique<std::thread[]>(parallel_devices);
+
+    for(int id = 0; id < parallel_devices; ++id)
+        thread[id] = std::thread(::gpu_thread_run_bench, id, arg, filter, any_stride);
+
+    for(int id = 0; id < parallel_devices; ++id)
+        thread[id].join();
+
+    return 0;
 }
 
 // Replace --batch with --batch_count for backward compatibility
@@ -1146,12 +1224,15 @@ try
     std::string d_type;
     std::string compute_type;
     std::string initialization;
+    std::string arithmetic_check;
     std::string filter;
     rocblas_int device_id;
+    rocblas_int parallel_devices;
     int         flags               = 0;
     bool        datafile            = rocblas_parse_data(argc, argv);
     bool        atomics_not_allowed = false;
     bool        log_function_name   = false;
+    bool        log_datatype        = false;
     bool        any_stride          = false;
 
     arg.init(); // set all defaults
@@ -1175,12 +1256,12 @@ try
          "the number of columns in A and rows in B.")
 
         ("kl",
-         value<rocblas_int>(&arg.KL)->default_value(128),
+         value<rocblas_int>(&arg.KL)->default_value(32),
          "Specific matrix size: kl is only applicable to BLAS-2: The number of sub-diagonals "
          "of the banded matrix A.")
 
         ("ku",
-         value<rocblas_int>(&arg.KU)->default_value(128),
+         value<rocblas_int>(&arg.KU)->default_value(32),
          "Specific matrix size: ku is only applicable to BLAS-2: The number of super-diagonals "
          "of the banded matrix A.")
 
@@ -1291,6 +1372,11 @@ try
          "Intialize with random integers, trig functions sin and cos, or hpl-like input. "
          "Options: rand_int, trig_float, hpl")
 
+        ("arithmetic_check",
+         value<std::string>(&arithmetic_check)->default_value("no_check"),
+         "Check arithmetic for mixed precision gemm_ex. "
+         "Options: ieee16_ieee32, no_check")
+
         ("transposeA",
          value<char>(&arg.transA)->default_value('N'),
          "N = no transpose, T = transpose, C = conjugate transpose")
@@ -1351,6 +1437,10 @@ try
          value<rocblas_int>(&device_id)->default_value(0),
          "Set default device to be used for subsequent program runs")
 
+        ("parallel_devices",
+         value<rocblas_int>(&parallel_devices)->default_value(0),
+         "Set number of devices used for parallel runs (device 0 to parallel_devices-1)")
+
         ("c_noalias_d",
          bool_switch(&arg.c_noalias_d)->default_value(false),
          "C and D are stored in separate memory")
@@ -1365,7 +1455,11 @@ try
 
         ("log_function_name",
          bool_switch(&log_function_name)->default_value(false),
-         "Function name precedes other itmes.")
+         "Function name precedes other items.")
+
+         ("log_datatype",
+         bool_switch(&log_datatype)->default_value(false),
+         "Include datatypes used in output.")
 
         ("function_filter",
          value<std::string>(&filter),
@@ -1420,13 +1514,16 @@ try
 
     ArgumentModel_set_log_function_name(log_function_name);
 
+    ArgumentModel_set_log_datatype(log_datatype);
+
     // Device Query
     rocblas_int device_count = query_device_property();
 
     rocblas_cout << std::endl;
     if(device_count <= device_id)
         throw std::invalid_argument("Invalid Device ID");
-    set_device(device_id);
+    if(device_id >= 0)
+        set_device(device_id);
 
     if(datafile)
         return rocblas_bench_datafile(filter, any_stride);
@@ -1437,32 +1534,36 @@ try
 
     std::transform(precision.begin(), precision.end(), precision.begin(), ::tolower);
     auto prec = string2rocblas_datatype(precision);
-    if(prec == static_cast<rocblas_datatype>(-1))
+    if(prec == rocblas_datatype_invalid)
         throw std::invalid_argument("Invalid value for --precision " + precision);
 
     arg.a_type = a_type == "" ? prec : string2rocblas_datatype(a_type);
-    if(arg.a_type == static_cast<rocblas_datatype>(-1))
+    if(arg.a_type == rocblas_datatype_invalid)
         throw std::invalid_argument("Invalid value for --a_type " + a_type);
 
     arg.b_type = b_type == "" ? prec : string2rocblas_datatype(b_type);
-    if(arg.b_type == static_cast<rocblas_datatype>(-1))
+    if(arg.b_type == rocblas_datatype_invalid)
         throw std::invalid_argument("Invalid value for --b_type " + b_type);
 
     arg.c_type = c_type == "" ? prec : string2rocblas_datatype(c_type);
-    if(arg.c_type == static_cast<rocblas_datatype>(-1))
+    if(arg.c_type == rocblas_datatype_invalid)
         throw std::invalid_argument("Invalid value for --c_type " + c_type);
 
     arg.d_type = d_type == "" ? prec : string2rocblas_datatype(d_type);
-    if(arg.d_type == static_cast<rocblas_datatype>(-1))
+    if(arg.d_type == rocblas_datatype_invalid)
         throw std::invalid_argument("Invalid value for --d_type " + d_type);
 
     arg.compute_type = compute_type == "" ? prec : string2rocblas_datatype(compute_type);
-    if(arg.compute_type == static_cast<rocblas_datatype>(-1))
+    if(arg.compute_type == rocblas_datatype_invalid)
         throw std::invalid_argument("Invalid value for --compute_type " + compute_type);
 
     arg.initialization = string2rocblas_initialization(initialization);
-    if(arg.initialization == static_cast<rocblas_initialization>(-1))
+    if(arg.initialization == static_cast<rocblas_initialization>(0)) // zero not in enum
         throw std::invalid_argument("Invalid value for --initialization " + initialization);
+
+    arg.arithmetic_check = string2rocblas_arithmetic_check(arithmetic_check);
+    if(arg.arithmetic_check == static_cast<rocblas_arithmetic_check>(0)) // zero not in enum
+        throw std::invalid_argument("Invalid value for --arithmetic_check " + arithmetic_check);
 
     if(arg.M < 0)
         throw std::invalid_argument("Invalid value for -m " + std::to_string(arg.M));
@@ -1475,7 +1576,10 @@ try
     if(copied <= 0 || copied >= sizeof(arg.function))
         throw std::invalid_argument("Invalid value for --function");
 
-    return run_bench_test(arg, filter, any_stride);
+    if(!parallel_devices)
+        return run_bench_test(true, arg, filter, any_stride);
+    else
+        return run_bench_gpu_test(parallel_devices, arg, filter, any_stride);
 }
 catch(const std::invalid_argument& exp)
 {

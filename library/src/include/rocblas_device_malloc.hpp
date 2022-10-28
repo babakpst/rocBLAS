@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2020-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -19,7 +37,7 @@
 // This header should be included in other projects to use the rocblas_handle
 // C++ device memory allocation API. It is unlikely to change very often.
 
-#include "rocblas.h"
+#include "rocblas/rocblas.h"
 #include <new>
 #include <type_traits>
 
@@ -44,15 +62,18 @@ public:
     // Allocate memory in a RAII class
     template <
         typename... Ss,
-        std::enable_if_t<sizeof...(Ss) && rocblas_conjunction<std::is_convertible<Ss, size_t>...>{},
+        std::enable_if_t<rocblas_conjunction<std::is_convertible<Ss, size_t>...>{},
                          int> = 0>
     explicit rocblas_device_malloc(rocblas_handle handle, Ss... sizes)
         : handle(handle)
         , dm_ptr(nullptr)
     {
-        rocblas_status status = rocblas_device_malloc_alloc(handle, &dm_ptr, sizeof...(sizes), size_t(sizes)...);
-        if (status != rocblas_status_success && status != rocblas_status_memory_error)
-            throw std::bad_alloc();
+        if(sizeof...(sizes) > 0)
+        {
+            rocblas_status status = rocblas_device_malloc_alloc(handle, &dm_ptr, sizeof...(sizes), size_t(sizes)...);
+            if (status != rocblas_status_success && status != rocblas_status_memory_error)
+                throw std::bad_alloc();
+        }
     }
 
     // Move constructor
@@ -61,6 +82,17 @@ public:
         , dm_ptr(other.dm_ptr)
     {
         other.dm_ptr = nullptr;
+    }
+
+    // Move assignment
+    rocblas_device_malloc& operator=(rocblas_device_malloc&& other)
+    {
+        if(dm_ptr && dm_ptr != other.dm_ptr)
+            rocblas_device_malloc_free(dm_ptr);
+        handle = other.handle;
+        dm_ptr = other.dm_ptr;
+        other.dm_ptr = nullptr;
+        return *this;
     }
 
     // Conversion to a pointer type, to get the address of the device memory
@@ -111,7 +143,6 @@ public:
     // Copying and assigning to rocblas_device_malloc are deleted
     rocblas_device_malloc(const rocblas_device_malloc&) = delete;
     rocblas_device_malloc& operator=(const rocblas_device_malloc&) = delete;
-    rocblas_device_malloc& operator=(rocblas_device_malloc&&) = delete;
 };
 // clang-format on
 

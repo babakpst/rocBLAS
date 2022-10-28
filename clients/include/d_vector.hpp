@@ -1,16 +1,39 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
 
 #include "rocblas.h"
-#include "rocblas_init.hpp"
 #include "rocblas_test.hpp"
 #include "singletons.hpp"
 #include <cinttypes>
 
 #define MEM_MAX_GUARD_PAD 8192
+
+//
+// Forward declaration of rocblas_init_nan
+//
+template <typename T>
+void rocblas_init_nan(T* A, size_t N);
 
 /* ============================================================================================ */
 /*! \brief  base-class to allocate/deallocate device memory */
@@ -24,7 +47,7 @@ private:
 
     static bool m_init_guard;
 
-protected:
+public:
     inline size_t nmemb() const noexcept
     {
         return m_size;
@@ -67,8 +90,8 @@ public:
         T* d = nullptr;
         if(use_HMM ? hipMallocManaged(&d, m_bytes) : (hipMalloc)(&d, m_bytes) != hipSuccess)
         {
-            rocblas_cerr << "Error allocating " << m_bytes << " m_bytes (" << (m_bytes >> 30)
-                         << " GB)" << std::endl;
+            rocblas_cerr << "Warning: hip can't allocate " << m_bytes << " bytes ("
+                         << (m_bytes >> 30) << " GB)" << std::endl;
 
             d = nullptr;
         }
@@ -94,7 +117,7 @@ public:
     void device_vector_check(T* d)
     {
 #ifdef GOOGLE_TEST
-        if(m_guard_len > 0)
+        if(m_pad > 0)
         {
             T host[m_pad];
 
@@ -120,27 +143,11 @@ public:
     {
         if(d != nullptr)
         {
-#ifdef GOOGLE_TEST
+            device_vector_check(d);
+
             if(m_pad > 0)
-            {
-                T host[m_pad];
+                d -= m_pad; // restore to start of alloc
 
-                // Copy device memory after allocated memory to host
-                hipMemcpy(host, d + this->m_size, m_guard_len, hipMemcpyDeviceToHost);
-
-                // Make sure no corruption has occurred
-                EXPECT_EQ(memcmp(host, m_guard, m_guard_len), 0);
-
-                // Point to m_guard before allocated memory
-                d -= m_pad;
-
-                // Copy device memory after allocated memory to host
-                hipMemcpy(host, d, m_guard_len, hipMemcpyDeviceToHost);
-
-                // Make sure no corruption has occurred
-                EXPECT_EQ(memcmp(host, m_guard, m_guard_len), 0);
-            }
-#endif
             // Free device memory
             CHECK_HIP_ERROR((hipFree)(d));
         }

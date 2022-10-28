@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "rocblas_arguments.hpp"
@@ -73,6 +91,8 @@ void Arguments::init()
 
     initialization = rocblas_initialization::hpl;
 
+    arithmetic_check = rocblas_arithmetic_check::no_check;
+
     atomics_mode = rocblas_atomics_allowed;
 
     // memory padding for testing write out of bounds
@@ -98,52 +118,16 @@ void Arguments::init()
     c_noalias_d = false;
     HMM         = false;
     fortran     = false;
+    graph_test  = false;
 }
 
-#ifdef WIN32
-// Clang specific code
-template <typename T>
-rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, std::pair<char const*, T> p)
+static Arguments& getDefaultArgs()
 {
-    os << p.first << ":";
-    os << p.second;
-    return os;
+    static Arguments defaultArguments;
+    static int       once = (defaultArguments.init(), 1);
+    return defaultArguments;
 }
-
-rocblas_internal_ostream& operator<<(rocblas_internal_ostream&                os,
-                                     std::pair<char const*, rocblas_datatype> p)
-{
-    os << p.first << ":";
-    os << rocblas_datatype_string(p.second);
-    return os;
-}
-
-rocblas_internal_ostream& operator<<(rocblas_internal_ostream&                      os,
-                                     std::pair<char const*, rocblas_initialization> p)
-{
-    os << p.first << ":";
-#define CASE(x) \
-    case x:     \
-        return os << #x
-    switch(p.second)
-    {
-        CASE(rocblas_initialization::rand_int);
-        CASE(rocblas_initialization::trig_float);
-        CASE(rocblas_initialization::hpl);
-        CASE(rocblas_initialization::special);
-    }
-    return os << "unknown";
-}
-#undef CASE
-
-rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, std::pair<char const*, bool> p)
-{
-    os << p.first << ":";
-    os << (p.second ? "true" : "false");
-    return os;
-}
-// End of Clang specific code
-#endif
+static Arguments& gDefArgs = getDefaultArgs();
 
 // Function to print Arguments out to stream in YAML format
 rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, const Arguments& arg)
@@ -154,8 +138,11 @@ rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, const Argumen
         delim = ", ";
     };
 
-    // Print each (name, value) tuple pair
-#define NAME_VALUE_PAIR(NAME) print_pair(#NAME, arg.NAME)
+    // Print each (name, value) tuple pair if not default value
+#define NAME_VALUE_PAIR(NAME)     \
+    if(arg.NAME != gDefArgs.NAME) \
+    print_pair(#NAME, arg.NAME)
+
     // cppcheck-suppress unknownMacro
     FOR_EACH_ARGUMENT(NAME_VALUE_PAIR, ;);
 

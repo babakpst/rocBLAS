@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "check_numerics_vector.hpp"
@@ -7,19 +25,19 @@
 #include "rocblas_copy.hpp"
 
 template <bool CONJ, typename T, typename U>
-ROCBLAS_KERNEL void copy_kernel(rocblas_int    n,
-                                const T        xa,
-                                ptrdiff_t      shiftx,
-                                rocblas_int    incx,
-                                rocblas_stride stridex,
-                                U              ya,
-                                ptrdiff_t      shifty,
-                                rocblas_int    incy,
-                                rocblas_stride stridey)
+ROCBLAS_KERNEL_NO_BOUNDS copy_kernel(rocblas_int    n,
+                                     const T        xa,
+                                     rocblas_stride shiftx,
+                                     rocblas_int    incx,
+                                     rocblas_stride stridex,
+                                     U              ya,
+                                     rocblas_stride shifty,
+                                     rocblas_int    incy,
+                                     rocblas_stride stridey)
 {
-    ptrdiff_t   tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    const auto* x   = load_ptr_batch(xa, hipBlockIdx_y, shiftx, stridex);
-    auto*       y   = load_ptr_batch(ya, hipBlockIdx_y, shifty, stridey);
+    ptrdiff_t   tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const auto* x   = load_ptr_batch(xa, blockIdx.y, shiftx, stridex);
+    auto*       y   = load_ptr_batch(ya, blockIdx.y, shifty, stridey);
     if(tid < n)
     {
 
@@ -30,17 +48,18 @@ ROCBLAS_KERNEL void copy_kernel(rocblas_int    n,
 //! @brief Optimized kernel for the floating points.
 //!
 template <rocblas_int NB, typename T, typename U>
-ROCBLAS_KERNEL __launch_bounds__(NB) void scopy_2_kernel(rocblas_int n,
-                                                         const T __restrict xa,
-                                                         ptrdiff_t      shiftx,
-                                                         rocblas_stride stridex,
-                                                         U __restrict ya,
-                                                         ptrdiff_t      shifty,
-                                                         rocblas_stride stridey)
+ROCBLAS_KERNEL(NB)
+scopy_2_kernel(rocblas_int n,
+               const T __restrict xa,
+               rocblas_stride shiftx,
+               rocblas_stride stridex,
+               U __restrict ya,
+               rocblas_stride shifty,
+               rocblas_stride stridey)
 {
-    ptrdiff_t   tid = (hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x) * 2;
-    const auto* x   = load_ptr_batch(xa, hipBlockIdx_y, shiftx, stridex);
-    auto*       y   = load_ptr_batch(ya, hipBlockIdx_y, shifty, stridey);
+    ptrdiff_t   tid = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
+    const auto* x   = load_ptr_batch(xa, blockIdx.y, shiftx, stridex);
+    auto*       y   = load_ptr_batch(ya, blockIdx.y, shifty, stridey);
     if(tid < n - 1)
     {
         for(rocblas_int j = 0; j < 2; ++j)
@@ -56,11 +75,11 @@ template <bool CONJ, rocblas_int NB, typename T, typename U>
 rocblas_status rocblas_copy_template(rocblas_handle handle,
                                      rocblas_int    n,
                                      T              x,
-                                     rocblas_int    offsetx,
+                                     rocblas_stride offsetx,
                                      rocblas_int    incx,
                                      rocblas_stride stridex,
                                      U              y,
-                                     rocblas_int    offsety,
+                                     rocblas_stride offsety,
                                      rocblas_int    incy,
                                      rocblas_stride stridey,
                                      rocblas_int    batch_count)
@@ -134,11 +153,11 @@ rocblas_status rocblas_copy_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
                                            rocblas_int    n,
                                            T              x,
-                                           rocblas_int    offset_x,
+                                           rocblas_stride offset_x,
                                            rocblas_int    inc_x,
                                            rocblas_stride stride_x,
                                            U              y,
-                                           rocblas_int    offset_y,
+                                           rocblas_stride offset_y,
                                            rocblas_int    inc_y,
                                            rocblas_stride stride_y,
                                            rocblas_int    batch_count,
@@ -184,11 +203,11 @@ rocblas_status rocblas_copy_check_numerics(const char*    function_name,
     template rocblas_status rocblas_copy_template<CONJ_, NB_, T_, U_>(rocblas_handle handle,  \
                                                                       rocblas_int    n,       \
                                                                       T_             x,       \
-                                                                      rocblas_int    offsetx, \
+                                                                      rocblas_stride offsetx, \
                                                                       rocblas_int    incx,    \
                                                                       rocblas_stride stridex, \
                                                                       U_             y,       \
-                                                                      rocblas_int    offsety, \
+                                                                      rocblas_stride offsety, \
                                                                       rocblas_int    incy,    \
                                                                       rocblas_stride stridey, \
                                                                       rocblas_int    batch_count);
@@ -255,11 +274,11 @@ INSTANTIATE_COPY_TEMPLATE(false,
                                                                 rocblas_handle handle,         \
                                                                 rocblas_int    n,              \
                                                                 T_             x,              \
-                                                                rocblas_int    offset_x,       \
+                                                                rocblas_stride offset_x,       \
                                                                 rocblas_int    inc_x,          \
                                                                 rocblas_stride stride_x,       \
                                                                 U_             y,              \
-                                                                rocblas_int    offset_y,       \
+                                                                rocblas_stride offset_y,       \
                                                                 rocblas_int    inc_y,          \
                                                                 rocblas_stride stride_y,       \
                                                                 rocblas_int    batch_count,    \

@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -10,24 +28,42 @@
 template <typename T>
 constexpr auto rocblas_type2datatype()
 {
+    // rocblas_datatype_f16_r  = 150
     if(std::is_same<T, rocblas_half>{})
         return rocblas_datatype_f16_r;
-    if(std::is_same<T, rocblas_bfloat16>{})
-        return rocblas_datatype_bf16_r;
+    // rocblas_datatype_f32_r  = 151
     if(std::is_same<T, rocblas_float>{})
         return rocblas_datatype_f32_r;
+    // rocblas_datatype_f64_r  = 152
     if(std::is_same<T, rocblas_double>{})
         return rocblas_datatype_f64_r;
-    // if(std::is_same<T, rocblas_half_complex>{})
-    //     return rocblas_datatype_f16_c;
+    // rocblas_datatype_f16_c  = 153
+    // rocblas_datatype_f32_c  = 154
     if(std::is_same<T, rocblas_float_complex>{})
         return rocblas_datatype_f32_c;
+    // rocblas_datatype_f64_c  = 155
     if(std::is_same<T, rocblas_double_complex>{})
         return rocblas_datatype_f64_c;
-    if(std::is_same<T, char>{})
+    // rocblas_datatype_i8_r   = 160
+    if(std::is_same<T, int8_t>{})
         return rocblas_datatype_i8_r;
-    if(std::is_same<T, unsigned char>{})
+    // rocblas_datatype_u8_r   = 161
+    if(std::is_same<T, uint8_t>{})
         return rocblas_datatype_u8_r;
+    // rocblas_datatype_i32_r  = 162
+    if(std::is_same<T, int32_t>{})
+        return rocblas_datatype_i32_r;
+    // rocblas_datatype_u32_r  = 163
+    if(std::is_same<T, uint32_t>{})
+        return rocblas_datatype_u32_r;
+    // rocblas_datatype_i8_c   = 164
+    // rocblas_datatype_u8_c   = 165
+    // rocblas_datatype_i32_c  = 166
+    // rocblas_datatype_u32_c  = 167
+    // rocblas_datatype_bf16_r = 168
+    if(std::is_same<T, rocblas_bfloat16>{})
+        return rocblas_datatype_bf16_r;
+    // rocblas_datatype_bf16_c = 169
 
     return rocblas_datatype_f32_r; // testing purposes we default to f32 ex
 }
@@ -74,48 +110,126 @@ auto rocblas_blas1_dispatch(const Arguments& arg)
 {
     const auto Ti = arg.a_type, Tb = arg.b_type, To = arg.d_type;
     const auto Tc = arg.c_type;
-    if(Ti == To)
+
+    if(strstr(arg.function, "iamax") || strstr(arg.function, "iamin")
+       || strstr(arg.function, "asum") || strstr(arg.function, "nrm2")
+       || strstr(arg.function, "swap"))
     {
-        if(Tb == Ti)
-            return rocblas_simple_dispatch<TEST>(arg);
-        else
-        { // for csscal and zdscal and complex rot/rotg only
-            if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r
-               && Tc == rocblas_datatype_f32_r)
-                return TEST<rocblas_float_complex, float>{}(arg);
-            else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r
-                    && Tc == rocblas_datatype_f64_r)
-                return TEST<rocblas_double_complex, double>{}(arg);
-            else if(strstr(arg.function, "scal"))
-            {
-                // for csscal and zdscal
-                if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r
-                   && Tc == rocblas_datatype_f32_c)
-                    return TEST<rocblas_float_complex, float>{}(arg);
-                else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r
-                        && Tc == rocblas_datatype_f64_c)
-                    return TEST<rocblas_double_complex, double>{}(arg);
-            }
-            else if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r
-                    && Tc == rocblas_datatype_f32_c)
-                return TEST<rocblas_float_complex, float, rocblas_float_complex>{}(arg);
-            else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r
-                    && Tc == rocblas_datatype_f64_c)
-                return TEST<rocblas_double_complex, double, rocblas_double_complex>{}(arg);
+        // s, d, c, z precisions
+        if(Ti == To && Ti == Tb && Ti == Tc)
+            if(Ti == rocblas_datatype_f32_r || Ti == rocblas_datatype_f64_r
+               || Ti == rocblas_datatype_f32_c || Ti == rocblas_datatype_f64_c)
+                return rocblas_simple_dispatch<TEST>(arg);
+    }
+    else if(strstr(arg.function, "rotm") || strstr(arg.function, "rotmg"))
+    {
+        // s, d precisions
+        if(Ti == To && Ti == Tb && Ti == Tc)
+            if(Ti == rocblas_datatype_f32_r || Ti == rocblas_datatype_f64_r)
+                return rocblas_simple_dispatch<TEST>(arg);
+    }
+    else if(strstr(arg.function, "axpy") || strstr(arg.function, "copy"))
+    {
+        // h, s, d, c, z precisions
+        if(Ti == To && Ti == Tb && Ti == Tc)
+            if(Ti == rocblas_datatype_f32_r || Ti == rocblas_datatype_f64_r
+               || Ti == rocblas_datatype_f32_c || Ti == rocblas_datatype_f64_c
+               || Ti == rocblas_datatype_f16_r)
+                return rocblas_simple_dispatch<TEST>(arg);
+    }
+    else if(strstr(arg.function, "dot"))
+    {
+        // h, bf, s, d, c, z precisions
+        if(Ti == To && Ti == Tb && Ti == Tc)
+        {
+            // h, s, d, c, z
+            if(Ti == rocblas_datatype_f32_r || Ti == rocblas_datatype_f64_r
+               || Ti == rocblas_datatype_f32_c || Ti == rocblas_datatype_f64_c
+               || Ti == rocblas_datatype_f16_r || Ti == rocblas_datatype_bf16_r)
+                return rocblas_simple_dispatch<TEST>(arg);
+        }
+        else if(Ti == To && Ti == Tb)
+        {
+            // bf
+            if(Ti == rocblas_datatype_bf16_r && Tc == rocblas_datatype_f32_r)
+                return rocblas_simple_dispatch<TEST>(arg);
         }
     }
-    //
-    else if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r)
-        return TEST<rocblas_float_complex, float>{}(arg);
-    else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r)
-        return TEST<rocblas_double_complex, double>{}(arg);
-    else if(Ti == rocblas_datatype_f32_r && Tb == rocblas_datatype_f32_r)
-        return TEST<float, float>{}(arg);
-    else if(Ti == rocblas_datatype_f64_r && Tb == rocblas_datatype_f64_r)
-        return TEST<double, double>{}(arg);
-
-    //  else if(Ti == rocblas_datatype_f16_c && To == rocblas_datatype_f16_r)
-    //      return TEST<rocblas_half_complex, rocblas_half>{}(arg);
+    else if(strstr(arg.function, "rotg"))
+    {
+        // s, d, c, z precisions
+        if(Ti == To && Ti == Tb && Ti == Tc)
+        {
+            // s, d
+            if(Ti == rocblas_datatype_f32_r || Ti == rocblas_datatype_f64_r)
+                return rocblas_simple_dispatch<TEST>(arg);
+        }
+        else if(Ti == To && Tb == Tc)
+        {
+            // c, z
+            if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r)
+                return TEST<rocblas_float_complex, float>{}(arg);
+            else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r)
+                return TEST<rocblas_double_complex, double>{}(arg);
+        }
+    }
+    else if(strstr(arg.function, "rot"))
+    {
+        // s, d, c, z, cs, zd precisions
+        if(Ti == To && Ti == Tb && Ti == Tc)
+        {
+            // s, d
+            if(Ti == rocblas_datatype_f32_r || Ti == rocblas_datatype_f64_r)
+                return rocblas_simple_dispatch<TEST>(arg);
+        }
+        else if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r
+                && Tc == rocblas_datatype_f32_c)
+        {
+            // c
+            return TEST<rocblas_float_complex, float, rocblas_float_complex>{}(arg);
+        }
+        else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r
+                && Tc == rocblas_datatype_f64_c)
+        {
+            // z
+            return TEST<rocblas_double_complex, double, rocblas_double_complex>{}(arg);
+        }
+        else if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r
+                && Tc == rocblas_datatype_f32_r)
+        {
+            // cs
+            return TEST<rocblas_float_complex, float>{}(arg);
+        }
+        else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r
+                && Tc == rocblas_datatype_f64_r)
+        {
+            // zd
+            return TEST<rocblas_double_complex, double>{}(arg);
+        }
+    }
+    else if(strstr(arg.function, "scal"))
+    {
+        // s, d, c, cs, z, zd
+        if(Ti == To && Ti == Tb && Ti == Tc)
+        {
+            // z, d, c, z
+            if(Ti == rocblas_datatype_f32_r || Ti == rocblas_datatype_f64_r
+               || Ti == rocblas_datatype_f32_c || Ti == rocblas_datatype_f64_c)
+                return rocblas_simple_dispatch<TEST>(arg);
+        }
+        else if(Ti == rocblas_datatype_f32_c && Tb == rocblas_datatype_f32_r
+                && Tc == rocblas_datatype_f32_r)
+        {
+            // cs
+            return TEST<rocblas_float_complex, float>{}(arg);
+        }
+        else if(Ti == rocblas_datatype_f64_c && Tb == rocblas_datatype_f64_r
+                && Tc == rocblas_datatype_f64_r)
+        {
+            // zd
+            return TEST<rocblas_double_complex, double>{}(arg);
+        }
+    }
 
     return TEST<void>{}(arg);
 }
@@ -244,9 +358,9 @@ auto rocblas_gemm_dispatch(const Arguments& arg)
 
     if(arg.b_type == Ti && arg.d_type == To)
     {
-        if(Ti != To)
+        if(Ti != To) // covers HPA: HSS, BSS, I8II, 4xi8II
         {
-            // TODO- Maybe we chould add a new datatype_enum such as rocblas_datatype_i8x4_r
+            // TODO- Maybe we could add a new datatype_enum such as rocblas_datatype_i8x4_r
             // So that we could go to the correct branch here.
             // So far, using whether int8_t or int8x4 is determined in TEST function (gemm_ex)
             if(Ti == rocblas_datatype_i8_r && To == rocblas_datatype_i32_r && Tc == To)
@@ -265,18 +379,18 @@ auto rocblas_gemm_dispatch(const Arguments& arg)
                 }
             }
         }
-        else if(Tc != To)
+        else if(Tc != To) // covers HPA: HHS, BBS
         {
-            if(To == rocblas_datatype_f16_r && Tc == rocblas_datatype_f32_r)
+            if(To == rocblas_datatype_f16_r && Tc == rocblas_datatype_f32_r) // HHS
             {
                 return TEST<rocblas_half, rocblas_half, float>{}(arg);
             }
-            else if(To == rocblas_datatype_bf16_r && Tc == rocblas_datatype_f32_r)
+            else if(To == rocblas_datatype_bf16_r && Tc == rocblas_datatype_f32_r) // BBS
             {
                 return TEST<rocblas_bfloat16, rocblas_bfloat16, float>{}(arg);
             }
         }
-        else
+        else // covers non-HPA: dgemm, sgemm, zgemm, cgemm, hgemm
         {
             return rocblas_simple_dispatch<TEST>(arg); // Ti = To = Tc
         }

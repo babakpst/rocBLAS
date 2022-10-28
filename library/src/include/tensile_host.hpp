@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2019-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************/
 
 /*********************************************************
@@ -154,23 +172,23 @@ struct RocblasContractionProblem
                               const Ti* const*   batch_A,
                               rocblas_int        ld_a,
                               rocblas_stride     batch_stride_a,
-                              rocblas_int        offset_a,
+                              rocblas_stride     offset_a,
                               const Ti*          B,
                               const Ti* const*   batch_B,
                               rocblas_int        ld_b,
                               rocblas_stride     batch_stride_b,
-                              rocblas_int        offset_b,
+                              rocblas_stride     offset_b,
                               const Tc*          beta,
                               const To*          C,
                               const To* const*   batch_C,
                               rocblas_int        ld_c,
                               rocblas_stride     batch_stride_c,
-                              rocblas_int        offset_c,
+                              rocblas_stride     offset_c,
                               To*                D,
                               To* const*         batch_D,
                               rocblas_int        ld_d,
                               rocblas_stride     batch_stride_d,
-                              rocblas_int        offset_d,
+                              rocblas_stride     offset_d,
                               rocblas_int        batch_count,
                               bool               strided_batch,
                               rocblas_gemm_flags flags)
@@ -224,26 +242,26 @@ struct RocblasContractionProblem
                               rocblas_stride   row_stride_a,
                               rocblas_stride   col_stride_a,
                               rocblas_stride   batch_stride_a,
-                              rocblas_int      offset_a,
+                              rocblas_stride   offset_a,
                               const Ti*        B,
                               const Ti* const* batch_B,
                               rocblas_stride   row_stride_b,
                               rocblas_stride   col_stride_b,
                               rocblas_stride   batch_stride_b,
-                              rocblas_int      offset_b,
+                              rocblas_stride   offset_b,
                               const Tc*        beta,
                               const To*        C,
                               const To* const* batch_C,
                               rocblas_stride   row_stride_c,
                               rocblas_stride   col_stride_c,
                               rocblas_stride   batch_stride_c,
-                              rocblas_int      offset_c,
+                              rocblas_stride   offset_c,
                               To*              D,
                               To* const*       batch_D,
                               rocblas_stride   row_stride_d,
                               rocblas_stride   col_stride_d,
                               rocblas_stride   batch_stride_d,
-                              rocblas_int      offset_d,
+                              rocblas_stride   offset_d,
                               rocblas_int      batch_count,
                               bool             strided_batch)
         : handle(handle)
@@ -359,6 +377,11 @@ rocblas_status runContractionProblem(RocblasContractionProblem<Ti, To, Tc> const
  * Whether Tensile has been initialized for at least one device (used for testing) *
  ***********************************************************************************/
 ROCBLAS_INTERNAL_EXPORT std::atomic_bool& rocblas_internal_tensile_is_initialized();
+
+/***********************************************************************************
+ * Whether rocblas_initialize() is invoked to load all tensile kernels at startup  *
+ ***********************************************************************************/
+std::atomic_bool& rocblas_initialize_called();
 
 /**********************************************
  * Whether to suppress Tensile error messages *

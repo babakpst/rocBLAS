@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -34,17 +52,35 @@ void testing_dot_batched_ex_bad_arg(const Arguments& arg)
     rocblas_int incx        = 1;
     rocblas_int incy        = 1;
     rocblas_int stride_y    = incy * N;
-    rocblas_int batch_count = 5;
+    rocblas_int batch_count = 2;
 
-    rocblas_local_handle    handle{arg};
+    rocblas_local_handle handle{arg};
+
+    // Allocate device memory
     device_batch_vector<Tx> dx(N, incx, batch_count);
     device_batch_vector<Ty> dy(N, incy, batch_count);
     device_vector<Tr>       d_rocblas_result(batch_count);
+
+    // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dx.memcheck());
     CHECK_DEVICE_ALLOCATION(dy.memcheck());
     CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
 
     CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+
+    EXPECT_ROCBLAS_STATUS((rocblas_dot_batched_ex_fn)(nullptr,
+                                                      N,
+                                                      dx.ptr_on_device(),
+                                                      x_type,
+                                                      incx,
+                                                      dy.ptr_on_device(),
+                                                      y_type,
+                                                      incy,
+                                                      batch_count,
+                                                      d_rocblas_result,
+                                                      result_type,
+                                                      execution_type),
+                          rocblas_status_invalid_handle);
 
     EXPECT_ROCBLAS_STATUS((rocblas_dot_batched_ex_fn)(handle,
                                                       N,
@@ -85,19 +121,6 @@ void testing_dot_batched_ex_bad_arg(const Arguments& arg)
                                                       result_type,
                                                       execution_type),
                           rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_dot_batched_ex_fn)(nullptr,
-                                                      N,
-                                                      dx.ptr_on_device(),
-                                                      x_type,
-                                                      incx,
-                                                      dy.ptr_on_device(),
-                                                      y_type,
-                                                      incy,
-                                                      batch_count,
-                                                      d_rocblas_result,
-                                                      result_type,
-                                                      execution_type),
-                          rocblas_status_invalid_handle);
 }
 
 template <typename Tx, typename Ty = Tx, typename Tr = Ty, typename Tex = Tr>
@@ -133,8 +156,10 @@ void testing_dot_batched_ex(const Arguments& arg)
         device_vector<Tr> d_rocblas_result(std::max(batch_count, 1));
         CHECK_DEVICE_ALLOCATION(d_rocblas_result.memcheck());
 
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+        host_vector<Tr> h_rocblas_result(std::max(batch_count, 1));
+        CHECK_HIP_ERROR(h_rocblas_result.memcheck());
 
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
         CHECK_ROCBLAS_ERROR((rocblas_dot_batched_ex_fn)(handle,
                                                         N,
                                                         nullptr,
@@ -148,48 +173,53 @@ void testing_dot_batched_ex(const Arguments& arg)
                                                         result_type,
                                                         execution_type));
 
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        CHECK_ROCBLAS_ERROR((rocblas_dot_batched_ex_fn)(handle,
+                                                        N,
+                                                        nullptr,
+                                                        x_type,
+                                                        incx,
+                                                        nullptr,
+                                                        y_type,
+                                                        incy,
+                                                        batch_count,
+                                                        h_rocblas_result,
+                                                        result_type,
+                                                        execution_type));
+
         if(batch_count > 0)
         {
             host_vector<Tr> cpu_0(batch_count);
             host_vector<Tr> gpu_0(batch_count);
             CHECK_HIP_ERROR(gpu_0.transfer_from(d_rocblas_result));
             unit_check_general<Tr>(1, 1, 1, 1, cpu_0, gpu_0, batch_count);
+            unit_check_general<Tr>(1, 1, 1, 1, cpu_0, h_rocblas_result, batch_count);
         }
 
         return;
     }
 
-    host_vector<Tr> cpu_result(batch_count);
-    host_vector<Tr> rocblas_result_1(batch_count);
-    host_vector<Tr> rocblas_result_2(batch_count);
-    rocblas_int     abs_incx = incx >= 0 ? incx : -incx;
-    rocblas_int     abs_incy = incy >= 0 ? incy : -incy;
-    size_t          size_x   = N * size_t(abs_incx);
-    size_t          size_y   = N * size_t(abs_incy);
+    // Naming: `h` is in CPU (host) memory(eg hx), `d` is in GPU (device) memory (eg dx).
+    // Allocate host memory
+    host_batch_vector<Tx> hx(N, incx ? incx : 1, batch_count);
+    host_batch_vector<Ty> hy(N, incy ? incy : 1, batch_count);
+    host_vector<Tr>       cpu_result(batch_count);
+    host_vector<Tr>       rocblas_result_1(batch_count);
+    host_vector<Tr>       rocblas_result_2(batch_count);
 
-    //Device-arrays of pointers to device memory
+    // Allocate device memory
     device_batch_vector<Tx> dx(N, incx ? incx : 1, batch_count);
     device_batch_vector<Ty> dy(N, incy ? incy : 1, batch_count);
     device_vector<Tr>       d_rocblas_result_2(batch_count);
+
+    // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dx.memcheck());
     CHECK_DEVICE_ALLOCATION(dy.memcheck());
     CHECK_DEVICE_ALLOCATION(d_rocblas_result_2.memcheck());
 
-    // Naming: dK is in GPU (device) memory. hK is in CPU (host) memory, plz follow this practice
-    host_batch_vector<Tx> hx(N, incx ? incx : 1, batch_count);
-    host_batch_vector<Ty> hy(N, incy ? incy : 1, batch_count);
-
-    // Initial Data on CPU
-    if(rocblas_isnan(arg.alpha))
-    {
-        rocblas_init_nan(hx, true);
-        rocblas_init_nan(hy, false);
-    }
-    else
-    {
-        rocblas_init(hx, true);
-        rocblas_init(hy, false);
-    }
+    // Initialize data on host memory
+    rocblas_init_vector(hx, arg, rocblas_client_alpha_sets_nan, true);
+    rocblas_init_vector(hy, arg, rocblas_client_alpha_sets_nan, false);
 
     CHECK_HIP_ERROR(dx.transfer_from(hx));
     CHECK_HIP_ERROR(dy.transfer_from(hy));
@@ -265,9 +295,6 @@ void testing_dot_batched_ex(const Arguments& arg)
 
         if(arg.norm_check)
         {
-            rocblas_cout << "cpu=" << cpu_result << ", gpu_host_ptr=" << rocblas_result_1
-                         << ", gpu_device_ptr=" << rocblas_result_2 << std::endl;
-
             for(int b = 0; b < batch_count; ++b)
             {
                 rocblas_error_1

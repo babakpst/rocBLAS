@@ -1,5 +1,24 @@
 /* ************************************************************************
- * Copyright 2018-2021 Advanced Micro Devices, Inc.
+ *
+ * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -60,16 +79,29 @@
 #undef hipFree
 #endif
 
-#define LIMITED_MEMORY_STRING "Error: Attempting to allocate more memory than available."
-#define TOO_MANY_DEVICES_STRING "Error: Too many devices requested."
-#define HMM_NOT_SUPPORTED "Error: HMM not supported."
+#define LIMITED_RAM_STRING "Warning: Attempting to allocate more host memory than available."
+#define LIMITED_MEMORY_STRING "Warning: Attempting to allocate more gpu memory than available."
+#define TOO_MANY_DEVICES_STRING "Warning: Too many devices requested."
+#define HMM_NOT_SUPPORTED "Warning: HMM not supported."
 
 // TODO: This is dependent on internal gtest behaviour.
-// Compared with result.message() when a test ended. Note that "Succeeded\n" is
+// Comparing against result.message() when a test ended. With SUCCEED() that "Succeeded\n" is
 // added to the beginning of the message automatically by gtest, so this must be compared.
-#define LIMITED_MEMORY_STRING_GTEST "Succeeded\n" LIMITED_MEMORY_STRING
-#define TOO_MANY_DEVICES_STRING_GTEST "Succeeded\n" TOO_MANY_DEVICES_STRING
-#define HMM_NOT_SUPPORTED_GTEST "Succeeded\n" HMM_NOT_SUPPORTED
+// For GTEST_SKIP() "Skipped\n" is added at the beginning of the message.
+#define LIMITED_RAM_STRING_GTEST "Skipped\n" LIMITED_RAM_STRING
+#define LIMITED_MEMORY_STRING_GTEST "Skipped\n" LIMITED_MEMORY_STRING
+#define TOO_MANY_DEVICES_STRING_GTEST "Skipped\n" TOO_MANY_DEVICES_STRING
+#define HMM_NOT_SUPPORTED_GTEST "Skipped\n" HMM_NOT_SUPPORTED
+
+#define NOOP (void)0
+
+/*!
+ * Initialize rocBLAS for the current HIP device and report
+ * the time taken to complete the initialization. This is used to
+ * avoid costly startup time at the first call on that device.
+ * Internal use for benchmark & testing.
+ */
+void rocblas_client_initialize();
 
 /* ============================================================================================ */
 /*! \brief  local handle which is automatically created and destroyed  */
@@ -77,6 +109,11 @@ class rocblas_local_handle
 {
     rocblas_handle m_handle;
     void*          m_memory = nullptr;
+    hipStream_t    graph_stream;
+    hipStream_t    old_stream;
+
+    void rocblas_stream_begin_capture();
+    void rocblas_stream_end_capture();
 
 public:
     rocblas_local_handle();
@@ -98,6 +135,16 @@ public:
     operator const rocblas_handle&() const
     {
         return m_handle;
+    }
+
+    void pre_test(const Arguments& arg)
+    {
+        arg.graph_test ? rocblas_stream_begin_capture() : NOOP;
+    }
+
+    void post_test(const Arguments& arg)
+    {
+        arg.graph_test ? rocblas_stream_end_capture() : NOOP;
     }
 };
 
@@ -247,6 +294,40 @@ inline void regular_to_packed(bool upper, const T* A, T* AP, rocblas_int n)
 }
 
 /* ============================================================================================= */
+/*! \brief For testing purposes, to convert a regular matrix to a packed matrix.                  */
+template <typename U>
+inline void regular_to_packed(bool upper, U& h_A, U& h_AP, rocblas_int n)
+{
+#pragma omp parallel for
+    for(rocblas_int batch_index = 0; batch_index < h_A.batch_count(); ++batch_index)
+    {
+        auto* AP    = h_AP[batch_index];
+        auto* A     = h_A[batch_index];
+        int   index = 0;
+        if(upper)
+        {
+            for(int i = 0; i < n; i++)
+            {
+                for(int j = 0; j <= i; j++)
+                {
+                    AP[index++] = A[j + i * n];
+                }
+            }
+        }
+        else
+        {
+            for(int i = 0; i < n; i++)
+            {
+                for(int j = i; j < n; j++)
+                {
+                    AP[index++] = A[j + i * n];
+                }
+            }
+        }
+    }
+}
+
+/* ============================================================================================= */
 /*! \brief For testing purposes, makes a matrix hA into a unit_diagonal matrix and               *
  *         randomly initialize the diagonal.                                                     */
 template <typename T>
@@ -256,7 +337,7 @@ void make_unit_diagonal(rocblas_fill uplo, T* hA, rocblas_int lda, rocblas_int N
     {
         for(int i = 0; i < N; i++)
         {
-            T diag = hA[i + i * N];
+            T diag = hA[i + i * lda];
             for(int j = 0; j <= i; j++)
                 hA[i + j * lda] = hA[i + j * lda] / diag;
         }
@@ -270,11 +351,47 @@ void make_unit_diagonal(rocblas_fill uplo, T* hA, rocblas_int lda, rocblas_int N
                 hA[i + j * lda] = hA[i + j * lda] / diag;
         }
     }
-
     // randomly initalize diagonal to ensure we aren't using it's values for tests.
     for(int i = 0; i < N; i++)
     {
         rocblas_init<T>(hA + i * lda + i, 1, 1, 1);
+    }
+}
+
+/* ============================================================================================= */
+/*! \brief For testing purposes, copy hAAT into hA, make hA strictly diagonal dominant,          */
+template <typename T>
+void copy_hAAT_to_hA(T* AAT, T* A, rocblas_int M, size_t lda)
+{
+    for(int i = 0; i < M; i++)
+    {
+        T t = 0.0;
+        for(int j = 0; j < M; j++)
+        {
+            A[i + j * lda] = AAT[i + j * lda];
+            t += rocblas_abs(AAT[i + j * lda]);
+        }
+        A[i + i * lda] = t;
+    }
+}
+
+/* ============================================================================================= */
+/*! \brief For testing purposes, copy one matrix into another with different leading dimensions  */
+template <typename T, typename U>
+void copy_matrix_with_different_leading_dimensions(T& hB, U& hC)
+{
+    rocblas_int M           = hB.m();
+    rocblas_int N           = hB.n();
+    size_t      ldb         = hB.lda();
+    size_t      ldc         = hC.lda();
+    rocblas_int batch_count = hB.batch_count();
+    for(int b = 0; b < batch_count; b++)
+    {
+        auto* B = hB[b];
+        auto* C = hC[b];
+        for(int i = 0; i < M; i++)
+            for(int j = 0; j < N; j++)
+                C[i + j * ldc] = B[i + j * ldb];
     }
 }
 
@@ -320,7 +437,7 @@ void print_batched_matrix(const char*           name,
 {
     // n1, n2 are matrix dimensions, sometimes called m, n
     // s1, s2 are matrix strides, sometimes called 1, lda
-    int max_size = 8;
+    int max_size = 1025;
 
     for(int i3 = 0; i3 < A.batch_count() && i3 < max_size; i3++)
     {

@@ -33,6 +33,9 @@ Definitions:
     - { M:  4011, lda: 4011, stride_a: 16088200 }
     - { M:  8000, lda: 8000, stride_a: 64000000 }
 
+  - &size_t_index
+    - { M:  46341, lda: 46341, stride_a:  2147488281, stride_x: 46341 }
+
   - &incx_range
     - [2, -2, 1, -1, 3, 10]
 
@@ -45,10 +48,10 @@ Tests:
   category: pre_checkin
   function: trmv_bad_arg
   precision: *single_double_precisions
-  uplo: [L, U]
-  transA: [N, T, C]
-  diag: [N, U]
-  fortran: [ false, true ]
+  uplo: L
+  transA: N
+  diag: N
+  fortran: false
 
 - name: trmv_arg_check
   category: quick
@@ -60,6 +63,19 @@ Tests:
   transA: N
   diag: N
   matrix_size: *special_case_range
+
+- name: trmv_size_t_M
+  category: nightly
+  function:
+  - trmv: *single_precision
+  # shared code for size_t with non-batched
+  #- trmv_batched: *single_precision
+  #- trmv_strided_batched: *single_precision
+  uplo: [U]
+  transA: [N, T]
+  diag: [N]
+  matrix_size: *size_t_index
+  incx: 1
 
 - name: trmv_fortran
   category: quick
@@ -215,4 +231,21 @@ Tests:
   incx: *incx_range_small
   batch_count: [ 3 ]
   stride_scale: [ 1.2 ]
+
+- name: trmv_graph_test
+  category: pre_checkin
+  function:
+        - trmv
+        - trmv_batched
+        - trmv_strided_batched
+  precision: *single_double_precisions_complex_real
+  uplo: [ U ]
+  transA: [N ]
+  diag: [ N ]
+  matrix_size:
+    - { M:    10, lda:    2, stride_a:      20 }
+  incx: *incx_range
+  batch_count: [ 3 ]
+  stride_scale: [ 1.2 ]
+  graph_test: true
 ...

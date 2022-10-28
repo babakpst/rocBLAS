@@ -1,25 +1,15 @@
-============
-Contributing
-============
-
-License Agreement
-=================
-
-1. The code I am contributing is mine, and I have the right to license
-   it.
-
-2. By submitting a pull request for this project I am granting you a
-   license to distribute said code under the MIT License for the
-   project.
+===================
+Contributor's Guide
+===================
 
 Pull-request guidelines
 =======================
 
 
-Our code contriubtion guidelines closely follows the model of `GitHub
+Our code contribution guidelines closely follows the model of `GitHub
 pull-requests <https://help.github.com/articles/using-pull-requests/>`__.
-The rocBLAS repository follows a workflow which dictates a /master branch where releases are cut, and a
-/develop branch which serves as an integration branch for new code. Pull requests should:
+The `rocBLAS repository <https://github.com/ROCmSoftwarePlatform/rocBLAS>`__ follows a workflow which dictates a **master** branch where releases are cut, and a
+**develop** branch which serves as an integration branch for new code. Pull requests should:
 
 -  target the **develop** branch for integration
 -  ensure code builds successfully.
@@ -29,105 +19,6 @@ The rocBLAS repository follows a workflow which dictates a /master branch where 
 -  tests must have good code coverage
 -  code must also have benchmark tests, and performance must approach
    the compute bound limit or memory bound limit.
-
-StyleGuide
-==========
-
-This project follows the `CPP Core
-guidelines <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md>`__,
-with few modifications or additions noted below. All pull-requests
-should in good faith attempt to follow the guidelines stated therein,
-but we recognize that the content is lengthy. Below we list our primary
-concerns when reviewing pull-requests.
-
-Interface
----------
-
--  All public APIs are C99 compatible; all other library code should use
-   C++14
--  Our minimum supported compiler is clang 3.6
--  Avoid CamelCase
--  This rule applies specifically to publicly visible APIs, but is also
-   encouraged (not mandated) for internal code
-
-Philosophy
-----------
-
--  `P.2 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rp-Cplusplus>`__:
-   Write in ISO Standard C++14 (especially to support windows, linux and
-   macos plaforms )
--  `P.5 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rp-compile-time>`__:
-   Prefer compile-time checking to run-time checking
-
-Implementation
---------------
-
--  `SF.1 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rs-file-suffix>`__:
-   Use a ``.cpp`` suffix for code files and an ``.h`` suffix for
-   interface files if your project doesn't already follow another
-   convention
--  We modify this rule:
-
-   -  ``.h``: C header files
-   -  ``.hpp``: C++ header files
-
--  `SF.5 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rs-consistency>`__:
-   A ``.cpp`` file must include the ``.h`` file(s) that defines its
-   interface
--  `SF.7 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rs-using-directive>`__:
-   Don't put a ``using``-directive in a header file
--  `SF.8 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rs-guards>`__:
-   Use ``#include`` guards for all ``.h`` files
--  `SF.21 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rs-unnamed>`__:
-   Don't use an unnamed (anonymous) ``namespace`` in a header
--  `SL.10 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rsl-arrays>`__:
-   Prefer using ``std::array`` or ``std::vector`` instead of a C array
--  `C.9 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rc-private>`__:
-   Minimize the exposure of class members
--  `F.3 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rf-single>`__:
-   Keep functions short and simple
--  `F.21 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rf-out-multi>`__:
-   To return multiple 'out' values, prefer returning a ``std::tuple``
--  `R.1 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Rr-raii>`__:
-   Manage resources automatically using RAII (this includes
-   ``std::unique_ptr`` & ``std::shared_ptr``)
--  `ES.11 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Res-auto>`__:
-   Use ``auto`` to avoid redundant repetition of type names
--  `ES.20 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Res-always>`__:
-   Always initialize an object
--  `ES.23 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Res-list>`__:
-   Prefer the ``{}`` initializer syntax
--  `CP.1 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#S-concurrency>`__:
-   Assume that your code will run as part of a multi-threaded program
--  `I.2 <https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#Ri-global>`__:
-   Avoid global variables
-
-Format
-------
-
-C and C++ code is formatted using ``clang-format``. To run clang-format
-use the version in the ``/opt/rocm/llvm/bin`` directory. Please do not use your
-system's built-in ``clang-format``, as this may be an older version that
-will result in different results.
-
-To format a file, use:
-
-::
-
-    /opt/rocm/llvm/bin/clang-format -style=file -i <path-to-source-file>
-
-To format all files, run the following script in rocBLAS directory:
-
-::
-
-    #!/bin/bash
-    git ls-files -z *.cc *.cpp *.h *.hpp *.cl *.h.in *.hpp.in *.cpp.in | xargs -0 /opt/rocm/llvm/bin/clang-format -style=file -i
-
-Also, githooks can be installed to format the code per-commit:
-
-::
-
-    ./.githooks/install
 
 Coding Guidelines
 =================
@@ -305,10 +196,10 @@ Coding Guidelines
     certain tests.
 
     YAML files are used to describe tests as combinations of arguments.
-    ```rocblas_gentest.py`` <https://github.com/ROCmSoftwarePlatform/rocBLAS/blob/develop/clients/common/rocblas_gentest.py>`__
+    `rocblas_gentest.py <https://github.com/ROCmSoftwarePlatform/rocBLAS/blob/develop/clients/common/rocblas_gentest.py>`__
     is used to parse the YAML files and generate tests in the form of a
     binary file of
-    ```Arguments`` <https://github.com/ROCmSoftwarePlatform/rocBLAS/blob/develop/clients/include/rocblas_arguments.hpp>`__
+    `Arguments <https://github.com/ROCmSoftwarePlatform/rocBLAS/blob/develop/clients/include/rocblas_arguments.hpp>`__
     records.
 
     The ``rocblas-test`` and ``rocblas-bench`` `type dispatch
@@ -328,9 +219,9 @@ Coding Guidelines
     template argument is passed to specify which action is actually
     taken. It's fairly abstract, but it is powerful. There are examples
     of using the type dispatch in
-    ```clients/gtest/*_gtest.cpp`` <https://github.com/ROCmSoftwarePlatform/rocBLAS/tree/develop/clients/gtest>`__
+    `clients/gtest/*_gtest.cpp <https://github.com/ROCmSoftwarePlatform/rocBLAS/tree/develop/clients/gtest>`__
     and
-    ```clients/benchmarks/client.cpp`` <https://github.com/ROCmSoftwarePlatform/rocBLAS/blob/develop/clients/benchmarks/client.cpp>`__.
+    `clients/benchmarks/client.cpp <https://github.com/ROCmSoftwarePlatform/rocBLAS/blob/develop/clients/benchmarks/client.cpp>`__.
 
 5.  Code should not be copied-and pasted, but rather, templates, macros,
     SFINAE (substitution failure is not an error) pattern and CRTP (curiously recurring template pattern),
@@ -358,7 +249,7 @@ Coding Guidelines
         ROCBLAS_KERNEL void axpy_kernel(rocblas_int n, U alpha_device_host, const T* x, rocblas_int incx, T* y, rocblas_int incy)
         {
             auto alpha = load_scalar(alpha_device_host);
-            ptrdiff_t tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
+            ptrdiff_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
            // bound
            if(tid < n)
@@ -603,9 +494,8 @@ Coding Guidelines
 
     ``std::string`` involves dynamic memory allocation and copying of
     temporaries, which can be slow. ``std::string_view`` is supposed to
-    help alleviate that, but it's not available until C++17, and we're
-    using C++14 now. ``const char*`` should be used for read-only views
-    of strings, in the interest of efficiency.
+    help alleviate that, which became available in C++17. ``const char*``
+    can be used for read-only views of strings, in the interest of efficiency.
 
 16. For code brevity and readability, when converting to *numeric*
     types, uniform initialization or function-style casts are preferred
@@ -753,49 +643,47 @@ Coding Guidelines
 22. C++ templates, including variadic templates, are preferred to macros or runtime interpreting of values, although it is understood that sometimes macros are necessary.
 
     For example, when creating a class which models zero or more rocBLAS kernel arguments, it is preferable to use:
+
     .. code:: cpp
 
         template<rocblas_argument... Args>
         class ArgumentModel
         {
-    public:
-            void func()
-            {
-                for (auto arg: { Args... })
+            public:
+                void func()
                 {
-                    // do something with argument arg
+                    for(auto arg: { Args... })
+                    {
+                        //do something with argument arg
+                    }
                 }
-            }
         };
-
         ArgumentModel<e_A, e_B>{}.func();
 
-   instead of:
+    instead of:
 
-   .. code:: cpp
+    .. code:: cpp
 
-       class ArgumentModel
-       {
+        class ArgumentModel
+        {
             std::vector<rocblas_argument> args;
-    public:
-            ArgumentModel(const std::vector<rocblas_argument>& args)
-            : args(args)
-            {
-            }
-
-            void func()
-            {
-                for (auto arg: args)
+            public:
+                ArgumentModel(const std::vector<rocblas_argument>& args): args(args)
                 {
-                    // do something with argument arg
                 }
-            }
-        };
 
+                void func()
+                {
+                    for(auto arg: args)
+                    {
+                        //do something with argument arg
+                    }
+                }
+        };
         ArgumentModel model({e_A, e_B});
         model.func();
 
-  The former denotes the rocBLAS arguments as a list which is passed as a variadic template argument, and whose properties are known and can be optimized at compile-time, and which can be passed on as arguments to other templates, while the latter requires creating a dynamically-allocated runtime object which must be interpreted at runtime, such as by using ``switch`` statements on the arguments. The ``switch`` statement will need to list out and handle every possible argument, while the template solution simply passes the argument as another template argument, and hence can be resolved at compile-time.
+    The former denotes the rocBLAS arguments as a list which is passed as a variadic template argument, and whose properties are known and can be optimized at compile-time, and which can be passed on as arguments to other templates, while the latter requires creating a dynamically-allocated runtime object which must be interpreted at runtime, such as by using ``switch`` statements on the arguments. The ``switch`` statement will need to list out and handle every possible argument, while the template solution simply passes the argument as another template argument, and hence can be resolved at compile-time.
 
 
 23. Automatically-generated files should always go into ``build/`` directories, and should not go into source directories (even if marked ``.gitignore``). The CMake philosophy is such that you can create any ``build/`` directory, run ``cmake`` from there, and then have a self-contained build environment which will not touch any files outside of it.
@@ -806,9 +694,9 @@ Coding Guidelines
 
 25. Macro parameters should only be evaluated once when practical, and should be parenthesized if there is a chance of ambiguous precedence. They should be stored in a local temporary variable if needed more than once.
 
-Macros which expand to code with local variables, should use double-underscore suffixes in the local variable names, to prevent their conflict with variables passed in macro parameters. However, if they are in a completely separate block scope than the macro parameter is expanded in, or if they are only passed to another macro/function, then they do not need to use trailing underscores.
+    Macros which expand to code with local variables, should use double-underscore suffixes in the local variable names, to prevent their conflict with variables passed in macro parameters. However, if they are in a completely separate block scope than the macro parameter is expanded in, or if they are only passed to another macro/function, then they do not need to use trailing underscores.
 
-    ..code:: cpp
+    .. code:: cpp
 
         #define CHECK_DEVICE_ALLOCATION(ERROR)                   \
             do                                                   \
@@ -825,6 +713,7 @@ Macros which expand to code with local variables, should use double-underscore s
                 }                                                \
             } while(0)
 
+
 The ``ERROR`` macro parameter is evaluated only once, and is stored in the temporary variable ``error__``, for use multiple times later.
 
 The ``ERROR`` macro parameter is parenthesized when initializing ``error__``, to avoid ambiguous precedence, such as if ``ERROR`` contains a comma expression.
@@ -834,7 +723,7 @@ The ``error__`` variable name is used, to prevent it from conflicting with varia
 
 26. Do not use variable-length arrays (VLA), which allocate on the stack, for arrays of unknown size.
 
-    ..code:: cpp
+    .. code:: cpp
 
         Ti* hostA[batch_count];
         Ti* hostB[batch_count];
@@ -843,9 +732,9 @@ The ``error__`` variable name is used, to prevent it from conflicting with varia
 
         func(hostA, hostB, hostC, hostD);
 
- Instead, allocate on the heap, using smart pointers to avoid memory leaks:
+    Instead, allocate on the heap, using smart pointers to avoid memory leaks:
 
-    ..code:: cpp
+    .. code:: cpp
 
         auto hostA = std::make_unique<Ti*[]>(batch_count);
         auto hostB = std::make_unique<Ti*[]>(batch_count);
@@ -859,9 +748,9 @@ The ``error__`` variable name is used, to prevent it from conflicting with varia
 
 If the reason for using an unnamed namespace in a header file is to prevent multiple definitions, keep in mind that the following are allowed to be defined in multiple compilation units, such as if they all come from the same header file, as long as they are defined with identical token sequences in each compilation unit:
 
-  -  ``class``es
-  -  ``typedef``s or type aliases
-  -  ``enum``s
+  -  ``classes``
+  -  ``typedefs`` or type aliases
+  -  ``enums``
   -  ``template`` functions
   -  ``inline`` functions
   -  ``constexpr`` functions (implies ``inline``)
@@ -869,19 +758,44 @@ If the reason for using an unnamed namespace in a header file is to prevent mult
 
 If functions defined in header files are declared ``template``, then multiple instantiations with the same ``template`` arguments are automatically merged, something which cannot happen if the ``template`` functions are declared ``static``, or appear in unnamed namespaces, in which case the instantiations are local to each compilation unit, and are not combined.
 
-If a function defined in a header file at ``namespace`` scope (outside of a ``class``) contains ``static`` _local variables_ which are expected to be singletons holding state throughout the entire library, then the function cannot be marked ``static`` or be part of an unnamed ``namespace``, because then each compilation unit will have its own separate copy of that function and its local ``static`` variables. (``static`` member functions of classes always have external linkage, and it is okay to define ``static`` ``class`` member functions in-place inside of header files, because all in-place ``static`` member function definitions, including their ``static`` local variables, will be automatically merged.)
+If a function defined in a header file at ``namespace`` scope (outside of a ``class``) contains ``static`` _local variables which are expected to be singletons holding state throughout the entire library, then the function cannot be marked ``static`` or be part of an unnamed ``namespace``, because then each compilation unit will have its own separate copy of that function and its local ``static`` variables. (``static`` member functions of classes always have external linkage, and it is okay to define ``static`` ``class`` member functions in-place inside of header files, because all in-place ``static`` member function definitions, including their ``static`` local variables, will be automatically merged.)
 
 Guidelines:
 
--  Do not use unnamed ``namespace``s inside of header files.
+-  Do not use unnamed ``namespaces`` inside of header files.
 
--  Use either ``template`` or ``inline`` (or both) for functions defined outside of classes in header files.
+    -  Use either ``template`` or ``inline`` (or both) for functions defined outside of classes in header files.
 
--  Do not declare namespace-scope (not ``class``-scope) functions ``static`` inside of header files unless there is a very good reason, that the function does not have any non-``const`` ``static`` local variables, and that it is acceptable that each compilation unit will have its own independent definition of the function and its ``static`` local variables. (``static`` ``class`` member functions defined in header files are okay.)
+    -  Do not declare namespace-scope (not ``class``-scope) functions ``static`` inside of header files unless there is a very good reason, that the function does not have any non-``const`` ``static`` local variables, and that it is acceptable that each compilation unit will have its own independent definition of the function and its ``static`` local variables. (``static`` ``class`` member functions defined in header files are okay.)
 
--  Use ``static`` for ``constexpr`` ``template`` variables until C++17, after which ``constexpr`` variables become ``inline`` variables, and thus can be defined in multiple compilation units. It is okay if the ``constexpr`` variables remain ``static`` in C++17; it just means there might be a little bit of redundancy between compilation units.
+    -  Use ``static`` for ``constexpr`` ``template`` variables until C++17, after which ``constexpr`` variables become ``inline`` variables, and thus can be defined in multiple compilation units. It is okay if the ``constexpr`` variables remain ``static`` in C++17; it just means there might be a little bit of redundancy between compilation units.
 
+Format
+------
 
+C and C++ code is formatted using ``clang-format``. To run clang-format
+use the version in the ``/opt/rocm/llvm/bin`` directory. Please do not use your
+system's built-in ``clang-format``, as this may be an older version that
+will result in different results.
+
+To format a file, use:
+
+::
+
+    /opt/rocm/llvm/bin/clang-format -style=file -i <path-to-source-file>
+
+To format all files, run the following script in rocBLAS directory:
+
+::
+
+    #!/bin/bash
+    git ls-files -z *.cc *.cpp *.h *.hpp *.cl *.h.in *.hpp.in *.cpp.in | xargs -0 /opt/rocm/llvm/bin/clang-format -style=file -i
+
+Also, githooks can be installed to format the code per-commit:
+
+::
+
+    ./.githooks/install
 
 Static Code Analysis
 =====================

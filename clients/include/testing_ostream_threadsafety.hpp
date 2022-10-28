@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2020-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -30,15 +48,14 @@
 #include <sys/types.h>
 #endif
 
-#ifdef __cpp_lib_filesystem
+#if __has_include(<filesystem>)
 #include <filesystem>
-#else
+namespace fs = std::filesystem;
+#elif __has_include(<experimental/filesystem>)
 #include <experimental/filesystem>
-
-namespace std
-{
-    namespace filesystem = experimental::filesystem;
-}
+namespace fs = std::experimental::filesystem;
+#else
+#error no filesystem found
 #endif
 
 inline void testing_ostream_threadsafety(const Arguments& arg)
@@ -79,14 +96,14 @@ inline void testing_ostream_threadsafety(const Arguments& arg)
     {
         // Open a file in /tmp
         //char path[] = "/tmp/rocblas-XXXXXX";
-        std::filesystem::path path;
-        std::string           uniquestr;
+        fs::path          path;
+        std::string       uniquestr;
         const std::string alphanum = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv";
         int               stringlength = alphanum.length() - 1;
         uniquestr                      = "rocblas-";
         for(auto n : {0, 1, 2, 3, 4, 5})
             uniquestr += alphanum.at(rand() % stringlength);
-        path   = std::filesystem::temp_directory_path() / uniquestr;
+        path   = fs::temp_directory_path() / uniquestr;
         int fd = OPEN(path.generic_string().c_str());
         if(fd == -1)
         {
@@ -133,6 +150,6 @@ inline void testing_ostream_threadsafety(const Arguments& arg)
         rocblas_internal_ostream::clear_workers();
 #endif
         // If there were no failures, erase the temporary file
-        std::filesystem::remove(path);
+        fs::remove(path);
     }
 }

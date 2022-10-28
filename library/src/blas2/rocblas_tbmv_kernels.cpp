@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2019-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "../blas1/rocblas_copy.hpp"
@@ -139,18 +157,18 @@ __device__ T tbmvt_kernel_helper(bool        CONJ,
   *  A combined kernel to handle all tbmv cases (transpose, conjugate, normal).
   */
 template <rocblas_int DIM_X, rocblas_int DIM_Y, typename T>
-__device__ void tbmvx_kernel_calc(rocblas_operation transA,
-                                  bool              upper,
-                                  bool              diag,
-                                  rocblas_int       m,
-                                  rocblas_int       k,
-                                  const T*          A,
-                                  rocblas_int       lda,
-                                  const T*          w_x_copy,
-                                  T*                x,
-                                  rocblas_int       incx)
+ROCBLAS_KERNEL_ILF void tbmvx_kernel_calc(rocblas_operation transA,
+                                          bool              upper,
+                                          bool              diag,
+                                          rocblas_int       m,
+                                          rocblas_int       k,
+                                          const T*          A,
+                                          rocblas_int       lda,
+                                          const T*          w_x_copy,
+                                          T*                x,
+                                          rocblas_int       incx)
 {
-    rocblas_int thread_id = hipThreadIdx_x + hipThreadIdx_y * hipBlockDim_x;
+    rocblas_int thread_id = threadIdx.x + threadIdx.y * blockDim.x;
 
     // threads are all configurated locally
     // Create "tilted" blocks. With the compaction, each diagonal,
@@ -159,7 +177,7 @@ __device__ void tbmvx_kernel_calc(rocblas_operation transA,
     rocblas_int tx = thread_id % DIM_X;
     rocblas_int ty = thread_id / DIM_X;
 
-    rocblas_int ind = hipBlockIdx_x * DIM_X + tx;
+    rocblas_int ind = blockIdx.x * DIM_X + tx;
 
     __shared__ T sdata[DIM_X * DIM_Y];
 
@@ -180,8 +198,8 @@ __device__ void tbmvx_kernel_calc(rocblas_operation transA,
     sdata[tx + ty * DIM_X] = res_A;
     __syncthreads();
 
-    thread_id = hipThreadIdx_x + hipThreadIdx_y * hipBlockDim_x;
-    ind       = hipBlockIdx_x * DIM_X + thread_id;
+    thread_id = threadIdx.x + threadIdx.y * blockDim.x;
+    ind       = blockIdx.x * DIM_X + thread_id;
     if(thread_id < DIM_X && ind < m)
     {
         // Add the partial sums of each diagonal and store
@@ -231,28 +249,29 @@ __device__ void tbmvx_kernel_calc(rocblas_operation transA,
   *  reside on the same row as the other elements of the same diagonal.
   */
 template <rocblas_int DIM_X, rocblas_int DIM_Y, typename U, typename V>
-ROCBLAS_KERNEL void tbmvx_kernel(rocblas_operation transA,
-                                 bool              upper,
-                                 bool              diag,
-                                 rocblas_int       m,
-                                 rocblas_int       k,
-                                 U                 Aa,
-                                 ptrdiff_t         shifta,
-                                 rocblas_int       lda,
-                                 rocblas_stride    strideA,
-                                 U                 w_xa_copy,
-                                 V                 xa,
-                                 ptrdiff_t         shiftx,
-                                 rocblas_int       incx,
-                                 rocblas_stride    stridex)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+tbmvx_kernel(rocblas_operation transA,
+             bool              upper,
+             bool              diag,
+             rocblas_int       m,
+             rocblas_int       k,
+             U                 Aa,
+             rocblas_stride    shifta,
+             rocblas_int       lda,
+             rocblas_stride    strideA,
+             U                 w_xa_copy,
+             V                 xa,
+             rocblas_stride    shiftx,
+             rocblas_int       incx,
+             rocblas_stride    stridex)
 {
-    rocblas_int num_threads = hipBlockDim_x * hipBlockDim_y * hipBlockDim_z;
+    rocblas_int num_threads = blockDim.x * blockDim.y * blockDim.z;
     if(DIM_X * DIM_Y != num_threads)
         return; // need to launch exactly the same number of threads as template parameters indicate
 
-    const auto* A        = load_ptr_batch(Aa, hipBlockIdx_y, shifta, strideA);
-    const auto* w_x_copy = load_ptr_batch(w_xa_copy, hipBlockIdx_y, 0, m);
-    auto*       x        = load_ptr_batch(xa, hipBlockIdx_y, shiftx, stridex);
+    const auto* A        = load_ptr_batch(Aa, blockIdx.y, shifta, strideA);
+    const auto* w_x_copy = load_ptr_batch(w_xa_copy, blockIdx.y, 0, m);
+    auto*       x        = load_ptr_batch(xa, blockIdx.y, shiftx, stridex);
 
     tbmvx_kernel_calc<DIM_X, DIM_Y>(transA, upper, diag, m, k, A, lda, w_x_copy, x, incx);
 }
@@ -273,11 +292,11 @@ rocblas_status rocblas_tbmv_template(rocblas_handle    handle,
                                      rocblas_int       m,
                                      rocblas_int       k,
                                      U                 A,
-                                     rocblas_int       offseta,
+                                     rocblas_stride    offseta,
                                      rocblas_int       lda,
                                      rocblas_stride    strideA,
                                      V                 x,
-                                     rocblas_int       offsetx,
+                                     rocblas_stride    offsetx,
                                      rocblas_int       incx,
                                      rocblas_stride    stridex,
                                      rocblas_int       batch_count,
@@ -339,11 +358,11 @@ rocblas_status rocblas_tbmv_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
                                            rocblas_int    m,
                                            T              A,
-                                           rocblas_int    offset_a,
+                                           rocblas_stride offset_a,
                                            rocblas_int    lda,
                                            rocblas_stride stride_a,
                                            U              x,
-                                           rocblas_int    offset_x,
+                                           rocblas_stride offset_x,
                                            rocblas_int    inc_x,
                                            rocblas_stride stride_x,
                                            rocblas_int    batch_count,
@@ -383,11 +402,11 @@ template rocblas_status rocblas_tbmv_template<U_, V_>               \
                                      rocblas_int       m,           \
                                      rocblas_int       k,           \
                                      U_                 A,          \
-                                     rocblas_int       offseta,     \
+                                     rocblas_stride    offseta,     \
                                      rocblas_int       lda,         \
                                      rocblas_stride    strideA,     \
                                      V_                 x,          \
-                                     rocblas_int       offsetx,     \
+                                     rocblas_stride    offsetx,     \
                                      rocblas_int       incx,        \
                                      rocblas_stride    stridex,     \
                                      rocblas_int       batch_count, \
@@ -410,11 +429,11 @@ template rocblas_status rocblas_tbmv_check_numerics<T, U_>                \
                                            rocblas_handle handle,         \
                                            rocblas_int    m,              \
                                            T              A,              \
-                                           rocblas_int    offset_a,       \
+                                           rocblas_stride    offset_a,       \
                                            rocblas_int    lda,            \
                                            rocblas_stride stride_a,       \
                                            U_              x,             \
-                                           rocblas_int    offset_x,       \
+                                           rocblas_stride    offset_x,       \
                                            rocblas_int    inc_x,          \
                                            rocblas_stride stride_x,       \
                                            rocblas_int    batch_count,    \

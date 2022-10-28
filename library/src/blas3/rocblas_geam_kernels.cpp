@@ -1,24 +1,43 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #include "handle.hpp"
 #include "rocblas_geam.hpp"
 
 template <int DIM_X, int DIM_Y, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_zero_matrix_device(rocblas_int    m,
-                                                                            rocblas_int    n,
-                                                                            TPtr           Ca,
-                                                                            rocblas_int    offset_c,
-                                                                            rocblas_int    ldc,
-                                                                            rocblas_stride stride_c)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+geam_zero_matrix_device(rocblas_int    m,
+                        rocblas_int    n,
+                        TPtr           Ca,
+                        rocblas_stride offset_c,
+                        rocblas_int    ldc,
+                        rocblas_stride stride_c)
 {
-    rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
+    rocblas_int tx = blockIdx.x * blockDim.x + threadIdx.x;
+    rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     if(tx < m && ty < n)
     {
-        auto*  C       = load_ptr_batch(Ca, hipBlockIdx_z, offset_c, stride_c);
+        auto*  C       = load_ptr_batch(Ca, blockIdx.z, offset_c, stride_c);
         size_t c_index = tx + size_t(ldc) * ty;
         C[c_index]     = 0.0;
     }
@@ -26,36 +45,37 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_zero_matrix_device(rocb
 
 // general case for any alpha, beta, lda, ldb, ldc
 template <int DIM_X, int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_device(rocblas_operation transA,
-                                                                rocblas_operation transB,
-                                                                rocblas_int       m,
-                                                                rocblas_int       n,
-                                                                TScal             alpha_device_host,
-                                                                TConstPtr         Aa,
-                                                                rocblas_int       offset_a,
-                                                                rocblas_int       lda,
-                                                                rocblas_stride    stride_a,
-                                                                TScal             beta_device_host,
-                                                                TConstPtr         Ba,
-                                                                rocblas_int       offset_b,
-                                                                rocblas_int       ldb,
-                                                                rocblas_stride    stride_b,
-                                                                TPtr              Ca,
-                                                                rocblas_int       offset_c,
-                                                                rocblas_int       ldc,
-                                                                rocblas_stride    stride_c)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+geam_device(rocblas_operation transA,
+            rocblas_operation transB,
+            rocblas_int       m,
+            rocblas_int       n,
+            TScal             alpha_device_host,
+            TConstPtr         Aa,
+            rocblas_stride    offset_a,
+            rocblas_int       lda,
+            rocblas_stride    stride_a,
+            TScal             beta_device_host,
+            TConstPtr         Ba,
+            rocblas_stride    offset_b,
+            rocblas_int       ldb,
+            rocblas_stride    stride_b,
+            TPtr              Ca,
+            rocblas_stride    offset_c,
+            rocblas_int       ldc,
+            rocblas_stride    stride_c)
 {
-    rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
+    rocblas_int tx = blockIdx.x * blockDim.x + threadIdx.x;
+    rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     if(tx < m && ty < n)
     {
-        auto alpha = load_scalar(alpha_device_host, hipBlockIdx_z, 0);
-        auto beta  = load_scalar(beta_device_host, hipBlockIdx_z, 0);
+        auto alpha = load_scalar(alpha_device_host);
+        auto beta  = load_scalar(beta_device_host);
 
-        auto* A = cond_load_ptr_batch(alpha, Aa, hipBlockIdx_z, offset_a, stride_a);
-        auto* B = cond_load_ptr_batch(beta, Ba, hipBlockIdx_z, offset_b, stride_b);
-        auto* C = load_ptr_batch(Ca, hipBlockIdx_z, offset_c, stride_c);
+        auto* A = cond_load_ptr_batch(alpha, Aa, blockIdx.z, offset_a, stride_a);
+        auto* B = cond_load_ptr_batch(beta, Ba, blockIdx.z, offset_b, stride_b);
+        auto* C = load_ptr_batch(Ca, blockIdx.z, offset_c, stride_c);
 
         size_t a_index;
         size_t b_index;
@@ -93,27 +113,28 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_device(rocblas_operatio
 //  special case:
 //  only one matrix contributes because   0 == alpha || 0 == beta
 template <int DIM_X, int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_2matrix_device(rocblas_operation transA,
-                                                                        rocblas_int       m,
-                                                                        rocblas_int       n,
-                                                                        TScal     alpha_device_host,
-                                                                        TConstPtr Aa,
-                                                                        rocblas_int    offset_a,
-                                                                        rocblas_int    lda,
-                                                                        rocblas_stride stride_a,
-                                                                        TPtr           Ca,
-                                                                        rocblas_int    offset_c,
-                                                                        rocblas_int    ldc,
-                                                                        rocblas_stride stride_c)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+geam_2matrix_device(rocblas_operation transA,
+                    rocblas_int       m,
+                    rocblas_int       n,
+                    TScal             alpha_device_host,
+                    TConstPtr         Aa,
+                    rocblas_stride    offset_a,
+                    rocblas_int       lda,
+                    rocblas_stride    stride_a,
+                    TPtr              Ca,
+                    rocblas_stride    offset_c,
+                    rocblas_int       ldc,
+                    rocblas_stride    stride_c)
 {
-    rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
+    rocblas_int tx = blockIdx.x * blockDim.x + threadIdx.x;
+    rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     if(tx < m && ty < n)
     {
-        auto alpha = load_scalar(alpha_device_host, hipBlockIdx_z, 0);
+        auto alpha = load_scalar(alpha_device_host);
 
-        auto* C = load_ptr_batch(Ca, hipBlockIdx_z, offset_c, stride_c);
+        auto* C = load_ptr_batch(Ca, blockIdx.z, offset_c, stride_c);
 
         size_t c_index = tx + size_t(ldc) * ty;
         if(alpha == 0)
@@ -122,7 +143,7 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_2matrix_device(rocblas_
         }
         else
         {
-            auto* A = load_ptr_batch(Aa, hipBlockIdx_z, offset_a, stride_a);
+            auto* A = load_ptr_batch(Aa, blockIdx.z, offset_a, stride_a);
 
             size_t a_index;
 
@@ -147,27 +168,28 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_2matrix_device(rocblas_
 // are contiguous, there are no transposes, and therefore matrices
 // can be treated as contiguous vectors
 template <int DIM_X, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X) void geam_1D_device(size_t         size,
-                                                            TScal          alpha_device_host,
-                                                            TConstPtr      Aa,
-                                                            rocblas_int    offset_a,
-                                                            rocblas_stride stride_a,
-                                                            TScal          beta_device_host,
-                                                            TConstPtr      Ba,
-                                                            rocblas_int    offset_b,
-                                                            rocblas_stride stride_b,
-                                                            TPtr           Ca,
-                                                            rocblas_int    offset_c,
-                                                            rocblas_stride stride_c)
+ROCBLAS_KERNEL(DIM_X)
+geam_1D_device(size_t         size,
+               TScal          alpha_device_host,
+               TConstPtr      Aa,
+               rocblas_stride offset_a,
+               rocblas_stride stride_a,
+               TScal          beta_device_host,
+               TConstPtr      Ba,
+               rocblas_stride offset_b,
+               rocblas_stride stride_b,
+               TPtr           Ca,
+               rocblas_stride offset_c,
+               rocblas_stride stride_c)
 {
-    size_t tx = size_t(hipBlockIdx_x) * hipBlockDim_x + hipThreadIdx_x;
+    size_t tx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
 
     if(tx < size)
     {
-        auto alpha = load_scalar(alpha_device_host, hipBlockIdx_y, 0);
-        auto beta  = load_scalar(beta_device_host, hipBlockIdx_y, 0);
+        auto alpha = load_scalar(alpha_device_host);
+        auto beta  = load_scalar(beta_device_host);
 
-        auto* C = load_ptr_batch(Ca, hipBlockIdx_y, offset_c, stride_c);
+        auto* C = load_ptr_batch(Ca, blockIdx.y, offset_c, stride_c);
 
         if(alpha == 0 && beta == 0)
         {
@@ -175,8 +197,8 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X) void geam_1D_device(size_t         size,
         }
         else
         {
-            auto* A = cond_load_ptr_batch(alpha, Aa, hipBlockIdx_y, offset_a, stride_a);
-            auto* B = cond_load_ptr_batch(beta, Ba, hipBlockIdx_y, offset_b, stride_b);
+            auto* A = cond_load_ptr_batch(alpha, Aa, blockIdx.y, offset_a, stride_a);
+            auto* B = cond_load_ptr_batch(beta, Ba, blockIdx.y, offset_b, stride_b);
 
             C[tx] = (beta ? beta * B[tx] : 0) + (alpha ? alpha * A[tx] : 0);
         }
@@ -188,22 +210,23 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X) void geam_1D_device(size_t         size,
 // can be treated as contiguous vectors.
 // Also, alpha == 0  ||  beta == 0  so only one matrix contributes
 template <int DIM_X, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X) void geam_1D_2matrix_device(size_t      size,
-                                                                    TScal       alpha_device_host,
-                                                                    TConstPtr   Aa,
-                                                                    rocblas_int offset_a,
-                                                                    rocblas_stride stride_a,
-                                                                    TPtr           Ca,
-                                                                    rocblas_int    offset_c,
-                                                                    rocblas_stride stride_c)
+ROCBLAS_KERNEL(DIM_X)
+geam_1D_2matrix_device(size_t         size,
+                       TScal          alpha_device_host,
+                       TConstPtr      Aa,
+                       rocblas_stride offset_a,
+                       rocblas_stride stride_a,
+                       TPtr           Ca,
+                       rocblas_stride offset_c,
+                       rocblas_stride stride_c)
 {
-    size_t tx = size_t(hipBlockIdx_x) * hipBlockDim_x + hipThreadIdx_x;
+    size_t tx = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
 
     if(tx < size)
     {
-        auto alpha = load_scalar(alpha_device_host, hipBlockIdx_y, 0);
+        auto alpha = load_scalar(alpha_device_host);
 
-        auto* C = load_ptr_batch(Ca, hipBlockIdx_y, offset_c, stride_c);
+        auto* C = load_ptr_batch(Ca, blockIdx.y, offset_c, stride_c);
 
         if(alpha == 0)
         {
@@ -211,7 +234,7 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X) void geam_1D_2matrix_device(size_t      
         }
         else
         {
-            auto* A = load_ptr_batch(Aa, hipBlockIdx_y, offset_a, stride_a);
+            auto* A = load_ptr_batch(Aa, blockIdx.y, offset_a, stride_a);
             C[tx]   = alpha * A[tx];
         }
     }
@@ -220,29 +243,30 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X) void geam_1D_2matrix_device(size_t      
 // special cases where: A == C && lda == ldc && transA == none
 // this is in place case C <- alpha*C + beta*B
 template <int DIM_X, int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
-ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_inplace_device(rocblas_operation transB,
-                                                                        rocblas_int       m,
-                                                                        rocblas_int       n,
-                                                                        TScal     alpha_device_host,
-                                                                        TScal     beta_device_host,
-                                                                        TConstPtr Ba,
-                                                                        rocblas_int    offset_b,
-                                                                        rocblas_int    ldb,
-                                                                        rocblas_stride stride_b,
-                                                                        TPtr           Ca,
-                                                                        rocblas_int    offset_c,
-                                                                        rocblas_int    ldc,
-                                                                        rocblas_stride stride_c)
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+geam_inplace_device(rocblas_operation transB,
+                    rocblas_int       m,
+                    rocblas_int       n,
+                    TScal             alpha_device_host,
+                    TScal             beta_device_host,
+                    TConstPtr         Ba,
+                    rocblas_stride    offset_b,
+                    rocblas_int       ldb,
+                    rocblas_stride    stride_b,
+                    TPtr              Ca,
+                    rocblas_stride    offset_c,
+                    rocblas_int       ldc,
+                    rocblas_stride    stride_c)
 {
-    rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
+    rocblas_int tx = blockIdx.x * blockDim.x + threadIdx.x;
+    rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     if(tx < m && ty < n)
     {
-        auto alpha = load_scalar(alpha_device_host, 0, 0);
-        auto beta  = load_scalar(beta_device_host, 0, 0);
+        auto alpha = load_scalar(alpha_device_host);
+        auto beta  = load_scalar(beta_device_host);
 
-        auto* C = load_ptr_batch(Ca, hipBlockIdx_z, offset_c, stride_c);
+        auto* C = load_ptr_batch(Ca, blockIdx.z, offset_c, stride_c);
 
         size_t b_index;
         size_t c_index = tx + size_t(ldc) * ty;
@@ -253,7 +277,7 @@ ROCBLAS_KERNEL __launch_bounds__(DIM_X* DIM_Y) void geam_inplace_device(rocblas_
         }
         else
         {
-            auto* B = load_ptr_batch(Ba, hipBlockIdx_z, offset_b, stride_b);
+            auto* B = load_ptr_batch(Ba, blockIdx.z, offset_b, stride_b);
 
             if(transB == rocblas_operation_none)
             {
@@ -303,16 +327,16 @@ rocblas_status rocblas_geam_template(rocblas_handle    handle,
                                      rocblas_int       n,
                                      TScal             alpha,
                                      TConstPtr         A,
-                                     rocblas_int       offset_a,
+                                     rocblas_stride    offset_a,
                                      rocblas_int       lda,
                                      rocblas_stride    stride_a,
                                      TScal             beta,
                                      TConstPtr         B,
-                                     rocblas_int       offset_b,
+                                     rocblas_stride    offset_b,
                                      rocblas_int       ldb,
                                      rocblas_stride    stride_b,
                                      TPtr              C,
-                                     rocblas_int       offset_c,
+                                     rocblas_stride    offset_c,
                                      rocblas_int       ldc,
                                      rocblas_stride    stride_c,
                                      rocblas_int       batch_count)
@@ -696,6 +720,86 @@ rocblas_status rocblas_geam_template(rocblas_handle    handle,
     return rocblas_status_success;
 }
 
+template <typename TConstPtr, typename TPtr>
+rocblas_status rocblas_geam_check_numerics(const char*       function_name,
+                                           rocblas_handle    handle,
+                                           rocblas_operation trans_a,
+                                           rocblas_operation trans_b,
+                                           rocblas_int       m,
+                                           rocblas_int       n,
+                                           TConstPtr         A,
+                                           rocblas_int       lda,
+                                           rocblas_stride    stride_a,
+                                           TConstPtr         B,
+                                           rocblas_int       ldb,
+                                           rocblas_stride    stride_b,
+                                           TPtr              C,
+                                           rocblas_int       ldc,
+                                           rocblas_stride    stride_c,
+                                           rocblas_int       batch_count,
+                                           const int         check_numerics,
+                                           bool              is_input)
+{
+
+    rocblas_status check_numerics_status = rocblas_status_success;
+
+    if(is_input)
+    {
+        check_numerics_status
+            = rocblas_internal_check_numerics_matrix_template(function_name,
+                                                              handle,
+                                                              trans_a,
+                                                              rocblas_fill_full,
+                                                              rocblas_client_general_matrix,
+                                                              m,
+                                                              n,
+                                                              A,
+                                                              0,
+                                                              lda,
+                                                              stride_a,
+                                                              batch_count,
+                                                              check_numerics,
+                                                              is_input);
+        if(check_numerics_status != rocblas_status_success)
+            return check_numerics_status;
+
+        check_numerics_status
+            = rocblas_internal_check_numerics_matrix_template(function_name,
+                                                              handle,
+                                                              trans_b,
+                                                              rocblas_fill_full,
+                                                              rocblas_client_general_matrix,
+                                                              m,
+                                                              n,
+                                                              B,
+                                                              0,
+                                                              ldb,
+                                                              stride_b,
+                                                              batch_count,
+                                                              check_numerics,
+                                                              is_input);
+        if(check_numerics_status != rocblas_status_success)
+            return check_numerics_status;
+    }
+    check_numerics_status
+        = rocblas_internal_check_numerics_matrix_template(function_name,
+                                                          handle,
+                                                          rocblas_operation_none,
+                                                          rocblas_fill_full,
+                                                          rocblas_client_general_matrix,
+                                                          m,
+                                                          n,
+                                                          C,
+                                                          0,
+                                                          ldc,
+                                                          stride_c,
+                                                          batch_count,
+                                                          check_numerics,
+                                                          is_input);
+
+    return check_numerics_status;
+}
+
 // Instantiations below will need to be manually updated to match any change in
 // template parameters in the files geam*.cpp
 
@@ -713,16 +817,16 @@ template rocblas_status rocblas_geam_template<TScal_, TConstPtr_, TPtr_>  \
                                      rocblas_int       n,                 \
                                      TScal_            alpha,             \
                                      TConstPtr_        A,                 \
-                                     rocblas_int       offset_a,          \
+                                     rocblas_stride    offset_a,          \
                                      rocblas_int       lda,               \
                                      rocblas_stride    stride_a,          \
                                      TScal_            beta,              \
                                      TConstPtr_        B,                 \
-                                     rocblas_int       offset_b,          \
+                                     rocblas_stride    offset_b,          \
                                      rocblas_int       ldb,               \
                                      rocblas_stride    stride_b,          \
                                      TPtr_             C,                 \
-                                     rocblas_int       offset_c,          \
+                                     rocblas_stride    offset_c,          \
                                      rocblas_int       ldc,               \
                                      rocblas_stride    stride_c,          \
                                      rocblas_int       batch_count);
@@ -740,4 +844,43 @@ INSTANTIATE_GEAM_TEMPLATE( rocblas_float_complex const*,  rocblas_float_complex 
 INSTANTIATE_GEAM_TEMPLATE(rocblas_double_complex const*, rocblas_double_complex const* const*, rocblas_double_complex* const*)
 
 #undef INSTANTIATE_GEAM_TEMPLATE
+
+#ifdef INSTANTIATE_GEAM_NUMERICS
+#error INSTANTIATE_GEAM_NUMERICS already defined
+#endif
+
+#define INSTANTIATE_GEAM_NUMERICS(TConstPtr_, TPtr_)                         \
+template rocblas_status rocblas_geam_check_numerics<TConstPtr_, TPtr_>       \
+                                          (const char*       function_name,  \
+                                           rocblas_handle    handle,         \
+                                           rocblas_operation trans_a,        \
+                                           rocblas_operation trans_b,        \
+                                           rocblas_int       m,              \
+                                           rocblas_int       n,              \
+                                           TConstPtr_        A,              \
+                                           rocblas_int       lda,            \
+                                           rocblas_stride    stride_a,       \
+                                           TConstPtr_        B,              \
+                                           rocblas_int       ldb,            \
+                                           rocblas_stride    stride_b,       \
+                                           TPtr_             C,              \
+                                           rocblas_int       ldc,            \
+                                           rocblas_stride    stride_c,       \
+                                           rocblas_int       batch_count,    \
+                                           const int         check_numerics, \
+                                           bool              is_input);
+
+// instantiate for rocblas_Xgeam and rocblas_Xgeam_strided_batched
+INSTANTIATE_GEAM_NUMERICS(float const*,  float*)
+INSTANTIATE_GEAM_NUMERICS(double const*, double*)
+INSTANTIATE_GEAM_NUMERICS(rocblas_float_complex const*,  rocblas_float_complex*)
+INSTANTIATE_GEAM_NUMERICS(rocblas_double_complex const*, rocblas_double_complex*)
+
+// instantiate for rocblas_Xgeam_batched
+INSTANTIATE_GEAM_NUMERICS(float const* const*, float* const*)
+INSTANTIATE_GEAM_NUMERICS(double const* const*, double* const*)
+INSTANTIATE_GEAM_NUMERICS(rocblas_float_complex const* const*,  rocblas_float_complex* const*)
+INSTANTIATE_GEAM_NUMERICS(rocblas_double_complex const* const*, rocblas_double_complex* const*)
+
+#undef INSTANTIATE_GEAM_NUMERICS
 // clang-format on

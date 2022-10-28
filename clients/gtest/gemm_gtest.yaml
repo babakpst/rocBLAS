@@ -31,6 +31,9 @@ Definitions:
     - { M:    20, N:    20, K:    20, lda:    20, ldb:    20, ldc:    20, ldd:    20 }
 
   - &small_matrix_size_range
+    - { M:     0, N:     8, K:     8, lda:     8, ldb:     8, ldc:     8, ldd:     8 } # m==0
+    - { M:     8, N:     0, K:     8, lda:     8, ldb:     8, ldc:     8, ldd:     8 } # n==0
+    - { M:     8, N:     8, K:     0, lda:     8, ldb:     8, ldc:     8, ldd:     8 } # k==0
     - { M:     9, N:     1, K:     9, lda:     9, ldb:     9, ldc:     9, ldd:     9 }
     - { M:     1, N:     1, K:     1, lda:     1, ldb:     1, ldc:     1, ldd:     1 }
     - { M:     1, N:     2, K:     3, lda:     4, ldb:     5, ldc:     6, ldd:     6 }
@@ -2375,27 +2378,23 @@ Definitions:
 
 
 Tests:
-- name: gemm_bad_arg
-  category: pre_checkin
+- name: gemm_arithmetic_check_ieee16_ieee32
+  category: quick
   function:
-    - gemm_bad_arg
-    - gemm_ex_bad_arg
-    - gemm_batched_ex_bad_arg
-    - gemm_strided_batched_ex_bad_arg
-    - gemm_ext2_bad_arg
-  precision: *half_single_double_precisions
-  transA: N
-  transB: N
-  fortran: [ false, true ]
+    gemm_ex: *hpa_half_precision
+  arithmetic_check: ieee16_ieee32
+  matrix_size:
+    - { M:     8, N:     8, K:     8, lda:     8, ldb:     8, ldc:     8, ldd:     8, transA: N, transB: N, alpha:  1, beta:  2 } #bad M
+    - { M:   256, N:   256, K:   256, lda:   256, ldb:   256, ldc:   256, ldd:   256, transA: N, transB: N, alpha:  1, beta:  2 } #bad M
 
-- name: gemm_bad_arg
+- name: gemm_xxx_bad_arg
   category: pre_checkin
   function:
-    - gemm_bad_arg
-    - gemm_ex_bad_arg
-    - gemm_batched_ex_bad_arg
-    - gemm_strided_batched_ex_bad_arg
-  precision: *single_double_precisions_complex
+    - gemm_bad_arg: *half_single_double_precisions_complex_real
+    - gemm_ex_bad_arg: *real_precisions
+    - gemm_ex_bad_arg: *complex_precisions
+    - gemm_ext2_bad_arg: *real_precisions
+    - gemm_ext2_bad_arg: *complex_precisions
   transA: N
   transB: N
   fortran: [ false, true ]
@@ -2994,6 +2993,18 @@ Tests:
   alpha_beta: *alpha_beta_range
   transA_transB: *transA_transB_range
 
+- name: gemm_69_alias
+  category: pre_checkin
+  function:
+    gemm: *half_single_double_precisions
+    gemm_ex: *nonint8_real_precisions
+  M: 69
+  N: 65
+  K: 66..67
+  alpha_beta: *alpha_beta_range
+  transA_transB: *transA_transB_range
+  c_noalias_d: [false, true]
+
 - name: gemm_96
   category: pre_checkin
   function:
@@ -3087,7 +3098,7 @@ Tests:
   function:
     gemm_ex: *nonint8_real_precisions
   matrix_size: *ldd_size_range
-  c_noalias_d: true
+  c_noalias_d: [false, true]
   transA_transB: *ldd_transA_transB_range
   alpha_beta: *alpha_beta_range
 
@@ -3401,8 +3412,10 @@ Tests:
 - name: gemm_zerok
   category: quick
   function:
-    gemm: { <<: *half_single_double_precisions, <<: *complex_precisions }
-    gemm_ex: { <<: *real_precisions, <<: *complex_precisions }
+    gemm: *half_single_double_precisions
+    gemm: *complex_precisions
+    gemm_ex: *real_precisions
+    gemm_ex: *complex_precisions
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
   K: 0
@@ -3423,6 +3436,18 @@ Tests:
   transA_transB: *transA_transB_range
   alpha_beta: *complex_alpha_beta_range
 
+- name: gemm_ex_hpa_fp16
+  category: quick
+  function:
+    gemm_ex: *hpa_half_precision
+  M: 128
+  N: 128
+  K: 1000
+  transA: N
+  transB: N
+  alpha: 0.001
+  beta: 1
+
 - name: gemm_ext2_small
   category: pre_checkin
   transA: N
@@ -3433,24 +3458,27 @@ Tests:
     - { M:  512, N:  512, K:  512 }
     - { M: 960,  N: 1024, K: 1024 }
     - { M: 1024, N: 1024, K: 1024 }
-  c_noalias_d: true
+  c_noalias_d: [true]
   alpha: [ 0.0, 0.5, 1.0 ]
   beta:  [ 0.0, 0.5, 1.0 ]
   fortran: [ false, true ]
 
-# This is disabled until the sizes are supported by Tensile,
+# Commented out as the category known_bug has no value in adding only to be excluded
+# gemm_ext2 may be deprecated and removed in the future
+#
+# This is category known_bug until the sizes are supported by Tensile,
 # since they take too long with a naive host-side algorithm.
-- name: gemm_ext2_large
-  category: known_bug
-  transA: N
-  transB: N
-  function:
-    - gemm_ext2: *hpa_half_single_precisions
-  matrix_size:
-    - { M: 4096, N: 4096, K: 4096 }
-  c_noalias_d: true
-  alpha: [ 0.0, 0.5, 1.0 ]
-  beta:  [ 0.0, 0.5, 1.0 ]
-  fortran: [ false, true ]
+# - name: gemm_ext2_large
+#   category: known_bug
+#   transA: N
+#   transB: N
+#   function:
+#     - gemm_ext2: *hpa_half_single_precisions
+#   matrix_size:
+#     - { M: 4096, N: 4096, K: 4096 }
+#   c_noalias_d: true
+#   alpha: [ 0.0, 0.5, 1.0 ]
+#   beta:  [ 0.0, 0.5, 1.0 ]
+#   fortran: [ false, true ]
 
 ...

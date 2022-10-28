@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2020-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -14,18 +32,22 @@ namespace ArgumentLogging
 void ArgumentModel_set_log_function_name(bool f);
 bool ArgumentModel_get_log_function_name();
 
+void ArgumentModel_set_log_datatype(bool d);
+bool ArgumentModel_get_log_datatype();
+
 // ArgumentModel template has a variadic list of argument enums
 template <rocblas_argument... Args>
 class ArgumentModel
 {
     // Whether model has a particular parameter
-    // TODO: Replace with C++17 fold expression ((Args == param) || ...)
     static constexpr bool has(rocblas_argument param)
     {
         for(auto x : {Args...})
             if(x == param)
                 return true;
         return false;
+        // TODO: Replace with C++17 fold expression, a C++17 extension
+        // return ((Args == param) || ...);
     }
 
 public:
@@ -122,14 +144,33 @@ public:
                   double                    norm3     = ArgumentLogging::NA_value,
                   double                    norm4     = ArgumentLogging::NA_value)
     {
+        if(arg.iters < 1)
+            return; // warmup test only
+
         rocblas_internal_ostream name_list;
         rocblas_internal_ostream value_list;
+        value_list.set_csv(true);
 
         if(ArgumentModel_get_log_function_name())
         {
             auto delim = ",";
             name_list << "function" << delim;
             value_list << arg.function << delim;
+        }
+
+        if(ArgumentModel_get_log_datatype())
+        {
+            auto delim = ",";
+            name_list << "a_type" << delim;
+            value_list << rocblas_datatype2string(arg.a_type) << delim;
+            name_list << "b_type" << delim;
+            value_list << rocblas_datatype2string(arg.b_type) << delim;
+            name_list << "c_type" << delim;
+            value_list << rocblas_datatype2string(arg.c_type) << delim;
+            name_list << "d_type" << delim;
+            value_list << rocblas_datatype2string(arg.d_type) << delim;
+            name_list << "compute_type" << delim;
+            value_list << rocblas_datatype2string(arg.compute_type) << delim;
         }
 
         // Output (name, value) pairs to name_list and value_list
@@ -159,7 +200,7 @@ public:
         // apply is a templated lambda for C++17 and a templated fuctor for C++14
         //
         // For rocblas_ddot, the following template specialization of apply will be called:
-        // apply<e_N>(print, arg, T{}), apply<e_incx>(print, arg, T{}),, apply<e_incy>(print, arg, T{})
+        // apply<e_N>(print, arg, T{}), apply<e_incx>(print, arg, T{}), apply<e_incy>(print, arg, T{})
         //
         // apply in turn calls print with a string corresponding to the enum, for example "N" and the value of N
         //

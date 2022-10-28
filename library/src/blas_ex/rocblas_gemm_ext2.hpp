@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2020-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  * ************************************************************************ */
 
 #pragma once
@@ -17,23 +35,23 @@ rocblas_status gemm_ext2_batched_template(rocblas_handle handle,
                                           rocblas_int    k,
                                           const Tc*      alpha,
                                           const Ti*      a,
-                                          rocblas_int    offset_a,
+                                          rocblas_stride offset_a,
                                           rocblas_int    row_stride_a,
                                           rocblas_int    col_stride_a,
                                           rocblas_stride batch_stride_a,
                                           const Ti*      b,
-                                          rocblas_int    offset_b,
+                                          rocblas_stride offset_b,
                                           rocblas_int    row_stride_b,
                                           rocblas_int    col_stride_b,
                                           rocblas_stride batch_stride_b,
                                           const Tc*      beta,
                                           const To*      c,
-                                          rocblas_int    offset_c,
+                                          rocblas_stride offset_c,
                                           rocblas_int    row_stride_c,
                                           rocblas_int    col_stride_c,
                                           rocblas_stride batch_stride_c,
                                           To*            d,
-                                          rocblas_int    offset_d,
+                                          rocblas_stride offset_d,
                                           rocblas_int    row_stride_d,
                                           rocblas_int    col_stride_d,
                                           rocblas_stride batch_stride_d,
@@ -83,23 +101,23 @@ rocblas_status gemm_ext2_typecasting(rocblas_handle handle,
                                      rocblas_int    k,
                                      const void*    alpha,
                                      const void*    a,
-                                     rocblas_int    offsetAin,
+                                     rocblas_stride offsetAin,
                                      rocblas_int    row_stride_a,
                                      rocblas_int    col_stride_a,
                                      rocblas_stride batch_stride_a,
                                      const void*    b,
-                                     rocblas_int    offsetBin,
+                                     rocblas_stride offsetBin,
                                      rocblas_int    row_stride_b,
                                      rocblas_int    col_stride_b,
                                      rocblas_stride batch_stride_b,
                                      const void*    beta,
                                      const void*    c,
-                                     rocblas_int    offsetCin,
+                                     rocblas_stride offsetCin,
                                      rocblas_int    row_stride_c,
                                      rocblas_int    col_stride_c,
                                      rocblas_stride batch_stride_c,
                                      void*          d,
-                                     rocblas_int    offsetDin,
+                                     rocblas_stride offsetDin,
                                      rocblas_int    row_stride_d,
                                      rocblas_int    col_stride_d,
                                      rocblas_stride batch_stride_d,
@@ -150,26 +168,26 @@ inline rocblas_status rocblas_gemm_ext2_template(rocblas_handle   handle,
                                                  const void*      alpha,
                                                  const void*      a,
                                                  rocblas_datatype a_type,
-                                                 rocblas_int      offsetAin,
+                                                 rocblas_stride   offsetAin,
                                                  rocblas_int      row_stride_a,
                                                  rocblas_int      col_stride_a,
                                                  rocblas_stride   batch_stride_a,
                                                  const void*      b,
                                                  rocblas_datatype b_type,
-                                                 rocblas_int      offsetBin,
+                                                 rocblas_stride   offsetBin,
                                                  rocblas_int      row_stride_b,
                                                  rocblas_int      col_stride_b,
                                                  rocblas_stride   batch_stride_b,
                                                  const void*      beta,
                                                  const void*      c,
                                                  rocblas_datatype c_type,
-                                                 rocblas_int      offsetCin,
+                                                 rocblas_stride   offsetCin,
                                                  rocblas_int      row_stride_c,
                                                  rocblas_int      col_stride_c,
                                                  rocblas_stride   batch_stride_c,
                                                  void*            d,
                                                  rocblas_datatype d_type,
-                                                 rocblas_int      offsetDin,
+                                                 rocblas_stride   offsetDin,
                                                  rocblas_int      row_stride_d,
                                                  rocblas_int      col_stride_d,
                                                  rocblas_stride   batch_stride_d,

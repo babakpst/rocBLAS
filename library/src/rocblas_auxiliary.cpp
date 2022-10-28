@@ -1,5 +1,23 @@
 /* ************************************************************************
- * Copyright 2016-2021 Advanced Micro Devices, Inc.
+ * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  *
  * ************************************************************************ */
 #include "handle.hpp"
@@ -64,6 +82,47 @@ catch(...)
 }
 
 /*******************************************************************************
+ * ! \brief get int8 datatype, can be int8_t or rocblas_int8x4
+ ******************************************************************************/
+extern "C" rocblas_status
+    rocblas_get_int8_type_for_hipblas(rocblas_handle                 handle,
+                                      rocblas_int8_type_for_hipblas* int8_type)
+try
+{
+    // if handle not valid
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    *int8_type = handle->rocblas_int8_type;
+    if(handle->layer_mode & rocblas_layer_mode_log_trace)
+        log_trace(handle, "rocblas_get_int8_type_for_hipblas", *int8_type);
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return exception_to_rocblas_status();
+}
+
+/*******************************************************************************
+ * ! \brief set int8 datatype, can be int8_t or rocblas_int8x4
+ ******************************************************************************/
+extern "C" rocblas_status rocblas_set_int8_type_for_hipblas(rocblas_handle                handle,
+                                                            rocblas_int8_type_for_hipblas int8_type)
+try
+{
+    // if handle not valid
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    if(handle->layer_mode & rocblas_layer_mode_log_trace)
+        log_trace(handle, "rocblas_set_int8_type_for_hipblas", int8_type);
+    handle->rocblas_int8_type = int8_type;
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return exception_to_rocblas_status();
+}
+
+/*******************************************************************************
  * ! \brief get atomics mode
  ******************************************************************************/
 extern "C" rocblas_status rocblas_get_atomics_mode(rocblas_handle        handle,
@@ -107,12 +166,38 @@ catch(...)
  ******************************************************************************/
 extern "C" rocblas_status rocblas_query_int8_layout_flag(rocblas_handle      handle,
                                                          rocblas_gemm_flags* flag)
+
+// This funnction is called by hipBLAS. The default is to use int8_t only
+// for gfx908. Other architectures use int8x4. This was the behavior before
+// ROCm 4.2. Support for int8_t for all architectures was provided by
+// by the following PRs for ROCm 4.2:
+// - Tensile PR 680
+// - rocBLAS-internal PR 1328
+// Setting rocblas_int8_type in the handle will result in this function
+// selecting int8_t or int8x4 regardless of architecture. It does this by
+// either setting or clearing the rocblas_gemm_flags_pack_int8x4 bit of flags.
 try
 {
-    // if handle not valid
     if(!handle)
         return rocblas_status_invalid_handle;
-    *flag = handle->getArch() == 908 ? rocblas_gemm_flags_none : rocblas_gemm_flags_pack_int8x4;
+
+    if(rocblas_int8_type_for_hipblas_default == handle->rocblas_int8_type)
+    {
+        *flag = handle->getArch() == 908 ? rocblas_gemm_flags_none : rocblas_gemm_flags_pack_int8x4;
+    }
+    else if(rocblas_int8_type_for_hipblas_int8 == handle->rocblas_int8_type)
+    {
+        *flag = rocblas_gemm_flags(*flag & (~rocblas_gemm_flags_pack_int8x4));
+    }
+    else if(rocblas_int8_type_for_hipblas_pack_int8x4 == handle->rocblas_int8_type)
+    {
+        *flag = rocblas_gemm_flags(*flag | rocblas_gemm_flags_pack_int8x4);
+    }
+    else
+    {
+        return rocblas_status_invalid_value;
+    }
+    // clear the rocblas_gemm_flags_pack_int8x4 bit
     if(handle->layer_mode & rocblas_layer_mode_log_trace)
         log_trace(handle, "rocblas_query_int8_layout_flag", *flag);
     return rocblas_status_success;
@@ -229,14 +314,16 @@ catch(...)
 constexpr size_t      VEC_BUFF_MAX_BYTES = 1048576;
 constexpr rocblas_int NB_X               = 256;
 
-ROCBLAS_KERNEL void rocblas_copy_void_ptr_vector_kernel(rocblas_int n,
-                                                        rocblas_int elem_size,
-                                                        const void* x,
-                                                        rocblas_int incx,
-                                                        void*       y,
-                                                        rocblas_int incy)
+template <rocblas_int NB>
+ROCBLAS_KERNEL(NB)
+rocblas_copy_void_ptr_vector_kernel(rocblas_int n,
+                                    rocblas_int elem_size,
+                                    const void* x,
+                                    rocblas_int incx,
+                                    void*       y,
+                                    rocblas_int incy)
 {
-    size_t tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
+    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if(tid < n)
     {
         memcpy(
@@ -332,7 +419,7 @@ try
                 // host buffer -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, t_h, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device vector
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
                                    grid,
                                    threads,
                                    0,
@@ -354,7 +441,7 @@ try
                 // contiguous host vector -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, x_h_start, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device vector
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
                                    grid,
                                    threads,
                                    0,
@@ -451,7 +538,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device vector -> device buffer
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
                                    grid,
                                    threads,
                                    0,
@@ -498,7 +585,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device vector -> device buffer
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
                                    grid,
                                    threads,
                                    0,
@@ -616,16 +703,18 @@ constexpr size_t      MAT_BUFF_MAX_BYTES = 1048576;
 constexpr rocblas_int MATRIX_DIM_X       = 128;
 constexpr rocblas_int MATRIX_DIM_Y       = 8;
 
-ROCBLAS_KERNEL void rocblas_copy_void_ptr_matrix_kernel(rocblas_int rows,
-                                                        rocblas_int cols,
-                                                        size_t      elem_size,
-                                                        const void* a,
-                                                        rocblas_int lda,
-                                                        void*       b,
-                                                        rocblas_int ldb)
+template <rocblas_int DIM_X, rocblas_int DIM_Y>
+ROCBLAS_KERNEL(DIM_X* DIM_Y)
+rocblas_copy_void_ptr_matrix_kernel(rocblas_int rows,
+                                    rocblas_int cols,
+                                    size_t      elem_size,
+                                    const void* a,
+                                    rocblas_int lda,
+                                    void*       b,
+                                    rocblas_int ldb)
 {
-    rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
+    rocblas_int tx = blockIdx.x * blockDim.x + threadIdx.x;
+    rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     if(tx < rows && ty < cols)
         memcpy((char*)b + (tx + ldb * ty) * elem_size,
@@ -722,18 +811,19 @@ try
                 // host buffer -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, t_h, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device matrix
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   rows,
-                                   n_cols_max,
-                                   elem_size,
-                                   t_d,
-                                   rows,
-                                   b_d_start,
-                                   ldb);
+                hipLaunchKernelGGL(
+                    (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
+                    grid,
+                    threads,
+                    0,
+                    0,
+                    rows,
+                    n_cols_max,
+                    elem_size,
+                    t_d,
+                    rows,
+                    b_d_start,
+                    ldb);
             }
             else if(lda == rows && ldb != rows)
             {
@@ -745,18 +835,19 @@ try
                 // contiguous host matrix -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, a_h_start, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device matrix
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   rows,
-                                   n_cols_max,
-                                   elem_size,
-                                   t_d,
-                                   rows,
-                                   b_d_start,
-                                   ldb);
+                hipLaunchKernelGGL(
+                    (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
+                    grid,
+                    threads,
+                    0,
+                    0,
+                    rows,
+                    n_cols_max,
+                    elem_size,
+                    t_d,
+                    rows,
+                    b_d_start,
+                    ldb);
             }
             else if(lda != rows && ldb == rows)
             {
@@ -861,18 +952,19 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device matrix -> device buffer
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   rows,
-                                   n_cols_max,
-                                   elem_size,
-                                   a_d_start,
-                                   lda,
-                                   t_d,
-                                   rows);
+                hipLaunchKernelGGL(
+                    (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
+                    grid,
+                    threads,
+                    0,
+                    0,
+                    rows,
+                    n_cols_max,
+                    elem_size,
+                    a_d_start,
+                    lda,
+                    t_d,
+                    rows);
                 // device buffer -> host buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_h, t_d, contig_size, hipMemcpyDeviceToHost));
                 // host buffer -> non-contiguous host matrix
@@ -908,18 +1000,19 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device matrix -> device buffer
-                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   rows,
-                                   n_cols_max,
-                                   elem_size,
-                                   a_d_start,
-                                   lda,
-                                   t_d,
-                                   rows);
+                hipLaunchKernelGGL(
+                    (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
+                    grid,
+                    threads,
+                    0,
+                    0,
+                    rows,
+                    n_cols_max,
+                    elem_size,
+                    a_d_start,
+                    lda,
+                    t_d,
+                    rows);
                 // device temp buffer -> contiguous host matrix
                 PRINT_IF_HIP_ERROR(hipMemcpy(b_h_start, t_d, contig_size, hipMemcpyDeviceToHost));
             }
