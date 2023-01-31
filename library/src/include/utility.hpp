@@ -354,6 +354,7 @@ constexpr const char* rocblas_gemm_flags_to_string(rocblas_gemm_flags type)
     case rocblas_gemm_flags_pack_int8x4:  return "pack_int";
     case rocblas_gemm_flags_use_cu_efficiency:  return "use_cu_efficiency";
     case rocblas_gemm_flags_fp16_alt_impl:  return "fp16_alt_impl";
+    case rocblas_gemm_flags_check_solution_index: return "check_solution_index";
     }
     return "invalid";
 }
@@ -467,6 +468,9 @@ typedef enum rocblas_check_matrix_type_
     // Triangular matrix
     rocblas_client_triangular_matrix,
 
+    // Diagonally dominant triangular matrix
+    rocblas_client_diagonally_dominant_triangular_matrix,
+
 } rocblas_check_matrix_type;
 
 /*******************************************************************************
@@ -530,6 +534,21 @@ __host__ __device__ inline bool rocblas_isinf(rocblas_half arg)
         uint16_t     data;
     } x = {arg};
     return (~x.data & 0x7c00) == 0 && (x.data & 0x3ff) == 0;
+}
+
+/*******************************************************************************
+* \brief  returns max value for type
+********************************************************************************/
+
+template <typename T>
+__host__ __device__ inline void rocblas_set_max_value(T& val)
+{
+    val = std::numeric_limits<T>::max();
+}
+
+__host__ __device__ inline void rocblas_set_max_value(rocblas_half& val)
+{
+    *((short*)(&val)) = 0x7c00;
 }
 
 /*******************************************************************************
@@ -657,6 +676,47 @@ struct rocblas_real_t_impl<std::complex<T>>
 
 template <typename T>
 using real_t = typename rocblas_real_t_impl<T>::type;
+
+// Get array2 types from base type
+template <typename T, typename = void>
+struct rocblas_array2_t_impl
+{
+    using type = T;
+};
+
+template <>
+struct rocblas_array2_t_impl<float>
+{
+    using type = float2;
+};
+
+template <>
+struct rocblas_array2_t_impl<double>
+{
+    using type = double2;
+};
+
+template <>
+struct rocblas_array2_t_impl<rocblas_half>
+{
+    using type = rocblas_half2;
+};
+
+template <typename T>
+using array2_t = typename rocblas_array2_t_impl<T>::type;
+
+// rocblas_is_array2<T> returns true iff T is hip vector type of size 2
+template <typename T>
+static constexpr bool rocblas_is_array2 = false;
+
+template <>
+ROCBLAS_CLANG_STATIC constexpr bool rocblas_is_array2<rocblas_half2> = true;
+
+template <>
+ROCBLAS_CLANG_STATIC constexpr bool rocblas_is_array2<float2> = true;
+
+template <>
+ROCBLAS_CLANG_STATIC constexpr bool rocblas_is_array2<double2> = true;
 
 // Output rocblas_half value
 inline std::ostream& operator<<(std::ostream& os, rocblas_half x)

@@ -279,10 +279,10 @@ void testing_gemm(const Arguments& arg)
 
         // ROCBLAS rocblas_pointer_mode_host
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-
+        handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR(rocblas_gemm_fn(
             handle, transA, transB, M, N, K, &h_alpha, dA, lda, dB, ldb, &h_beta, dC, ldc));
-
+        handle.post_test(arg);
         CHECK_HIP_ERROR(hC_1.transfer_from(dC));
 
         // gold has copy of hC1
@@ -316,7 +316,12 @@ void testing_gemm(const Arguments& arg)
         // check host error and norm
         if(arg.unit_check)
         {
-            if(std::is_same<T, rocblas_half>{} && K > 10000)
+            if(std::is_same<T, rocblas_half>{} && (rocblas_handle(handle)->getArchMajor() == 11))
+            {
+                const double tol = K * sum_error_tolerance_for_gfx11<T, T, T>;
+                near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+            }
+            else if(std::is_same<T, rocblas_half>{} && K > 10000)
             {
                 // For large K, rocblas_half tends to diverge proportional to K
                 // Tolerance is slightly greater than 1 / 1024.0
@@ -340,7 +345,12 @@ void testing_gemm(const Arguments& arg)
 
         if(arg.unit_check)
         {
-            if(std::is_same<T, rocblas_half>{} && K > 10000)
+            if(std::is_same<T, rocblas_half>{} && (rocblas_handle(handle)->getArchMajor() == 11))
+            {
+                const double tol = K * sum_error_tolerance_for_gfx11<T, T, T>;
+                near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+            }
+            else if(std::is_same<T, rocblas_half>{} && K > 10000)
             {
                 // For large K, rocblas_half tends to diverge proportional to K
                 // Tolerance is slightly greater than 1 / 1024.0

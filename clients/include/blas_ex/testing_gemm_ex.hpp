@@ -517,6 +517,7 @@ void testing_gemm_ex(const Arguments& arg)
 
         // ROCBLAS rocblas_pointer_mode_host
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR(rocblas_gemm_ex_fn(handle,
                                                transA,
                                                transB,
@@ -541,7 +542,7 @@ void testing_gemm_ex(const Arguments& arg)
                                                algo,
                                                solution_index,
                                                flags));
-
+        handle.post_test(arg);
         // copy output from device to CPU
         CHECK_HIP_ERROR(hD_1.transfer_from(dDref));
 
@@ -593,7 +594,12 @@ void testing_gemm_ex(const Arguments& arg)
 
         if(arg.unit_check)
         {
-            if(std::is_same<Tc, rocblas_half>{} && K > 10000)
+            if((rocblas_handle(handle)->getArchMajor() == 11) && (sizeof(Ti) == 2))
+            {
+                const double tol = K * sum_error_tolerance_for_gfx11<Tc, Ti, To>;
+                near_check_general<To, To_hpa>(M, N, ldd, hD_gold, hD_1, tol);
+            }
+            else if(std::is_same<Tc, rocblas_half>{} && K > 10000)
             {
                 // For large K, rocblas_half tends to diverge proportional to K
                 // Tolerance is slightly greater than 1 / 1024.0
@@ -618,7 +624,12 @@ void testing_gemm_ex(const Arguments& arg)
 
         if(arg.unit_check)
         {
-            if(std::is_same<Tc, rocblas_half>{} && K > 10000)
+            if((rocblas_handle(handle)->getArchMajor() == 11) && (sizeof(Ti) == 2))
+            {
+                const double tol = K * sum_error_tolerance_for_gfx11<Tc, Ti, To>;
+                near_check_general<To, To_hpa>(M, N, ldd, hD_gold, hD_1, tol);
+            }
+            else if(std::is_same<Tc, rocblas_half>{} && K > 10000)
             {
                 // For large K, rocblas_half tends to diverge proportional to K
                 // Tolerance is slightly greater than 1 / 1024.0

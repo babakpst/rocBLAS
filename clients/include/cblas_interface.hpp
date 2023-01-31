@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -2762,6 +2762,41 @@ inline void cblas_her2k(rocblas_fill                  uplo,
                  ldc);
 }
 
+// cblas_geam_min_plus doesn't exist. implementation in cpp
+template <typename T>
+void cblas_geam_min_plus(rocblas_operation transA,
+                         rocblas_operation transB,
+                         rocblas_int       m,
+                         rocblas_int       n,
+                         rocblas_int       k,
+                         const T           alpha,
+                         const T*          A,
+                         rocblas_int       lda,
+                         const T*          B,
+                         rocblas_int       ldb,
+                         const T           beta,
+                         const T*          C,
+                         rocblas_int       ldc,
+                         T*                D,
+                         rocblas_int       ldd);
+
+template <typename T>
+void cblas_geam_plus_min(rocblas_operation transA,
+                         rocblas_operation transB,
+                         rocblas_int       m,
+                         rocblas_int       n,
+                         rocblas_int       k,
+                         const T           alpha,
+                         const T*          A,
+                         rocblas_int       lda,
+                         const T*          B,
+                         rocblas_int       ldb,
+                         const T           beta,
+                         const T*          C,
+                         rocblas_int       ldc,
+                         T*                D,
+                         rocblas_int       ldd);
+
 // cblas_herkx doesn't exist. implementation in cpp
 template <typename T, typename U = real_t<T>>
 void cblas_herkx(rocblas_fill      uplo,
@@ -3027,13 +3062,5 @@ inline void cblas_trmm(rocblas_side                  side,
                 lda,
                 B,
                 ldb);
-}
-
-// potrf
-template <typename T>
-void cblas_potrf(char uplo, rocblas_int m, T* A, rocblas_int lda)
-{
-    rocblas_int info;
-    lapack_xpotrf(char2rocblas_fill(uplo), m, A, lda, info);
 }
 /* ============================================================================================ */

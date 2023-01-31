@@ -1,5 +1,5 @@
 # ########################################################################
-# Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -21,8 +21,6 @@
 # ########################################################################
 
 cmake_minimum_required( VERSION 3.16.8 )
-
-add_definitions(-D_ROCBLAS_INTERNAL_BFLOAT16_)
 
 # This has to be initialized before the project() command appears
 # Set the default of CMAKE_BUILD_TYPE to be release, unless user specifies with -D.  MSVC_IDE does not use CMAKE_BUILD_TYPE
@@ -61,8 +59,8 @@ else()
 endif()
 
 if( SKIP_LIBRARY )
-  include_directories(${ROCBLAS_LIBRARY_DIR}/include)
-  include_directories(${ROCBLAS_LIBRARY_DIR}/include/internal)
+  include_directories(${ROCBLAS_LIBRARY_DIR}/include/rocblas)
+  include_directories(${ROCBLAS_LIBRARY_DIR}/include/rocblas/internal)
 else()
   include_directories(${CMAKE_BINARY_DIR}/include/rocblas)
   include_directories(${CMAKE_BINARY_DIR}/include/rocblas/internal)
@@ -77,7 +75,7 @@ find_package(OpenMP)
 
 if (TARGET OpenMP::OpenMP_CXX)
   set( COMMON_LINK_LIBS "OpenMP::OpenMP_CXX")
-  list( APPEND COMMON_LINK_LIBS "-L${HIP_CLANG_ROOT}/lib")
+  list( APPEND COMMON_LINK_LIBS "-L\"${HIP_CLANG_ROOT}/lib\"")
   if (NOT WIN32)
     list( APPEND COMMON_LINK_LIBS "-Wl,-rpath=${HIP_CLANG_ROOT}/lib")
   endif()
@@ -115,9 +113,15 @@ endif( )
 if( BUILD_CLIENTS_BENCHMARKS OR BUILD_CLIENTS_TESTS)
   if ( NOT WIN32 )
     if (LINK_BLIS)
-      set( BLIS_INCLUDE_DIR ${BUILD_DIR}/deps/blis/include/blis )
-      set( BLIS_CPP ../common/blis_interface.cpp )
-      set( BLAS_LIBRARY ${BUILD_DIR}/deps/blis/lib/libblis.a )
+      if(EXISTS "${BUILD_DIR}/deps/blis/lib/libblis.a")
+        set( BLIS_INCLUDE_DIR ${BUILD_DIR}/deps/blis/include/blis )
+        set( BLIS_CPP ../common/blis_interface.cpp )
+        set( BLAS_LIBRARY ${BUILD_DIR}/deps/blis/lib/libblis.a )
+      elseif(EXISTS "/usr/local/lib/libblis.a")
+        set( BLIS_INCLUDE_DIR /usr/local/include/blis )
+        set( BLIS_CPP ../common/blis_interface.cpp )
+        set( BLAS_LIBRARY /usr/local/lib/libblis.a )
+      endif()
     else()
       set( BLAS_LIBRARY "blas" )
     endif()

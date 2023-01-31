@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,6 +23,7 @@
 #include "logging.hpp"
 #include "rocblas.h"
 #include "rocblas_gemm_ex.hpp"
+#include "rocblas_gemm_ex_get_solutions.hpp"
 #include "utility.hpp"
 
 extern "C" rocblas_status rocblas_gemm_strided_batched_ex(rocblas_handle    handle,
@@ -67,7 +68,7 @@ try
 
     // Copy alpha and beta to host if on device
     rocblas_union_t alpha_h, beta_h;
-    RETURN_IF_ROCBLAS_ERROR(copy_alpha_beta_to_host_if_on_device(
+    RETURN_IF_ROCBLAS_ERROR(rocblas_copy_alpha_beta_to_host_if_on_device(
         handle, alpha, beta, alpha_h, beta_h, k, compute_type));
     auto saved_pointer_mode = handle->push_pointer_mode(rocblas_pointer_mode_host);
 
@@ -244,26 +245,26 @@ try
         }
     }
 
-    auto validArgs = validateArgs(handle,
-                                  trans_a,
-                                  trans_b,
-                                  m,
-                                  n,
-                                  k,
-                                  alpha,
-                                  a,
-                                  lda,
-                                  b,
-                                  ldb,
-                                  beta,
-                                  c,
-                                  c_type,
-                                  ldc,
-                                  d,
-                                  d_type,
-                                  ldd,
-                                  compute_type,
-                                  batch_count);
+    auto validArgs = rocblas_validateArgs(handle,
+                                          trans_a,
+                                          trans_b,
+                                          m,
+                                          n,
+                                          k,
+                                          alpha,
+                                          a,
+                                          lda,
+                                          b,
+                                          ldb,
+                                          beta,
+                                          c,
+                                          c_type,
+                                          ldc,
+                                          d,
+                                          d_type,
+                                          ldd,
+                                          compute_type,
+                                          batch_count);
 
     if(validArgs == rocblas_status_continue)
     {
@@ -308,9 +309,122 @@ try
                                            stride_d,
                                            batch_count,
                                            compute_type,
+                                           algo,
+                                           solution_index,
                                            flags);
 }
 catch(...)
 {
     return exception_to_rocblas_status();
+}
+
+extern "C" rocblas_status
+    rocblas_gemm_strided_batched_ex_get_solutions(rocblas_handle    handle,
+                                                  rocblas_operation trans_a,
+                                                  rocblas_operation trans_b,
+                                                  rocblas_int       m,
+                                                  rocblas_int       n,
+                                                  rocblas_int       k,
+                                                  const void*       alpha,
+                                                  const void*       a,
+                                                  rocblas_datatype  a_type,
+                                                  rocblas_int       lda,
+                                                  rocblas_stride    stride_a,
+                                                  const void*       b,
+                                                  rocblas_datatype  b_type,
+                                                  rocblas_int       ldb,
+                                                  rocblas_stride    stride_b,
+                                                  const void*       beta,
+                                                  const void*       c,
+                                                  rocblas_datatype  c_type,
+                                                  rocblas_int       ldc,
+                                                  rocblas_stride    stride_c,
+                                                  void*             d,
+                                                  rocblas_datatype  d_type,
+                                                  rocblas_int       ldd,
+                                                  rocblas_stride    stride_d,
+                                                  rocblas_int       batch_count,
+                                                  rocblas_datatype  compute_type,
+                                                  rocblas_gemm_algo algo,
+                                                  uint32_t          flags,
+                                                  rocblas_int*      list_array,
+                                                  rocblas_int*      list_size)
+{
+    try
+    {
+        if(!handle)
+            return rocblas_status_invalid_handle;
+
+        const bool HPA = compute_type == rocblas_datatype_f32_r
+                         && (a_type == rocblas_datatype_f16_r || a_type == rocblas_datatype_bf16_r);
+
+        if(!HPA)
+            RETURN_ZERO_DEVICE_MEMORY_SIZE_IF_QUERIED(handle);
+
+        auto validArgs = rocblas_validateArgs(handle,
+                                              trans_a,
+                                              trans_b,
+                                              m,
+                                              n,
+                                              k,
+                                              alpha,
+                                              a,
+                                              lda,
+                                              b,
+                                              ldb,
+                                              beta,
+                                              c,
+                                              c_type,
+                                              ldc,
+                                              d,
+                                              d_type,
+                                              ldd,
+                                              compute_type,
+                                              batch_count);
+
+        if(validArgs != rocblas_status_continue)
+        {
+            if(validArgs == rocblas_status_success)
+                RETURN_ZERO_DEVICE_MEMORY_SIZE_IF_QUERIED(handle);
+            return validArgs;
+        }
+
+        return rocblas_gemm_ex_get_solutions_template<false>(handle,
+                                                             trans_a,
+                                                             trans_b,
+                                                             m,
+                                                             n,
+                                                             k,
+                                                             alpha,
+                                                             a,
+                                                             a_type,
+                                                             0,
+                                                             lda,
+                                                             stride_a,
+                                                             b,
+                                                             b_type,
+                                                             0,
+                                                             ldb,
+                                                             stride_b,
+                                                             beta,
+                                                             c,
+                                                             c_type,
+                                                             0,
+                                                             ldc,
+                                                             stride_c,
+                                                             d,
+                                                             d_type,
+                                                             0,
+                                                             ldd,
+                                                             stride_d,
+                                                             batch_count,
+                                                             compute_type,
+                                                             flags,
+                                                             list_array,
+                                                             list_size);
+    }
+    catch(...)
+    {
+        return exception_to_rocblas_status();
+    }
 }

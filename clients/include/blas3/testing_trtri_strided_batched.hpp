@@ -253,12 +253,16 @@ void testing_trtri_strided_batched(const Arguments& arg)
         gpu_time_used = get_time_us_sync(stream); // in microseconds
     }
 
+    handle.pre_test(arg);
+
     CHECK_ROCBLAS_ERROR(rocblas_trtri_strided_batched_fn(
         handle, uplo, diag, N, dA, lda, stride_A, dinvA, lda, stride_A, batch_count));
 
     // Test in place
     CHECK_ROCBLAS_ERROR(rocblas_trtri_strided_batched_fn(
         handle, uplo, diag, N, dA, lda, stride_A, dA, lda, stride_A, batch_count));
+
+    handle.post_test(arg);
 
     if(arg.timing)
     {
@@ -295,7 +299,7 @@ void testing_trtri_strided_batched(const Arguments& arg)
 
         if(arg.unit_check)
         {
-            const double rel_error = get_epsilon<T>() * 1000;
+            const double rel_error = trtri_tolerance<T>(N);
             near_check_general<T>(N, N, lda, stride_A, hB, hA, batch_count, rel_error);
             near_check_general<T>(N, N, lda, stride_A, hB, hA_2, batch_count, rel_error);
         }

@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -199,6 +199,8 @@ rocblas_status gemm_ex_batched_template(rocblas_handle     handle,
                                         rocblas_int        ldd,
                                         rocblas_stride     stride_d,
                                         rocblas_int        batch_count,
+                                        rocblas_gemm_algo  algo,
+                                        int32_t            solution_index,
                                         rocblas_gemm_flags flags)
 {
 #if 0
@@ -228,7 +230,7 @@ rocblas_status gemm_ex_batched_template(rocblas_handle     handle,
         offset_b, beta,    nullptr,  c,        ldc,         stride_c, offset_c, nullptr,
         d,        ldd,     stride_d, offset_d, batch_count, false,    flags};
 
-    return runContractionProblem(problem);
+    return runContractionProblem(problem, algo, solution_index);
 }
 
 template <typename Ti, typename To, typename Tc>
@@ -257,6 +259,8 @@ rocblas_status gemm_ex_batched_template(rocblas_handle     handle,
                                         rocblas_int        ldd,
                                         rocblas_stride     stride_d,
                                         rocblas_int        batch_count,
+                                        rocblas_gemm_algo  algo,
+                                        int32_t            solution_index,
                                         rocblas_gemm_flags flags)
 {
     RocblasContractionProblem<Ti, To, Tc> problem{
@@ -265,7 +269,7 @@ rocblas_status gemm_ex_batched_template(rocblas_handle     handle,
         offset_b, beta,    c,        nullptr,  ldc,         stride_c, offset_c, d,
         nullptr,  ldd,     stride_d, offset_d, batch_count, true,     flags};
 
-    return runContractionProblem(problem);
+    return runContractionProblem(problem, algo, solution_index);
 }
 
 template <bool BATCHED, typename Ti, typename To = Ti, typename Tc = To>
@@ -294,11 +298,13 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
                                    rocblas_int        ldd,
                                    rocblas_stride     stride_d,
                                    rocblas_int        batch_count,
+                                   rocblas_gemm_algo  algo,
+                                   int32_t            solution_index,
                                    rocblas_gemm_flags flags)
 {
     Tc alpha_h, beta_h;
     RETURN_IF_ROCBLAS_ERROR(
-        copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h, beta_h, k));
+        rocblas_copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h, beta_h, k));
 
     auto           check_numerics = handle->check_numerics;
     rocblas_status status         = rocblas_status_success;
@@ -366,6 +372,8 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
                                           ldd,
                                           stride_d,
                                           batch_count,
+                                          algo,
+                                          solution_index,
                                           flags);
         if(status != rocblas_status_success)
             return status;
@@ -457,6 +465,8 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
                                           ldd,
                                           stride_d,
                                           batch_count,
+                                          algo,
+                                          solution_index,
                                           flags);
         if(status != rocblas_status_success)
             return status;
@@ -493,26 +503,26 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
 }
 
 template <typename T>
-inline rocblas_status validateArgs(rocblas_handle    handle,
-                                   rocblas_operation trans_a,
-                                   rocblas_operation trans_b,
-                                   rocblas_int       m,
-                                   rocblas_int       n,
-                                   rocblas_int       k,
-                                   const T*          alpha,
-                                   const void*       a,
-                                   rocblas_int       ld_a,
-                                   const void*       b,
-                                   rocblas_int       ld_b,
-                                   const T*          beta,
-                                   const void*       c,
-                                   rocblas_datatype  c_type,
-                                   rocblas_int       ld_c,
-                                   const void*       d,
-                                   rocblas_datatype  d_type,
-                                   rocblas_int       ld_d,
-                                   rocblas_datatype  compute_type,
-                                   rocblas_int       batch_count = 1)
+inline rocblas_status rocblas_validateArgs(rocblas_handle    handle,
+                                           rocblas_operation trans_a,
+                                           rocblas_operation trans_b,
+                                           rocblas_int       m,
+                                           rocblas_int       n,
+                                           rocblas_int       k,
+                                           const T*          alpha,
+                                           const void*       a,
+                                           rocblas_int       ld_a,
+                                           const void*       b,
+                                           rocblas_int       ld_b,
+                                           const T*          beta,
+                                           const void*       c,
+                                           rocblas_datatype  c_type,
+                                           rocblas_int       ld_c,
+                                           const void*       d,
+                                           rocblas_datatype  d_type,
+                                           rocblas_int       ld_d,
+                                           rocblas_datatype  compute_type,
+                                           rocblas_int       batch_count = 1)
 {
     // handle must be valid
     if(!handle)
@@ -653,6 +663,8 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
                                         rocblas_stride    stride_d,
                                         rocblas_int       batch_count,
                                         rocblas_datatype  compute_type,
+                                        rocblas_gemm_algo algo,
+                                        int32_t           solution_index,
                                         uint32_t          flags)
 {
     // Note: k==0 is not an early exit, since C still needs to be multiplied by beta
@@ -672,7 +684,7 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
 #define EX_TYPECASTING_PARM                                                                    \
     handle, trans_a, trans_b, m, n, k, alpha, a, offsetAin, lda, stride_a, b, offsetBin, ldb,  \
         stride_b, beta, c, offsetCin, ldc, stride_c, d, offsetDin, ldd, stride_d, batch_count, \
-        rocblas_gemm_flags(flags)
+        algo, solution_index, rocblas_gemm_flags(flags)
 
     if(a_type == rocblas_datatype_f64_r && b_type == rocblas_datatype_f64_r
        && c_type == rocblas_datatype_f64_r && d_type == rocblas_datatype_f64_r
@@ -789,28 +801,34 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
 
 // Copy alpha and beta to host if on device
 template <typename T>
-rocblas_status copy_alpha_beta_to_host_if_on_device(rocblas_handle   handle,
-                                                    const T*&        alpha,
-                                                    const T*&        beta,
-                                                    rocblas_union_t& alpha_h,
-                                                    rocblas_union_t& beta_h,
-                                                    rocblas_int      k,
-                                                    rocblas_datatype compute_type)
+rocblas_status rocblas_copy_alpha_beta_to_host_if_on_device(rocblas_handle   handle,
+                                                            const T*&        alpha,
+                                                            const T*&        beta,
+                                                            rocblas_union_t& alpha_h,
+                                                            rocblas_union_t& beta_h,
+                                                            rocblas_int      k,
+                                                            rocblas_datatype compute_type)
 {
     switch(compute_type)
     {
     case rocblas_datatype_f16_r:
-        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.h, beta_h.h, k);
+        return rocblas_copy_alpha_beta_to_host_if_on_device(
+            handle, alpha, beta, alpha_h.h, beta_h.h, k);
     case rocblas_datatype_f32_r:
-        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.s, beta_h.s, k);
+        return rocblas_copy_alpha_beta_to_host_if_on_device(
+            handle, alpha, beta, alpha_h.s, beta_h.s, k);
     case rocblas_datatype_f64_r:
-        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.d, beta_h.d, k);
+        return rocblas_copy_alpha_beta_to_host_if_on_device(
+            handle, alpha, beta, alpha_h.d, beta_h.d, k);
     case rocblas_datatype_i32_r:
-        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.i, beta_h.i, k);
+        return rocblas_copy_alpha_beta_to_host_if_on_device(
+            handle, alpha, beta, alpha_h.i, beta_h.i, k);
     case rocblas_datatype_f32_c:
-        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.c, beta_h.c, k);
+        return rocblas_copy_alpha_beta_to_host_if_on_device(
+            handle, alpha, beta, alpha_h.c, beta_h.c, k);
     case rocblas_datatype_f64_c:
-        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.z, beta_h.z, k);
+        return rocblas_copy_alpha_beta_to_host_if_on_device(
+            handle, alpha, beta, alpha_h.z, beta_h.z, k);
     default:
         return rocblas_status_not_implemented;
     }

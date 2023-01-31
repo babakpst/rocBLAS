@@ -338,7 +338,7 @@ void testing_gemm_strided_batched(const Arguments& arg)
         // ROCBLAS rocblas_pointer_mode_host
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
         CHECK_HIP_ERROR(dC.transfer_from(hC_1));
-
+        handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR(rocblas_gemm_strided_batched_fn(handle,
                                                             transA,
                                                             transB,
@@ -357,6 +357,7 @@ void testing_gemm_strided_batched(const Arguments& arg)
                                                             ldc,
                                                             stride_c,
                                                             batch_count));
+        handle.post_test(arg);
 
         CHECK_HIP_ERROR(hC_1.transfer_from(dC));
 
@@ -400,7 +401,13 @@ void testing_gemm_strided_batched(const Arguments& arg)
 
         if(arg.unit_check)
         {
-            if(std::is_same<T, rocblas_half>{} && K > 10000)
+            if(std::is_same<T, rocblas_half>{} && (rocblas_handle(handle)->getArchMajor() == 11))
+            {
+                const double tol = K * sum_error_tolerance_for_gfx11<T, T, T>;
+                near_check_general<T>(M, N, ldc, stride_c, hC_gold, hC_1, batch_count, tol);
+                near_check_general<T>(M, N, ldc, stride_c, hC_gold, hC_2, batch_count, tol);
+            }
+            else if(std::is_same<T, rocblas_half>{} && K > 10000)
             {
                 // For large K, rocblas_half tends to diverge proportional to K
                 // Tolerance is slightly greater than 1 / 1024.0
