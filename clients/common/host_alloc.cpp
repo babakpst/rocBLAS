@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2022-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -29,10 +29,43 @@
 #include <string.h>
 #endif
 
+#include <map>
+#include <mutex>
 #include <stdlib.h>
 
 #include "host_alloc.hpp"
 #include "rocblas_test.hpp"
+
+// light weight memory tracking for threshold limit on total use
+static size_t                  mem_used{0};
+static std::map<void*, size_t> mem_allocated;
+static std::mutex              mem_mutex;
+
+inline void alloc_ptr_use(void* ptr, size_t size)
+{
+    std::lock_guard<std::mutex> lock(mem_mutex);
+    if(ptr)
+    {
+        mem_allocated[ptr] = size;
+        mem_used += size;
+    }
+}
+
+inline void free_ptr_use(void* ptr)
+{
+    std::lock_guard<std::mutex> lock(mem_mutex);
+    if(ptr && mem_allocated[ptr])
+    {
+        mem_used -= mem_allocated[ptr];
+        mem_allocated.erase(ptr);
+    }
+}
+
+size_t host_bytes_allocated()
+{
+    std::lock_guard<std::mutex> lock(mem_mutex);
+    return mem_used;
+}
 
 //!
 //! @brief Memory free helper.  Returns kB or -1 if unknown.
@@ -59,10 +92,18 @@ ptrdiff_t host_bytes_available()
         return n_bytes;
     }
 
+    static const char* mem_token     = "MemFree";
+    static auto*       mem_free_type = getenv("ROCBLAS_CLIENT_ALLOC_AVAILABLE");
+    if(mem_free_type)
+    {
+        mem_token = "MemAvail"; // MemAvailable
+    }
+    int mem_token_len = strlen(mem_token);
+
     while(fgets(buf, BUF_MAX, fp) != NULL)
     {
-        const char cMemTok[] = "MemFree"; // Can consider MemAvailable if too many SKIPS occur
-        if(!strncmp(buf, cMemTok, sizeof(cMemTok) - 1))
+        // set env ROCBLAS_CLIENT_ALLOC_AVAILABLE to use MemAvailable if too many SKIPS occur
+        if(!strncmp(buf, mem_token, mem_token_len))
         {
             sscanf(buf, "%*s %td", &n_bytes); // kB assumed as 3rd column and ignored
             n_bytes *= 1024;
@@ -95,8 +136,34 @@ inline bool host_mem_safe(size_t n_bytes)
     }
 
     constexpr size_t threshold = 100 * 1024 * 1024; // 100 MB
+
+    static size_t client_ram_limit = 0;
+
+    static int once = [&] {
+        auto* alloc_limit = getenv("ROCBLAS_CLIENT_RAM_GB_LIMIT");
+        if(alloc_limit)
+        {
+            size_t mem_limit;
+            client_ram_limit = sscanf(alloc_limit, "%zu", &mem_limit) == 1 ? mem_limit : 0;
+            client_ram_limit <<= 30; // B to GB
+        }
+        return 0;
+    }();
+
     if(n_bytes > threshold)
     {
+        if(client_ram_limit)
+        {
+            if(host_bytes_allocated() + n_bytes > client_ram_limit)
+            {
+                rocblas_cerr << "Warning: skipped allocating " << n_bytes << " bytes ("
+                             << (n_bytes >> 30) << " GB) as total would be more than client limit ("
+                             << (client_ram_limit >> 30) << " GB)" << std::endl;
+
+                return false;
+            }
+        }
+
         ptrdiff_t avail_bytes = host_bytes_available(); // negative if unknown
         if(avail_bytes >= 0 && n_bytes > avail_bytes)
         {
@@ -134,6 +201,8 @@ void* host_malloc(size_t size)
         if(value != -1 && ptr)
             memset(ptr, value, size);
 
+        alloc_ptr_use(ptr, size);
+
         return ptr;
     }
     else
@@ -143,7 +212,17 @@ void* host_malloc(size_t size)
 void* host_calloc(size_t nmemb, size_t size)
 {
     if(host_mem_safe(nmemb * size))
-        return calloc(nmemb, size);
+    {
+        void* ptr = calloc(nmemb, size);
+        alloc_ptr_use(ptr, size);
+        return ptr;
+    }
     else
         return nullptr;
+}
+
+void host_free(void* ptr)
+{
+    free(ptr);
+    free_ptr_use(ptr);
 }

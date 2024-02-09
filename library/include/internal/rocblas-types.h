@@ -27,11 +27,9 @@
 #ifndef ROCBLAS_TYPES_H
 #define ROCBLAS_TYPES_H
 
-// Request _Float16 type extension
-#define __STDC_WANT_IEC_60559_TYPES_EXT__ 1
-
 #include "rocblas-export.h"
 #include "rocblas_bfloat16.h"
+#include "rocblas_float8.h"
 #include <float.h>
 #include <math.h>
 #include <stdbool.h>
@@ -47,7 +45,12 @@
 #endif
 
 #define ROCBLAS_INTERNAL_EXPORT ROCBLAS_EXPORT ROCBLAS_INTERNAL_DEPRECATION
+
 #define ROCBLAS_INTERNAL_EXPORT_NOINLINE \
+    ROCBLAS_EXPORT __attribute__((noinline)) ROCBLAS_INTERNAL_DEPRECATION
+
+// not processed into rocblas-exported-proto.hpp
+#define ROCBLAS_INTERNAL_ONLY_EXPORT_NOINLINE \
     ROCBLAS_EXPORT __attribute__((noinline)) ROCBLAS_INTERNAL_DEPRECATION
 
 /*! \brief rocblas_handle is a structure holding the rocblas library context.
@@ -68,7 +71,8 @@ typedef struct ihipEvent_t* hipEvent_t;
 struct rocblas_device_malloc_base;
 
 // integer types
-/*! \brief To specify whether int32 is used for LP64 or int64 is used for ILP64 */
+/*! \brief To specify whether int32 is used for LP64 or int64 is used for ILP64.
+ * This define should be considered deprecated as being supplanted by additional interfaces and was never tested */
 #if defined(rocblas_ILP64)
 typedef int64_t rocblas_int;
 #else
@@ -76,11 +80,7 @@ typedef int32_t rocblas_int;
 #endif
 
 /*! \brief Stride between matrices or vectors in strided_batched functions */
-#if defined(rocblas_ILP64)
 typedef int64_t rocblas_stride;
-#else
-typedef int64_t rocblas_stride;
-#endif
 
 /*! \brief Single precision floating point type */
 typedef float rocblas_float;
@@ -108,19 +108,6 @@ namespace std
 }
 
 #endif
-
-/* Structure definition of rocblas_int8x4
-    (For internal use only)
-    (4.2) When rocblas API takes input --a/b_type as i8_r,
-            we use --flags (0/1) to determine which TensileType (int8_t or int8x4) to be cast
-            in order to having a way to call gemm_ex_typecasting<?>(),
-            we can define a minimal definition of rocblas_int8x4, and int8 is for MI-kernel
-
-    ********************************************************************************************/
-typedef struct
-{
-    int8_t a, b, c, d;
-} rocblas_int8x4;
 
 // complex types
 #include "rocblas-complex-types.h"
@@ -192,8 +179,21 @@ typedef enum rocblas_datatype_
     rocblas_datatype_u32_c   = 167, /**< 32-bit unsigned integer, complex */
     rocblas_datatype_bf16_r  = 168, /**< 16-bit bfloat, real */
     rocblas_datatype_bf16_c  = 169, /**< 16-bit bfloat, complex */
+    rocblas_datatype_f8_r    = 170, /**< 8 bit floating point, real */
+    rocblas_datatype_bf8_r   = 171, /**< 8 bit bfloat, real */
     rocblas_datatype_invalid = 255, /**< Invalid datatype value, do not use */
 } rocblas_datatype;
+
+/*! \brief Indicates the compute precision mode. */
+typedef enum rocblas_computetype_
+{
+    rocblas_compute_type_f32         = 300,
+    rocblas_compute_type_f8_f8_f32   = 301,
+    rocblas_compute_type_f8_bf8_f32  = 302,
+    rocblas_compute_type_bf8_f8_f32  = 303,
+    rocblas_compute_type_bf8_bf8_f32 = 304,
+    rocblas_compute_type_invalid     = 455, /**< Invalid datatype value, do not use */
+} rocblas_computetype;
 
 /* ============================================================================================ */
 /**
@@ -216,6 +216,10 @@ typedef enum rocblas_status_
     rocblas_status_continue            = 12, /**< Nothing preventing function to proceed */
     rocblas_status_check_numerics_fail
     = 13, /**< Will be set if the vector/matrix has a NaN/Infinity/denormal value */
+    rocblas_status_excluded_from_build
+    = 14, /**< Function is not available in build, likely a function requiring Tensile built without Tensile */
+    rocblas_status_arch_mismatch
+    = 15, /**< The function requires a feature absent from the device architecture */
 } rocblas_status;
 
 /*! \brief Indicates if scalar pointers are on host or device. This is used for
@@ -229,7 +233,8 @@ typedef enum rocblas_pointer_mode_
 } rocblas_pointer_mode;
 
 /*! \brief Indicates if atomics operations are allowed. Not allowing atomic operations
-*    may generally improve determinism and repeatability of results at a cost of performance */
+*    may generally improve determinism and repeatability of results at a cost of performance.
+*    Defaults to rocblas_atomics_allowed.  */
 typedef enum rocblas_atomics_mode_
 {
     /*! \brief Algorithms will refrain from atomics where applicable */
@@ -283,9 +288,7 @@ typedef enum rocblas_gemm_flags_
 {
     /*! \brief Default empty flags */
     rocblas_gemm_flags_none = 0x0,
-    /*! \brief Before ROCm 4.2, this flags is not implemented and rocblas uses packed-Int8x4 by default.
-    * After ROCm 4.2, set flag is neccesary if we want packed-Int8x4. Default (0x0) uses unpacked. */
-    rocblas_gemm_flags_pack_int8x4 = 0x1,
+    /*! \brief Before ROCm 6.0 rocblas_gemm_flags_pack_int8x4 = 0x1, as has now been removed so is available for future use */
     /*! \brief Select the gemm problem with the highest efficiency per compute unit used. Useful for running multiple smaller problems
     * simultaneously. This takes precedence over the performance metric set in rocblas_handle and currently only works for
     * gemm_*_ex problems. */
@@ -297,17 +300,10 @@ typedef enum rocblas_gemm_flags_
     * input/output data to zero. See the "MI200 (gfx90a) Considerations"
     * section for more details. */
     rocblas_gemm_flags_fp16_alt_impl        = 0x4,
-    rocblas_gemm_flags_check_solution_index = 0x8
+    rocblas_gemm_flags_check_solution_index = 0x8,
+    rocblas_gemm_flags_fp16_alt_impl_rnz    = 0x10,
+    rocblas_gemm_flags_stochastic_rounding  = 0x20
 } rocblas_gemm_flags;
-
-// rocblas_int8_type_for_hipblas enum will be removed in a future release.
-// This enum is used by hipBLAS and support for pack_int8x4 datatype will be removed from hipBLAS.
-typedef enum rocblas_int8_type_for_hipblas_
-{
-    rocblas_int8_type_for_hipblas_default     = 0x0,
-    rocblas_int8_type_for_hipblas_int8        = 0x1,
-    rocblas_int8_type_for_hipblas_pack_int8x4 = 0x2
-} rocblas_int8_type_for_hipblas;
 
 /*! \brief Union for representing scalar values */
 typedef union rocblas_union_u
@@ -336,5 +332,15 @@ typedef enum rocblas_check_numerics_mode_
     rocblas_check_numerics_mode_fail = 0x4,
 
 } rocblas_check_numerics_mode;
+
+typedef enum rocblas_math_mode_
+{
+    //Default precision
+    rocblas_default_math = 0x0,
+
+    //Enable acceleration of single precision routines using XF32 xDL.
+    rocblas_xf32_xdl_math_op = 0x1,
+
+} rocblas_math_mode;
 
 #endif /* ROCBLAS_TYPES_H */

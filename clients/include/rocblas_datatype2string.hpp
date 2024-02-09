@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -30,16 +30,12 @@
 
 enum class rocblas_initialization
 {
-    rand_int   = 111,
-    trig_float = 222,
-    hpl        = 333,
-    special    = 444,
-};
-
-enum class rocblas_arithmetic_check
-{
-    no_check      = 111,
-    ieee16_ieee32 = 222,
+    rand_int          = 111,
+    trig_float        = 222,
+    hpl               = 333,
+    denorm            = 444,
+    denorm2           = 555,
+    rand_int_zero_one = 666,
 };
 
 /* ============================================================================================ */
@@ -136,7 +132,32 @@ constexpr auto rocblas_datatype2string(rocblas_datatype type)
         return "bf16_r";
     case rocblas_datatype_bf16_c:
         return "bf16_c";
+    case rocblas_datatype_f8_r: // todo: use f8 and bf8 ... f8 can be used for both. consider complex type well
+        return "f8_r";
+    case rocblas_datatype_bf8_r:
+        return "bf8_r";
     case rocblas_datatype_invalid:
+        return "invalid";
+    }
+    return "invalid";
+}
+
+// return precision string for rocblas_datatype
+constexpr auto rocblas_computetype2string(rocblas_computetype type)
+{
+    switch(type)
+    {
+    case rocblas_compute_type_f32:
+        return "f32";
+    case rocblas_compute_type_f8_f8_f32:
+        return "f8_f8_f32";
+    case rocblas_compute_type_f8_bf8_f32:
+        return "f8_bf8_f32";
+    case rocblas_compute_type_bf8_f8_f32:
+        return "bf8_f8_f32";
+    case rocblas_compute_type_bf8_bf8_f32:
+        return "bf8_bf8_f32";
+    case rocblas_compute_type_invalid:
         return "invalid";
     }
     return "invalid";
@@ -152,20 +173,12 @@ constexpr auto rocblas_initialization2string(rocblas_initialization init)
         return "trig_float";
     case rocblas_initialization::hpl:
         return "hpl";
-    case rocblas_initialization::special:
-        return "special";
-    }
-    return "invalid";
-}
-
-constexpr auto rocblas_arithmetic_check2string(rocblas_arithmetic_check check)
-{
-    switch(check)
-    {
-    case rocblas_arithmetic_check::no_check:
-        return "no_check";
-    case rocblas_arithmetic_check::ieee16_ieee32:
-        return "ieee16_ieee32";
+    case rocblas_initialization::denorm:
+        return "denorm";
+    case rocblas_initialization::denorm2:
+        return "denorm2";
+    case rocblas_initialization::rand_int_zero_one:
+        return "rand_int_zero_one";
     }
     return "invalid";
 }
@@ -174,12 +187,6 @@ inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os,
                                             rocblas_initialization    init)
 {
     return os << rocblas_initialization2string(init);
-}
-
-inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os,
-                                            rocblas_arithmetic_check  check)
-{
-    return os << rocblas_arithmetic_check2string(check);
 }
 
 inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream& os, uint8_t val)
@@ -207,23 +214,9 @@ inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream&           
         CASE(rocblas_initialization::rand_int);
         CASE(rocblas_initialization::trig_float);
         CASE(rocblas_initialization::hpl);
-        CASE(rocblas_initialization::special);
-    }
-    return os << "invalid";
-}
-#undef CASE
-
-inline rocblas_internal_ostream& operator<<(rocblas_internal_ostream&                        os,
-                                            std::pair<char const*, rocblas_arithmetic_check> p)
-{
-    os << p.first << ": ";
-#define CASE(x) \
-    case x:     \
-        return os << rocblas_arithmetic_check2string(x)
-    switch(p.second)
-    {
-        CASE(rocblas_arithmetic_check::ieee16_ieee32);
-        CASE(rocblas_arithmetic_check::no_check);
+        CASE(rocblas_initialization::denorm);
+        CASE(rocblas_initialization::denorm2);
+        CASE(rocblas_initialization::rand_int_zero_one);
     }
     return os << "invalid";
 }
@@ -302,16 +295,10 @@ inline rocblas_initialization string2rocblas_initialization(const std::string& v
         value == "rand_int"   ? rocblas_initialization::rand_int   :
         value == "trig_float" ? rocblas_initialization::trig_float :
         value == "hpl"        ? rocblas_initialization::hpl        :
-        value == "special"    ? rocblas_initialization::special    :
+        value == "denorm"     ? rocblas_initialization::denorm     :
+        value == "denorm2"    ? rocblas_initialization::denorm2    :
+        value == "rand_int_zero_one"    ? rocblas_initialization::rand_int_zero_one        :
         static_cast<rocblas_initialization>(0); // zero not in enum
-}
-
-inline rocblas_arithmetic_check string2rocblas_arithmetic_check(const std::string& value)
-{
-    return
-        value == "ieee16_ieee32"   ? rocblas_arithmetic_check::ieee16_ieee32 :
-        value == "no_check"        ? rocblas_arithmetic_check::no_check :
-        static_cast<rocblas_arithmetic_check>(0); // zero not in enum
 }
 
 inline rocblas_datatype string2rocblas_datatype(const std::string& value)
@@ -321,6 +308,8 @@ inline rocblas_datatype string2rocblas_datatype(const std::string& value)
         value == "f32_r" || value == "s" ? rocblas_datatype_f32_r  :
         value == "f64_r" || value == "d" ? rocblas_datatype_f64_r  :
         value == "bf16_r"                ? rocblas_datatype_bf16_r :
+        value == "f8_r"                  ? rocblas_datatype_f8_r   :
+        value == "bf8_r"                 ? rocblas_datatype_bf8_r  :
         value == "f16_c"                 ? rocblas_datatype_f16_c  :
         value == "f32_c" || value == "c" ? rocblas_datatype_f32_c  :
         value == "f64_c" || value == "z" ? rocblas_datatype_f64_c  :
@@ -334,5 +323,16 @@ inline rocblas_datatype string2rocblas_datatype(const std::string& value)
         value == "u8_c"                  ? rocblas_datatype_u8_c   :
         value == "u32_c"                 ? rocblas_datatype_u32_c  :
         rocblas_datatype_invalid;
+}
+
+inline rocblas_computetype string2rocblas_computetype(const std::string& value)
+{
+    return
+        value == "f32" ? rocblas_compute_type_f32  :
+        value == "f8_f8_f32" ? rocblas_compute_type_f8_f8_f32  :
+        value == "f8_bf8_f32" ? rocblas_compute_type_f8_bf8_f32  :
+        value == "bf8_f8_f32" ? rocblas_compute_type_bf8_f8_f32  :
+        value == "bf8_bf8_f32" ? rocblas_compute_type_bf8_bf8_f32 :
+        rocblas_compute_type_invalid;
 }
 // clang-format on

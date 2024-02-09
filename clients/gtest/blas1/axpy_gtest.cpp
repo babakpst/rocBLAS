@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -54,12 +54,10 @@ namespace
             }
             else
             {
-                bool is_batched = (BLAS1 == blas1::axpy_batched);
-                bool is_strided = (BLAS1 == blas1::axpy_strided_batched);
+                constexpr bool is_batched = (BLAS1 == blas1::axpy_batched);
+                constexpr bool is_strided = (BLAS1 == blas1::axpy_strided_batched);
 
-                name << '_' << arg.alpha << "_" << arg.alphai;
-
-                name << '_' << arg.incx;
+                name << '_' << arg.N << '_' << arg.alpha << "_" << arg.alphai << '_' << arg.incx;
 
                 if(is_strided)
                 {
@@ -79,7 +77,11 @@ namespace
                 }
             }
 
-            if(arg.fortran)
+            if(arg.api & c_API_64)
+            {
+                name << "_I64";
+            }
+            if(arg.api & c_API_FORTRAN)
             {
                 name << "_F";
             }
@@ -90,15 +92,13 @@ namespace
 
     // This tells whether the BLAS1 tests are enabled
     template <blas1 BLAS1, typename Ti, typename To, typename Tc>
-    using axpy_enabled
-        = std::integral_constant<bool,
-                                 ((BLAS1 == blas1::axpy || BLAS1 == blas1::axpy_batched
-                                   || BLAS1 == blas1::axpy_strided_batched)
-                                  && std::is_same<Ti, To>{} && std::is_same<To, Tc>{}
-                                  && (std::is_same<Ti, rocblas_half>{}
-                                      || std::is_same<Ti, rocblas_float_complex>{}
-                                      || std::is_same<Ti, rocblas_double_complex>{}
-                                      || std::is_same<Ti, float>{} || std::is_same<Ti, double>{}))>;
+    using axpy_enabled = std::integral_constant<
+        bool,
+        ((BLAS1 == blas1::axpy || BLAS1 == blas1::axpy_batched
+          || BLAS1 == blas1::axpy_strided_batched)
+         && std::is_same_v<
+             Ti,
+             To> && std::is_same_v<To, Tc> && (std::is_same_v<Ti, rocblas_half> || std::is_same_v<Ti, rocblas_float_complex> || std::is_same_v<Ti, rocblas_double_complex> || std::is_same_v<Ti, float> || std::is_same_v<Ti, double>))>;
 
 // Creates tests for one of the BLAS 1 functions
 // ARG passes 1-3 template arguments to the testing_* function

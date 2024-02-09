@@ -1,5 +1,5 @@
 # ########################################################################
-# Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2016-2024 Advanced Micro Devices, Inc. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -113,14 +113,25 @@ endif( )
 if( BUILD_CLIENTS_BENCHMARKS OR BUILD_CLIENTS_TESTS)
   if ( NOT WIN32 )
     if (LINK_BLIS)
-      if(EXISTS "${BUILD_DIR}/deps/blis/lib/libblis.a")
-        set( BLIS_INCLUDE_DIR ${BUILD_DIR}/deps/blis/include/blis )
-        set( BLIS_CPP ../common/blis_interface.cpp )
+      if(EXISTS          "${BUILD_DIR}/deps/amd-blis/lib/ILP64/libblis-mt.a") # 4.0 and 4.1.0
+        set( BLAS_LIBRARY ${BUILD_DIR}/deps/amd-blis/lib/ILP64/libblis-mt.a )
+        set( BLIS_INCLUDE_DIR ${BUILD_DIR}/deps/amd-blis/include/ILP64 )
+      elseif(EXISTS      "/opt/AMD/aocl/aocl-linux-aocc-4.1.0/aocc/lib_ILP64/libblis-mt.a" )
+        set( BLAS_LIBRARY /opt/AMD/aocl/aocl-linux-aocc-4.1.0/aocc/lib_ILP64/libblis-mt.a )
+        set( BLIS_INCLUDE_DIR /opt/AMD/aocl/aocl-linux-aocc-4.1.0/aocc/include_ILP64/ )
+      elseif(EXISTS      "/opt/AMD/aocl/aocl-linux-aocc-4.0/lib_ILP64/libblis-mt.a" )
+        set( BLAS_LIBRARY /opt/AMD/aocl/aocl-linux-aocc-4.0/lib_ILP64/libblis-mt.a )
+        set( BLIS_INCLUDE_DIR /opt/AMD/aocl/aocl-linux-aocc-4.0/include_ILP64/ )
+      elseif(EXISTS      "${BUILD_DIR}/deps/blis/lib/libblis.a")
         set( BLAS_LIBRARY ${BUILD_DIR}/deps/blis/lib/libblis.a )
-      elseif(EXISTS "/usr/local/lib/libblis.a")
-        set( BLIS_INCLUDE_DIR /usr/local/include/blis )
-        set( BLIS_CPP ../common/blis_interface.cpp )
+        set( BLIS_INCLUDE_DIR ${BUILD_DIR}/deps/blis/include/blis )
+      elseif(EXISTS      "/usr/local/lib/libblis.a")
         set( BLAS_LIBRARY /usr/local/lib/libblis.a )
+        set( BLIS_INCLUDE_DIR /usr/local/include/blis )
+      endif()
+      if ( DEFINED BLIS_INCLUDE_DIR )
+        set( BLIS_CPP ../common/blis_interface.cpp )
+        message(STATUS "Linking BLIS LIB: ${BLAS_LIBRARY}")
       endif()
     else()
       set( BLAS_LIBRARY "blas" )
@@ -138,10 +149,17 @@ if( BUILD_CLIENTS_BENCHMARKS OR BUILD_CLIENTS_TESTS)
     endif()
   endif()
 
+  # Find the package ROCmSMI
+  if(NOT WIN32)
+      find_package(ROCmSMI REQUIRED)
+      list( APPEND COMMON_LINK_LIBS rocm_smi )
+  endif()
+
   # common source files used in subdirectories benchmarks and gtest thus ../common
   set( rocblas_test_bench_common
       ../common/singletons.cpp
       ../common/utility.cpp
+      ../common/frequency_monitor.cpp
       ../common/cblas_interface.cpp
       ../common/rocblas_arguments.cpp
       ../common/argument_model.cpp
@@ -179,6 +197,12 @@ add_custom_command( OUTPUT "${ROCBLAS_SMOKE}"
                     DEPENDS include/rocblas_smoke.yaml
                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" )
 
+set( ROCBLAS_GENERAL_YAML "${PROJECT_BINARY_DIR}/staging/rocblas_general.yaml")
+add_custom_command( OUTPUT "${ROCBLAS_GENERAL_YAML}"
+                    COMMAND ${CMAKE_COMMAND} -E copy include/rocblas_general.yaml "${ROCBLAS_GENERAL_YAML}"
+                    DEPENDS include/rocblas_general.yaml
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" )
+
 set( ROCBLAS_GENTEST "${PROJECT_BINARY_DIR}/staging/rocblas_gentest.py")
 add_custom_command( OUTPUT "${ROCBLAS_GENTEST}"
                     COMMAND ${CMAKE_COMMAND} -E copy common/rocblas_gentest.py "${ROCBLAS_GENTEST}"
@@ -186,10 +210,10 @@ add_custom_command( OUTPUT "${ROCBLAS_GENTEST}"
                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" )
 
 
-add_custom_target( rocblas-common DEPENDS "${ROCBLAS_COMMON}" "${ROCBLAS_TEMPLATE}" "${ROCBLAS_SMOKE}" "${ROCBLAS_GENTEST}" )
+add_custom_target( rocblas-common DEPENDS "${ROCBLAS_COMMON}" "${ROCBLAS_TEMPLATE}" "${ROCBLAS_SMOKE}" "${ROCBLAS_GENERAL_YAML}" "${ROCBLAS_GENTEST}" )
 
 rocm_install(
-  FILES ${ROCBLAS_COMMON} ${ROCBLAS_TEMPLATE} ${ROCBLAS_SMOKE}
+  FILES ${ROCBLAS_COMMON} ${ROCBLAS_TEMPLATE} ${ROCBLAS_SMOKE} ${ROCBLAS_GENERAL_YAML}
   DESTINATION "${CMAKE_INSTALL_BINDIR}"
   COMPONENT clients-common
 )
@@ -198,3 +222,5 @@ rocm_install(
   DESTINATION "${CMAKE_INSTALL_BINDIR}"
   COMPONENT clients-common
 )
+
+

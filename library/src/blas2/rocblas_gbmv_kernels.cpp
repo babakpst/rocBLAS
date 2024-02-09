@@ -57,11 +57,11 @@ __device__ T rocblas_gbmvn_kernel_helper(rocblas_int ty,
             {
                 if(row <= ku && col >= (ku - row) && col < (ku - row + m))
                 {
-                    res_A += (A[row + col * lda] * x[col * incx]);
+                    res_A += (A[row + col * size_t(lda)] * x[col * int64_t(incx)]);
                 }
                 if(row > ku && col < m - (row - ku))
                 {
-                    res_A += (A[row + col * lda] * x[col * incx]);
+                    res_A += (A[row + col * size_t(lda)] * x[col * int64_t(incx)]);
                 }
             }
         }
@@ -77,7 +77,7 @@ __device__ T rocblas_gbmvn_kernel_helper(rocblas_int ty,
   *  basically just iterate down columns.
   */
 template <rocblas_int DIM_Y, typename T>
-__device__ T rocblas_gbmvt_kernel_helper(bool        CONJ,
+__device__ T rocblas_gbmvt_kernel_helper(bool        is_conj,
                                          rocblas_int ty,
                                          rocblas_int ind,
                                          rocblas_int m,
@@ -104,13 +104,15 @@ __device__ T rocblas_gbmvt_kernel_helper(bool        CONJ,
             {
                 if(row <= ku && col >= (ku - row) && col < (ku - row + m))
                 {
-                    res_A += ((CONJ ? conj(A[row + col * lda]) : A[row + col * lda])
-                              * x[(row - ku + col) * incx]);
+                    res_A += ((is_conj ? conj(A[row + col * size_t(lda)])
+                                       : A[row + col * size_t(lda)])
+                              * x[(row - ku + col) * int64_t(incx)]);
                 }
                 else if((row > ku && row <= kl + ku) && col < m - (row - ku))
                 {
-                    res_A += ((CONJ ? conj(A[row + col * lda]) : A[row + col * lda])
-                              * x[(row - ku + col) * incx]);
+                    res_A += ((is_conj ? conj(A[row + col * size_t(lda)])
+                                       : A[row + col * size_t(lda)])
+                              * x[(row - ku + col) * int64_t(incx)]);
                 }
             }
         }
@@ -162,9 +164,9 @@ __device__ void rocblas_gbmvx_kernel_calc(rocblas_operation transA,
         }
         else
         {
-            bool CONJ = transA == rocblas_operation_conjugate_transpose;
-            res_A
-                = rocblas_gbmvt_kernel_helper<DIM_Y>(CONJ, ty, ind, m, n, kl, ku, A, lda, x, incx);
+            bool is_conj = transA == rocblas_operation_conjugate_transpose;
+            res_A        = rocblas_gbmvt_kernel_helper<DIM_Y>(
+                is_conj, ty, ind, m, n, kl, ku, A, lda, x, incx);
         }
         // Store partial sums for the diagonal
         sdata[tx + ty * DIM_X] = res_A;
@@ -183,10 +185,11 @@ __device__ void rocblas_gbmvx_kernel_calc(rocblas_operation transA,
 
         // Update y.
         if(beta != 0)
-            y[ind * incy]
-                = alpha ? alpha * sdata[thread_id] + beta * y[ind * incy] : beta * y[ind * incy];
+            y[ind * int64_t(incy)] = alpha
+                                         ? alpha * sdata[thread_id] + beta * y[ind * int64_t(incy)]
+                                         : beta * y[ind * int64_t(incy)];
         else
-            y[ind * incy] = alpha ? alpha * sdata[thread_id] : 0;
+            y[ind * int64_t(incy)] = alpha ? alpha * sdata[thread_id] : 0;
     }
 }
 
@@ -306,60 +309,60 @@ rocblas_status rocblas_gbmv_template(rocblas_handle    handle,
     // indices for the banded matrices.
     if(handle->pointer_mode == rocblas_pointer_mode_device)
     {
-        hipLaunchKernelGGL((rocblas_gbmvx_kernel<GBMVX_DIM_X, GBMVX_DIM_Y>),
-                           gbmvx_grid,
-                           gbmvx_threads,
-                           0,
-                           handle->get_stream(),
-                           transA,
-                           m,
-                           n,
-                           kl,
-                           ku,
-                           alpha,
-                           A,
-                           offseta,
-                           lda,
-                           strideA,
-                           x,
-                           shiftx,
-                           incx,
-                           stridex,
-                           beta,
-                           y,
-                           shifty,
-                           incy,
-                           stridey);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_gbmvx_kernel<GBMVX_DIM_X, GBMVX_DIM_Y>),
+                              gbmvx_grid,
+                              gbmvx_threads,
+                              0,
+                              handle->get_stream(),
+                              transA,
+                              m,
+                              n,
+                              kl,
+                              ku,
+                              alpha,
+                              A,
+                              offseta,
+                              lda,
+                              strideA,
+                              x,
+                              shiftx,
+                              incx,
+                              stridex,
+                              beta,
+                              y,
+                              shifty,
+                              incy,
+                              stridey);
     }
     else
     {
         if(!*alpha && *beta == 1)
             return rocblas_status_success;
 
-        hipLaunchKernelGGL((rocblas_gbmvx_kernel<GBMVX_DIM_X, GBMVX_DIM_Y>),
-                           gbmvx_grid,
-                           gbmvx_threads,
-                           0,
-                           handle->get_stream(),
-                           transA,
-                           m,
-                           n,
-                           kl,
-                           ku,
-                           *alpha,
-                           A,
-                           offseta,
-                           lda,
-                           strideA,
-                           x,
-                           shiftx,
-                           incx,
-                           stridex,
-                           *beta,
-                           y,
-                           shifty,
-                           incy,
-                           stridey);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_gbmvx_kernel<GBMVX_DIM_X, GBMVX_DIM_Y>),
+                              gbmvx_grid,
+                              gbmvx_threads,
+                              0,
+                              handle->get_stream(),
+                              transA,
+                              m,
+                              n,
+                              kl,
+                              ku,
+                              *alpha,
+                              A,
+                              offseta,
+                              lda,
+                              strideA,
+                              x,
+                              shiftx,
+                              incx,
+                              stridex,
+                              *beta,
+                              y,
+                              shifty,
+                              incy,
+                              stridey);
     }
 
     return rocblas_status_success;

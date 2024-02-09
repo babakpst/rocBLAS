@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -47,7 +47,7 @@ void testing_gemm_batched_ex_bad_arg(const Arguments& arg)
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
         auto rocblas_gemm_batched_ex_fn
-            = arg.fortran ? rocblas_gemm_batched_ex_fortran : rocblas_gemm_batched_ex;
+            = arg.api == FORTRAN ? rocblas_gemm_batched_ex_fortran : rocblas_gemm_batched_ex;
 
         const rocblas_operation transA = rocblas_operation_none;
         const rocblas_operation transB = rocblas_operation_none;
@@ -247,7 +247,7 @@ template <typename Ti, typename To, typename Tc>
 void testing_gemm_batched_ex(const Arguments& arg)
 {
     auto rocblas_gemm_batched_ex_fn
-        = arg.fortran ? rocblas_gemm_batched_ex_fortran : rocblas_gemm_batched_ex;
+        = arg.api == FORTRAN ? rocblas_gemm_batched_ex_fortran : rocblas_gemm_batched_ex;
 
     rocblas_gemm_algo algo = rocblas_gemm_algo(arg.algo);
     int32_t           solution_index(arg.solution_index);
@@ -262,25 +262,23 @@ void testing_gemm_batched_ex(const Arguments& arg)
     rocblas_local_handle handle{arg};
     auto                 transA = char2rocblas_operation(arg.transA);
     auto                 transB = char2rocblas_operation(arg.transB);
-    auto                 M = arg.M, N = arg.N, K = arg.K;
-    auto                 lda = arg.lda, ldb = arg.ldb, ldc = arg.ldc, ldd = arg.ldd;
+    int                  M = arg.M, N = arg.N, K = arg.K;
+    int                  lda = arg.lda, ldb = arg.ldb, ldc = arg.ldc, ldd = arg.ldd;
     auto                 A_row       = transA == rocblas_operation_none ? M : std::max(K, 1);
     auto                 A_col       = transA == rocblas_operation_none ? std::max(K, 1) : M;
     auto                 B_row       = transB == rocblas_operation_none ? std::max(K, 1) : N;
     auto                 B_col       = transB == rocblas_operation_none ? N : std::max(K, 1);
-    auto                 batch_count = arg.batch_count;
+    int                  batch_count = arg.batch_count;
     auto                 d_type      = arg.d_type;
+
+    rocblas_math_mode math_mode = rocblas_math_mode(arg.math_mode);
+    CHECK_ROCBLAS_ERROR(rocblas_set_math_mode(handle, math_mode));
+    CHECK_ROCBLAS_ERROR(rocblas_get_math_mode(handle, &math_mode));
 
     // Quick-return or error sizes
     // Note: K==0 is not an early exit, since we still must multiply C by beta
     bool invalid_size = M < 0 || N < 0 || K < 0 || lda < A_row || ldb < B_row || ldc < M || ldd < M
                         || batch_count < 0;
-
-    // size checking is only needed for int8x4
-    bool pack_to_int8x4 = arg.flags & rocblas_gemm_flags_pack_int8x4;
-    bool int8_invalid   = (pack_to_int8x4 && std::is_same<Ti, int8_t>{}
-                         && (K % 4 != 0 || (transA != rocblas_operation_none && lda % 4 != 0)));
-
     if(invalid_size || !M || !N || !batch_count)
     {
         EXPECT_ROCBLAS_STATUS(rocblas_gemm_batched_ex_fn(handle,
@@ -309,49 +307,6 @@ void testing_gemm_batched_ex(const Arguments& arg)
                                                          solution_index,
                                                          flags),
                               invalid_size ? rocblas_status_invalid_size : rocblas_status_success);
-        return;
-    }
-    if(int8_invalid)
-    {
-        // This check is currently done below the invalid_pointer checks, so we can't pass in nullptrs.
-        // Allocate host memory
-        device_batch_matrix<Ti> dA(A_row, A_col, lda, batch_count);
-        device_batch_matrix<Ti> dB(B_row, B_col, ldb, batch_count);
-        device_batch_matrix<To> dC(M, N, ldc, batch_count);
-        device_batch_matrix<To> dD(M, N, ldd, batch_count);
-
-        // Check device memory allocation
-        CHECK_DEVICE_ALLOCATION(dA.memcheck());
-        CHECK_DEVICE_ALLOCATION(dB.memcheck());
-        CHECK_DEVICE_ALLOCATION(dC.memcheck());
-        CHECK_DEVICE_ALLOCATION(dD.memcheck());
-
-        EXPECT_ROCBLAS_STATUS(rocblas_gemm_batched_ex_fn(handle,
-                                                         transA,
-                                                         transB,
-                                                         M,
-                                                         N,
-                                                         K,
-                                                         &h_alpha_Tc,
-                                                         dA.ptr_on_device(),
-                                                         arg.a_type,
-                                                         lda,
-                                                         dB.ptr_on_device(),
-                                                         arg.b_type,
-                                                         ldb,
-                                                         &h_beta_Tc,
-                                                         dC.ptr_on_device(),
-                                                         arg.c_type,
-                                                         ldc,
-                                                         dD.ptr_on_device(),
-                                                         arg.d_type,
-                                                         ldd,
-                                                         batch_count,
-                                                         arg.compute_type,
-                                                         algo,
-                                                         solution_index,
-                                                         flags),
-                              rocblas_status_invalid_size);
         return;
     }
 
@@ -392,23 +347,12 @@ void testing_gemm_batched_ex(const Arguments& arg)
 #endif
 
     // update after invalid checks
-    if(!arg.c_noalias_d)
+    if(!arg.outofplace)
     {
         // c alias of d must be identical descriptors
         ldd    = ldc;
         d_type = arg.c_type;
     }
-
-    const size_t size_one_a
-        = transA == rocblas_operation_none ? size_t(K) * size_t(lda) : size_t(M) * size_t(lda);
-    const size_t size_one_b
-        = transB == rocblas_operation_none ? size_t(N) * size_t(ldb) : size_t(K) * size_t(ldb);
-    const size_t size_one_c = N * ldc;
-    const size_t size_one_d = N * ldd;
-    const size_t size_a     = size_one_a;
-    const size_t size_b     = size_one_b;
-    const size_t size_c     = size_one_c;
-    const size_t size_d     = size_one_d;
 
     // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
     // Allocate host memory
@@ -426,10 +370,10 @@ void testing_gemm_batched_ex(const Arguments& arg)
     device_batch_matrix<Ti> dB(B_row, B_col, ldb, batch_count);
     // if C!=D, allocate C and D normally
     // if C==D, allocate C big enough for the larger of C and D; D points to C
-    device_batch_matrix<To> dC(M, N, ldc, batch_count);
-    device_batch_matrix<To> dD = (arg.c_noalias_d) ? device_batch_matrix<To>(M, N, ldd, batch_count)
+    device_batch_matrix<To>  dC(M, N, ldc, batch_count);
+    device_batch_matrix<To>  dD = (arg.outofplace) ? device_batch_matrix<To>(M, N, ldd, batch_count)
                                                    : device_batch_matrix<To>(0, 1, 1, 1);
-    device_batch_matrix<To>& dDref = (arg.c_noalias_d) ? dD : dC;
+    device_batch_matrix<To>& dDref = (arg.outofplace) ? dD : dC;
     device_vector<Tc>        d_alpha_Tc(1);
     device_vector<Tc>        d_beta_Tc(1);
 
@@ -449,7 +393,7 @@ void testing_gemm_batched_ex(const Arguments& arg)
     rocblas_init_matrix<To>(hC, arg, rocblas_client_beta_sets_nan, rocblas_client_general_matrix);
 
 #if 0 // Copied from testing_gemm_ex.hpp
-    if(std::is_same<To, rocblas_half>{} && std::is_same<Tc, float>{})
+    if(std::is_same_v<To, rocblas_half> && std::is_same_v<Tc, float>)
     {
         // half precision IEEE has max and lowest values 65504 and -65504,
         // foat precision IEEE has max and lowest values 3.403e+38 and -3.403e+38
@@ -480,40 +424,13 @@ void testing_gemm_batched_ex(const Arguments& arg)
 #endif
 
     // copy data from CPU to device
-    if(std::is_same<Ti, int8_t>{} && transA == rocblas_operation_none && pack_to_int8x4)
-    {
-        host_batch_matrix<Ti> hA_packed(A_row, A_col, lda, batch_count);
-        hA_packed.copy_from(hA);
-
-        for(int b = 0; b < batch_count; b++)
-            rocblas_packInt8(hA_packed[b], hA[b], M, K, lda);
-
-        CHECK_HIP_ERROR(dA.transfer_from(hA_packed));
-    }
-    else
-    {
-        CHECK_HIP_ERROR(dA.transfer_from(hA));
-    }
-
-    if(std::is_same<Ti, int8_t>{} && transB != rocblas_operation_none && pack_to_int8x4)
-    {
-        host_batch_matrix<Ti> hB_packed(B_row, B_col, ldb, batch_count);
-        hB_packed.copy_from(hB);
-
-        for(int b = 0; b < batch_count; b++)
-            rocblas_packInt8(hB_packed[b], hB[b], N, K, ldb);
-
-        CHECK_HIP_ERROR(dB.transfer_from(hB_packed));
-    }
-    else
-    {
-        CHECK_HIP_ERROR(dB.transfer_from(hB));
-    }
+    CHECK_HIP_ERROR(dA.transfer_from(hA));
+    CHECK_HIP_ERROR(dB.transfer_from(hB));
     CHECK_HIP_ERROR(dC.transfer_from(hC));
 
     if(arg.unit_check || arg.norm_check)
     {
-        using To_hpa = std::conditional_t<std::is_same<To, rocblas_bfloat16>{}, float, To>;
+        using To_hpa = std::conditional_t<std::is_same_v<To, rocblas_bfloat16>, float, To>;
         host_batch_matrix<To>     hD_1(M, N, ldd, batch_count);
         host_batch_matrix<To>     hD_2(M, N, ldd, batch_count);
         host_batch_matrix<To_hpa> hD_gold(M, N, ldd, batch_count);
@@ -601,24 +518,34 @@ void testing_gemm_batched_ex(const Arguments& arg)
         // copy C matrix into D matrix
         copy_matrix_with_different_leading_dimensions(hC, hD_gold);
 
+        // For the xf32 xdl math op, cast type of A/B from float to xfloat32 .
+        if(std::is_same<Ti, float>{} && math_mode == rocblas_xf32_xdl_math_op)
+        {
+            for(int b = 0; b < batch_count; b++)
+            {
+                type_to_xdl_math_op_type<rocblas_xfloat32, float>(hA[b], hA.nmemb());
+                type_to_xdl_math_op_type<rocblas_xfloat32, float>(hB[b], hB.nmemb());
+            }
+        }
+
         // CPU BLAS
         cpu_time_used = get_time_us_no_sync();
 
         for(rocblas_int b = 0; b < batch_count; b++)
         {
-            cblas_gemm<Ti, To_hpa>(transA,
-                                   transB,
-                                   M,
-                                   N,
-                                   K,
-                                   h_alpha_Tc,
-                                   hA[b],
-                                   lda,
-                                   hB[b],
-                                   ldb,
-                                   h_beta_Tc,
-                                   hD_gold[b],
-                                   ldd);
+            ref_gemm<Ti, To_hpa>(transA,
+                                 transB,
+                                 M,
+                                 N,
+                                 K,
+                                 h_alpha_Tc,
+                                 hA[b],
+                                 lda,
+                                 hB[b],
+                                 ldb,
+                                 h_beta_Tc,
+                                 hD_gold[b],
+                                 ldd);
         }
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
@@ -631,7 +558,7 @@ void testing_gemm_batched_ex(const Arguments& arg)
                 near_check_general<To, To_hpa>(M, N, ldd, hD_gold, hD_1, batch_count, tol);
                 near_check_general<To, To_hpa>(M, N, ldd, hD_gold, hD_2, batch_count, tol);
             }
-            else if(std::is_same<Tc, rocblas_half>{} && K > 10000)
+            else if(std::is_same_v<Tc, rocblas_half> && K > 10000)
             {
                 // For large K, rocblas_half tends to diverge proportional to K
                 // Tolerance is slightly greater than 1 / 1024.0

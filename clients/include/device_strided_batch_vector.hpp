@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -21,6 +21,8 @@
  * ************************************************************************ */
 
 #pragma once
+
+#include "d_vector.hpp"
 
 //
 // Local declaration of the host strided batch vector.
@@ -54,14 +56,14 @@ public:
     //! @param HMM         HipManagedMemory Flag.
     //!
     explicit device_strided_batch_vector(
-        size_t n, rocblas_int inc, rocblas_stride stride, rocblas_int batch_count, bool HMM = false)
+        size_t n, int64_t inc, rocblas_stride stride, int64_t batch_count, bool HMM = false)
         : d_vector<T>(calculate_nmemb(n, inc, stride, batch_count), HMM)
         , m_n(n)
-        , m_inc(inc)
+        , m_inc(inc ? inc : 1)
         , m_stride(stride)
         , m_batch_count(batch_count)
     {
-        this->m_data = this->device_vector_setup();
+        m_data = this->device_vector_setup();
     }
 
     //!
@@ -69,10 +71,10 @@ public:
     //!
     ~device_strided_batch_vector()
     {
-        if(nullptr != this->m_data)
+        if(nullptr != m_data)
         {
-            this->device_vector_teardown(this->m_data);
-            this->m_data = nullptr;
+            this->device_vector_teardown(m_data);
+            m_data = nullptr;
         }
     }
 
@@ -81,7 +83,7 @@ public:
     //!
     T* data()
     {
-        return this->m_data;
+        return m_data;
     }
 
     //!
@@ -89,7 +91,7 @@ public:
     //!
     const T* data() const
     {
-        return this->m_data;
+        return m_data;
     }
 
     //!
@@ -97,23 +99,23 @@ public:
     //!
     size_t n() const
     {
-        return this->m_n;
+        return m_n;
     }
 
     //!
     //! @brief Returns the increment.
     //!
-    rocblas_int inc() const
+    int64_t inc() const
     {
-        return this->m_inc;
+        return m_inc;
     }
 
     //!
     //! @brief Returns the batch count.
     //!
-    rocblas_int batch_count() const
+    int64_t batch_count() const
     {
-        return this->m_batch_count;
+        return m_batch_count;
     }
 
     //!
@@ -121,7 +123,7 @@ public:
     //!
     rocblas_stride stride() const
     {
-        return this->m_stride;
+        return m_stride;
     }
 
     //!
@@ -129,11 +131,10 @@ public:
     //! @param batch_index The batch index.
     //! @return A mutable pointer to the batch_index'th vector.
     //!
-    T* operator[](rocblas_int batch_index)
+    T* operator[](int64_t batch_index)
     {
-        return (this->m_stride >= 0)
-                   ? this->m_data + batch_index * this->m_stride
-                   : this->m_data + (batch_index + 1 - this->m_batch_count) * this->m_stride;
+        return (m_stride >= 0) ? m_data + batch_index * m_stride
+                               : m_data + (batch_index + 1 - m_batch_count) * m_stride;
     }
 
     //!
@@ -141,11 +142,10 @@ public:
     //! @param batch_index The batch index.
     //! @return A non-mutable mutable pointer to the batch_index'th vector.
     //!
-    const T* operator[](rocblas_int batch_index) const
+    const T* operator[](int64_t batch_index) const
     {
-        return (this->m_stride >= 0)
-                   ? this->m_data + batch_index * this->m_stride
-                   : this->m_data + (batch_index + 1 - this->m_batch_count) * this->m_stride;
+        return (m_stride >= 0) ? m_data + batch_index * m_stride
+                               : m_data + (batch_index + 1 - m_batch_count) * m_stride;
     }
 
     //!
@@ -167,11 +167,11 @@ public:
     }
 
     //!
-    //! @brief Tell whether ressources allocation failed.
+    //! @brief Tell whether resource allocation failed.
     //!
     explicit operator bool() const
     {
-        return nullptr != this->m_data;
+        return nullptr != m_data;
     }
 
     //!
@@ -181,10 +181,31 @@ public:
     //!
     hipError_t transfer_from(const host_strided_batch_vector<T>& that)
     {
-        return hipMemcpy(this->data(),
+        return hipMemcpy(data(),
                          that.data(),
                          sizeof(T) * this->nmemb(),
                          this->use_HMM ? hipMemcpyHostToHost : hipMemcpyHostToDevice);
+    }
+
+    //!
+    //! @brief Broadcast data from one vector on host to each batch_count vectors.
+    //! @param that That vector on host.
+    //! @return The hip error.
+    //!
+    hipError_t broadcast_one_vector_from(const host_vector<T>& that)
+    {
+        hipError_t status             = hipSuccess;
+        size_t     single_vector_size = 1 + ((m_n ? m_n : 1) - 1) * std::abs(m_inc ? m_inc : 1);
+        for(int64_t batch_index = 0; batch_index < m_batch_count; batch_index++)
+        {
+            status = hipMemcpy(this->data() + (batch_index * m_stride),
+                               that.data(),
+                               sizeof(T) * single_vector_size,
+                               this->use_HMM ? hipMemcpyHostToHost : hipMemcpyHostToDevice);
+            if(status != hipSuccess)
+                break;
+        }
+        return status;
     }
 
     //!
@@ -201,14 +222,15 @@ public:
 
 private:
     size_t         m_n{};
-    rocblas_int    m_inc{};
+    int64_t        m_inc{};
     rocblas_stride m_stride{};
-    rocblas_int    m_batch_count{};
+    int64_t        m_batch_count{};
     T*             m_data{};
 
-    static size_t
-        calculate_nmemb(size_t n, rocblas_int inc, rocblas_stride stride, rocblas_int batch_count)
+    static size_t calculate_nmemb(size_t n, int64_t inc, rocblas_stride stride, int64_t batch_count)
     {
-        return std::abs(inc) * n + size_t(batch_count - 1) * std::abs(stride);
+        // allocate even for zero n and batch_count
+        return 1 + ((n ? n : 1) - 1) * std::abs(inc ? inc : 1)
+               + size_t((batch_count > 0 ? batch_count : 1) - 1) * std::abs(stride);
     }
 };

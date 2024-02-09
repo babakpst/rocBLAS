@@ -19,9 +19,11 @@ Tests:
     category: bench
     function: axpy
     precision: *single_double_precisions_complex_real
-    iters: 20
+    cold_iters: 5000
+    iters: 5000
     alpha: 1
     incx: 1
     incy: 1
     matrix_size: *sizes
+#   flush_memory_size: 4000000000
 ...

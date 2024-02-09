@@ -79,29 +79,24 @@
 #undef hipFree
 #endif
 
-#define LIMITED_RAM_STRING "Warning: Attempting to allocate more host memory than available."
-#define LIMITED_MEMORY_STRING "Warning: Attempting to allocate more gpu memory than available."
-#define TOO_MANY_DEVICES_STRING "Warning: Too many devices requested."
-#define HMM_NOT_SUPPORTED "Warning: HMM not supported."
-
-// TODO: This is dependent on internal gtest behaviour.
-// Comparing against result.message() when a test ended. With SUCCEED() that "Succeeded\n" is
-// added to the beginning of the message automatically by gtest, so this must be compared.
-// For GTEST_SKIP() "Skipped\n" is added at the beginning of the message.
-#define LIMITED_RAM_STRING_GTEST "Skipped\n" LIMITED_RAM_STRING
-#define LIMITED_MEMORY_STRING_GTEST "Skipped\n" LIMITED_MEMORY_STRING
-#define TOO_MANY_DEVICES_STRING_GTEST "Skipped\n" TOO_MANY_DEVICES_STRING
-#define HMM_NOT_SUPPORTED_GTEST "Skipped\n" HMM_NOT_SUPPORTED
+// For GTEST_SKIP() we search for these sub-strings in listener to determine skip category
+#define LIMITED_RAM_STRING "skip: RAM"
+#define LIMITED_VRAM_STRING "skip: VRAM"
+#define TOO_FEW_DEVICES_PRESENT_STRING "skip: device_count"
+#define HMM_NOT_SUPPORTED_STRING "skip: HMM"
 
 #define NOOP (void)0
 
 /*!
- * Initialize rocBLAS for the current HIP device and report
- * the time taken to complete the initialization. This is used to
- * avoid costly startup time at the first call on that device.
- * Internal use for benchmark & testing.
+ * Initialize rocBLAS for the requested number of  HIP devices
+ * and report the time taken to complete the initialization.
+ * This is to avoid costly startup time at the first call on
+ * that device. Internal use for benchmark & testing.
+ * Initializes devices indexed from 0 to parallel_devices-1.
+ * If parallel_devices is 1, hipSetDevice should be called
+ * before calling this function.
  */
-void rocblas_client_initialize();
+void rocblas_parallel_initialize(int parallel_devices);
 
 /* ============================================================================================ */
 /*! \brief  local handle which is automatically created and destroyed  */
@@ -264,7 +259,9 @@ inline void regular_to_banded(bool upper, const T& h_A, T& h_AB, rocblas_int k)
     size_t      ldab = h_AB.lda();
     rocblas_int n    = h_AB.n();
 
+#ifdef _OPENMP
 #pragma omp parallel for
+#endif
     for(rocblas_int batch_index = 0; batch_index < h_A.batch_count(); ++batch_index)
     {
         auto* A  = h_A[batch_index];
@@ -328,7 +325,9 @@ inline void banded_matrix_setup(bool upper, T& h_A, rocblas_int k)
 {
     rocblas_int n = h_A.n();
 
+#ifdef _OPENMP
 #pragma omp parallel for
+#endif
     for(rocblas_int batch_index = 0; batch_index < h_A.batch_count(); ++batch_index)
     {
         auto* A = h_A[batch_index];
@@ -353,7 +352,7 @@ inline void banded_matrix_setup(bool upper, T& h_A, rocblas_int k)
 template <typename T>
 inline void regular_to_packed(bool upper, const T* A, T* AP, rocblas_int n)
 {
-    int index = 0;
+    size_t index = 0;
     if(upper)
     {
         for(int i = 0; i < n; i++)
@@ -383,12 +382,14 @@ inline void regular_to_packed(bool upper, const T* A, T* AP, rocblas_int n)
 template <typename U>
 inline void regular_to_packed(bool upper, U& h_A, U& h_AP, rocblas_int n)
 {
+#ifdef _OPENMP
 #pragma omp parallel for
+#endif
     for(rocblas_int batch_index = 0; batch_index < h_A.batch_count(); ++batch_index)
     {
-        auto* AP    = h_AP[batch_index];
-        auto* A     = h_A[batch_index];
-        int   index = 0;
+        auto*  AP    = h_AP[batch_index];
+        auto*  A     = h_A[batch_index];
+        size_t index = 0;
         if(upper)
         {
             for(int i = 0; i < n; i++)
@@ -422,24 +423,24 @@ void make_unit_diagonal(rocblas_fill uplo, T* hA, size_t lda, rocblas_int N)
     {
         for(int i = 0; i < N; i++)
         {
-            T diag = hA[i + i * lda];
+            T diag = hA[i + i * size_t(lda)];
             for(int j = 0; j <= i; j++)
-                hA[i + j * lda] = hA[i + j * lda] / diag;
+                hA[i + j * size_t(lda)] = hA[i + j * size_t(lda)] / diag;
         }
     }
     else // rocblas_fill_upper
     {
         for(int j = 0; j < N; j++)
         {
-            T diag = hA[j + j * lda];
+            T diag = hA[j + j * size_t(lda)];
             for(int i = 0; i <= j; i++)
-                hA[i + j * lda] = hA[i + j * lda] / diag;
+                hA[i + j * size_t(lda)] = hA[i + j * size_t(lda)] / diag;
         }
     }
-    // randomly initalize diagonal to ensure we aren't using it's values for tests.
+    // randomly initialize diagonal to ensure we aren't using it's values for tests.
     for(int i = 0; i < N; i++)
     {
-        rocblas_init_nan<T>(hA + i * lda + i, 1, 1, 1);
+        rocblas_init<T>(hA + i * size_t(lda) + i, 1, 1, 1);
     }
 }
 
@@ -452,7 +453,9 @@ void make_unit_diagonal(rocblas_fill uplo, T& h_A)
     rocblas_int N   = h_A.n();
     size_t      lda = h_A.lda();
 
+#ifdef _OPENMP
 #pragma omp parallel for
+#endif
     for(rocblas_int batch_index = 0; batch_index < h_A.batch_count(); ++batch_index)
     {
         auto* A = h_A[batch_index];
@@ -478,7 +481,7 @@ void make_unit_diagonal(rocblas_fill uplo, T& h_A)
         // randomly initalize diagonal to ensure we aren't using it's values for tests.
         for(int i = 0; i < N; i++)
         {
-            rocblas_init_nan(A + i * lda + i, 1, 1, 1);
+            rocblas_init(A + i * lda + i, 1, 1, 1);
         }
     }
 }
@@ -563,3 +566,45 @@ void print_batched_matrix(const char*           name,
     }
     rocblas_cout << std::flush;
 }
+
+template <typename T>
+inline rocblas_stride align_stride(rocblas_stride stride)
+{
+    // hipMalloc aligns pointers on 256 byte boundaries (or a multiple of 256)
+    // this function is to align stride*sizeof(T) on 256 byte boundaries
+    size_t byte_alignment = 256;
+
+    if(byte_alignment % sizeof(T) == 0)
+    {
+        size_t type_alignment = byte_alignment / sizeof(T);
+        return ((stride - 1) / type_alignment + 1) * type_alignment;
+    }
+    else
+    {
+        return ((stride - 1) / byte_alignment + 1) * byte_alignment;
+    }
+}
+
+inline void print_memory_size(size_t memory_size)
+{
+    if(memory_size < 1024)
+    {
+        rocblas_cout << std::setprecision(0) << memory_size << " Bytes";
+    }
+    else if(memory_size < 1048576)
+    {
+        rocblas_cout << std::setprecision(3) << float(memory_size) / 1024.0f << " KB";
+    }
+    else if(memory_size < 1073741824)
+    {
+        rocblas_cout << std::setprecision(6) << float(memory_size) / 1048576.0f << " MB";
+    }
+    else
+    {
+        rocblas_cout << std::setprecision(9) << float(memory_size) / 1073741824.0f << " GB";
+    }
+}
+
+size_t calculate_flush_batch_count(size_t arg_flush_batch_count,
+                                   size_t arg_flush_memory_size,
+                                   size_t cached_size);

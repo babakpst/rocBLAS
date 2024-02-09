@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,9 +42,9 @@
 template <typename T>
 void testing_trsv_bad_arg(const Arguments& arg)
 {
-    auto rocblas_trsv_fn = arg.fortran ? rocblas_trsv<T, true> : rocblas_trsv<T, false>;
+    auto rocblas_trsv_fn = arg.api == FORTRAN ? rocblas_trsv<T, true> : rocblas_trsv<T, false>;
 
-    const rocblas_int       M      = 100;
+    const rocblas_int       N      = 100;
     const rocblas_int       lda    = 100;
     const rocblas_int       incx   = 1;
     const rocblas_operation transA = rocblas_operation_none;
@@ -55,16 +55,16 @@ void testing_trsv_bad_arg(const Arguments& arg)
 
     // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
     // Allocate host memory
-    host_matrix<T> hA(M, M, lda);
-    host_vector<T> hx(M, incx);
+    host_matrix<T> hA(N, N, lda);
+    host_vector<T> hx(N, incx);
 
     // Check host memory allocation
     CHECK_HIP_ERROR(hA.memcheck());
     CHECK_HIP_ERROR(hx.memcheck());
 
     // Allocate device memory
-    device_matrix<T> dA(M, M, lda);
-    device_vector<T> dx(M, incx);
+    device_matrix<T> dA(N, N, lda);
+    device_vector<T> dx(N, incx);
 
     // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dA.memcheck());
@@ -72,35 +72,35 @@ void testing_trsv_bad_arg(const Arguments& arg)
 
     // Checks.
     EXPECT_ROCBLAS_STATUS(
-        rocblas_trsv_fn(handle, rocblas_fill_full, transA, diag, M, dA, lda, dx, incx),
+        rocblas_trsv_fn(handle, rocblas_fill_full, transA, diag, N, dA, lda, dx, incx),
         rocblas_status_invalid_value);
 
     EXPECT_ROCBLAS_STATUS(
         rocblas_trsv_fn(
-            handle, uplo, (rocblas_operation)rocblas_fill_full, diag, M, dA, lda, dx, incx),
+            handle, uplo, (rocblas_operation)rocblas_fill_full, diag, N, dA, lda, dx, incx),
         rocblas_status_invalid_value);
 
     EXPECT_ROCBLAS_STATUS(
         rocblas_trsv_fn(
-            handle, uplo, transA, (rocblas_diagonal)rocblas_fill_full, M, dA, lda, dx, incx),
+            handle, uplo, transA, (rocblas_diagonal)rocblas_fill_full, N, dA, lda, dx, incx),
         rocblas_status_invalid_value);
 
-    EXPECT_ROCBLAS_STATUS(rocblas_trsv_fn(handle, uplo, transA, diag, M, nullptr, lda, dx, incx),
+    EXPECT_ROCBLAS_STATUS(rocblas_trsv_fn(handle, uplo, transA, diag, N, nullptr, lda, dx, incx),
                           rocblas_status_invalid_pointer);
 
-    EXPECT_ROCBLAS_STATUS(rocblas_trsv_fn(handle, uplo, transA, diag, M, dA, lda, nullptr, incx),
+    EXPECT_ROCBLAS_STATUS(rocblas_trsv_fn(handle, uplo, transA, diag, N, dA, lda, nullptr, incx),
                           rocblas_status_invalid_pointer);
 
-    EXPECT_ROCBLAS_STATUS(rocblas_trsv_fn(nullptr, uplo, transA, diag, M, dA, lda, dx, incx),
+    EXPECT_ROCBLAS_STATUS(rocblas_trsv_fn(nullptr, uplo, transA, diag, N, dA, lda, dx, incx),
                           rocblas_status_invalid_handle);
 }
 
 template <typename T>
 void testing_trsv(const Arguments& arg)
 {
-    auto rocblas_trsv_fn = arg.fortran ? rocblas_trsv<T, true> : rocblas_trsv<T, false>;
+    auto rocblas_trsv_fn = arg.api == FORTRAN ? rocblas_trsv<T, true> : rocblas_trsv<T, false>;
 
-    rocblas_int M           = arg.M;
+    rocblas_int N           = arg.N;
     rocblas_int lda         = arg.lda;
     rocblas_int incx        = arg.incx;
     char        char_uplo   = arg.uplo;
@@ -115,31 +115,28 @@ void testing_trsv(const Arguments& arg)
     rocblas_local_handle handle{arg};
 
     // check here to prevent undefined memory allocation error
-    bool invalid_size = M < 0 || lda < M || lda < 1 || !incx;
-    if(invalid_size || !M)
+    bool invalid_size = N < 0 || lda < N || lda < 1 || !incx;
+    if(invalid_size || !N)
     {
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
         EXPECT_ROCBLAS_STATUS(
-            rocblas_trsv_fn(handle, uplo, transA, diag, M, nullptr, lda, nullptr, incx),
+            rocblas_trsv_fn(handle, uplo, transA, diag, N, nullptr, lda, nullptr, incx),
             invalid_size ? rocblas_status_invalid_size : rocblas_status_success);
         return;
     }
 
-    size_t abs_incx = size_t(incx >= 0 ? incx : -incx);
-
     // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
     // Allocate host memory
-    host_matrix<T> hA(M, M, lda);
-    host_matrix<T> hAAT(M, M, lda);
-    host_vector<T> hb(M, incx);
-    host_vector<T> hx(M, incx);
-    host_vector<T> hx_or_b_1(M, incx);
-    host_vector<T> hx_or_b_2(M, incx);
-    host_vector<T> cpu_x_or_b(M, incx);
+    host_matrix<T> hA(N, N, lda);
+    host_matrix<T> hAAT(N, N, lda);
+    host_vector<T> hb(N, incx);
+    host_vector<T> hx(N, incx);
+    host_vector<T> hx_or_b(N, incx);
+    host_vector<T> cpu_x_or_b(N, incx);
 
     // Allocate device memory
-    device_matrix<T> dA(M, M, lda);
-    device_vector<T> dx_or_b(M, incx);
+    device_matrix<T> dA(N, N, lda);
+    device_vector<T> dx_or_b(N, incx);
 
     // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dA.memcheck());
@@ -156,22 +153,21 @@ void testing_trsv(const Arguments& arg)
     //  make hA unit diagonal if diag == rocblas_diagonal_unit
     if(diag == rocblas_diagonal_unit)
     {
-        make_unit_diagonal(uplo, (T*)hA, lda, M);
+        make_unit_diagonal(uplo, (T*)hA, lda, N);
     }
 
     hb = hx;
 
     // Calculate hb = hA*hx;
-    cblas_trmv<T>(uplo, transA, diag, M, hA, lda, hb, incx);
+    ref_trmv<T>(uplo, transA, diag, N, hA, lda, hb, incx);
     cpu_x_or_b = hb; // cpuXorB <- B
-    hx_or_b_1  = hb;
-    hx_or_b_2  = hb;
+    hx_or_b    = hb;
 
     // copy data from CPU to device
     CHECK_HIP_ERROR(dA.transfer_from(hA));
 
-    double max_err_1 = 0.0;
-    double max_err_2 = 0.0;
+    double max_err_host = 0.0;
+    double max_err_dev  = 0.0;
     double gpu_time_used, cpu_time_used;
     double error_eps_multiplier    = ERROR_EPS_MULTIPLIER;
     double residual_eps_multiplier = RESIDUAL_EPS_MULTIPLIER;
@@ -181,7 +177,7 @@ void testing_trsv(const Arguments& arg)
     {
         // Compute size
         CHECK_ROCBLAS_ERROR(rocblas_start_device_memory_size_query(handle));
-        CHECK_ALLOC_QUERY(rocblas_trsv_fn(handle, uplo, transA, diag, M, dA, lda, dx_or_b, incx));
+        CHECK_ALLOC_QUERY(rocblas_trsv_fn(handle, uplo, transA, diag, N, dA, lda, dx_or_b, incx));
         size_t size;
         CHECK_ROCBLAS_ERROR(rocblas_stop_device_memory_size_query(handle, &size));
 
@@ -191,48 +187,72 @@ void testing_trsv(const Arguments& arg)
 
     if(arg.unit_check || arg.norm_check)
     {
-        // calculate dxorb <- A^(-1) b   rocblas_device_pointer_host
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_1));
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(rocblas_trsv_fn(handle, uplo, transA, diag, M, dA, lda, dx_or_b, incx));
-        handle.post_test(arg);
-        CHECK_HIP_ERROR(hx_or_b_1.transfer_from(dx_or_b));
+        if(arg.pointer_mode_host)
+        {
+            // calculate dxorb <- A^(-1) b   rocblas_device_pointer_host
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+            CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b));
 
-        // calculate dxorb <- A^(-1) b   rocblas_device_pointer_device
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_2));
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(rocblas_trsv_fn(handle, uplo, transA, diag, M, dA, lda, dx_or_b, incx));
-        handle.post_test(arg);
-        CHECK_HIP_ERROR(hx_or_b_2.transfer_from(dx_or_b));
+            handle.pre_test(arg);
+            CHECK_ROCBLAS_ERROR(
+                rocblas_trsv_fn(handle, uplo, transA, diag, N, dA, lda, dx_or_b, incx));
+            handle.post_test(arg);
+            CHECK_HIP_ERROR(hx_or_b.transfer_from(dx_or_b));
+        }
 
-        //computed result is in hx_or_b, so forward error is E = hx - hx_or_b
-        // calculate norm 1 of vector E
-        max_err_1 = rocblas_abs(vector_norm_1<T>(M, abs_incx, hx, hx_or_b_1));
-        max_err_2 = rocblas_abs(vector_norm_1<T>(M, abs_incx, hx, hx_or_b_2));
+        if(arg.pointer_mode_device)
+        {
+            // calculate dxorb <- A^(-1) b   rocblas_device_pointer_device
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+            CHECK_HIP_ERROR(dx_or_b.transfer_from(cpu_x_or_b));
 
-        //unit test
-        trsm_err_res_check<T>(max_err_1, M, error_eps_multiplier, eps);
-        trsm_err_res_check<T>(max_err_2, M, error_eps_multiplier, eps);
+            handle.pre_test(arg);
+            CHECK_ROCBLAS_ERROR(
+                rocblas_trsv_fn(handle, uplo, transA, diag, N, dA, lda, dx_or_b, incx));
+            handle.post_test(arg);
+        }
 
-        // hx_or_b contains A * (calculated X), so res = A * (calculated x) - b = hx_or_b - hb
-        cblas_trmv<T>(uplo, transA, diag, M, hA, lda, hx_or_b_1, incx);
-        cblas_trmv<T>(uplo, transA, diag, M, hA, lda, hx_or_b_2, incx);
+        if(arg.pointer_mode_host)
+        {
+            // computed result is in hx_or_b, so forward error is E = hx - hx_or_b
+            // calculate norm 1 of vector E
+            max_err_host = rocblas_abs(vector_norm_1<T>(N, incx, hx, hx_or_b));
 
-        // Calculate norm 1 of vector res
-        max_err_1 = rocblas_abs(vector_norm_1<T>(M, abs_incx, hx_or_b_1, hb));
-        max_err_2 = rocblas_abs(vector_norm_1<T>(M, abs_incx, hx_or_b_1, hb));
+            if(arg.unit_check)
+                trsm_err_res_check<T>(max_err_host, N, error_eps_multiplier, eps);
 
-        //unit test
-        trsm_err_res_check<T>(max_err_1, M, residual_eps_multiplier, eps);
-        trsm_err_res_check<T>(max_err_2, M, residual_eps_multiplier, eps);
+            // hx_or_b contains A * (calculated X), so res = A * (calculated x) - b = hx_or_b - hb
+            ref_trmv<T>(uplo, transA, diag, N, hA, lda, hx_or_b, incx);
+
+            // Calculate norm 1 of vector res
+            auto max_err_host_res = rocblas_abs(vector_norm_1<T>(N, incx, hx_or_b, hb));
+
+            if(arg.unit_check)
+                trsm_err_res_check<T>(max_err_host_res, N, residual_eps_multiplier, eps);
+            max_err_host = std::max(max_err_host, max_err_host_res);
+        }
+
+        if(arg.pointer_mode_device)
+        {
+            CHECK_HIP_ERROR(hx_or_b.transfer_from(dx_or_b));
+
+            max_err_dev = rocblas_abs(vector_norm_1<T>(N, incx, hx, hx_or_b));
+            if(arg.unit_check)
+                trsm_err_res_check<T>(max_err_dev, N, error_eps_multiplier, eps);
+
+            ref_trmv<T>(uplo, transA, diag, N, hA, lda, hx_or_b, incx);
+            auto max_err_dev_res = rocblas_abs(vector_norm_1<T>(N, incx, hx_or_b, hb));
+
+            if(arg.unit_check)
+                trsm_err_res_check<T>(max_err_dev_res, N, residual_eps_multiplier, eps);
+            max_err_dev = std::max(max_err_dev, max_err_dev_res);
+        }
     }
 
     if(arg.timing)
     {
         // GPU rocBLAS
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_1));
+        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b));
 
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
 
@@ -240,14 +260,14 @@ void testing_trsv(const Arguments& arg)
         int number_hot_calls  = arg.iters;
 
         for(int i = 0; i < number_cold_calls; i++)
-            rocblas_trsv_fn(handle, uplo, transA, diag, M, dA, lda, dx_or_b, incx);
+            rocblas_trsv_fn(handle, uplo, transA, diag, N, dA, lda, dx_or_b, incx);
 
         hipStream_t stream;
         CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
         gpu_time_used = get_time_us_sync(stream); // in microseconds
 
         for(int i = 0; i < number_hot_calls; i++)
-            rocblas_trsv_fn(handle, uplo, transA, diag, M, dA, lda, dx_or_b, incx);
+            rocblas_trsv_fn(handle, uplo, transA, diag, N, dA, lda, dx_or_b, incx);
 
         gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
 
@@ -255,18 +275,18 @@ void testing_trsv(const Arguments& arg)
         cpu_time_used = get_time_us_no_sync();
 
         if(arg.norm_check)
-            cblas_trsv<T>(uplo, transA, diag, M, hA, lda, cpu_x_or_b, incx);
+            ref_trsv<T>(uplo, transA, diag, N, hA, lda, cpu_x_or_b, incx);
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
-        ArgumentModel<e_uplo, e_transA, e_diag, e_M, e_lda, e_incx>{}.log_args<T>(
+        ArgumentModel<e_uplo, e_transA, e_diag, e_N, e_lda, e_incx>{}.log_args<T>(
             rocblas_cout,
             arg,
             gpu_time_used,
-            trsv_gflop_count<T>(M),
+            trsv_gflop_count<T>(N),
             ArgumentLogging::NA_value,
             cpu_time_used,
-            max_err_1,
-            max_err_2);
+            max_err_host,
+            max_err_dev);
     }
 }

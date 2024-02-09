@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -19,10 +19,9 @@
  * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * ************************************************************************ */
-
+#define ROCBLAS_BETA_FEATURES_API
 #include "program_options.hpp"
 
-#include "rocblas.h"
 #include "rocblas.hpp"
 #include "rocblas_data.hpp"
 #include "rocblas_datatype2string.hpp"
@@ -39,6 +38,9 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+
+#include "frequency_monitor.hpp"
+
 // aux
 #include "testing_set_get_matrix.hpp"
 #include "testing_set_get_matrix_async.hpp"
@@ -166,7 +168,7 @@
 #include "testing_trsv.hpp"
 #include "testing_trsv_batched.hpp"
 #include "testing_trsv_strided_batched.hpp"
-// blas3 with no tensile
+// blas3 with no tensile, some may use source gemm
 #include "testing_dgmm.hpp"
 #include "testing_dgmm_batched.hpp"
 #include "testing_dgmm_strided_batched.hpp"
@@ -174,6 +176,9 @@
 #include "testing_geam_batched.hpp"
 #include "testing_geam_ex.hpp"
 #include "testing_geam_strided_batched.hpp"
+#include "testing_gemmt.hpp"
+#include "testing_gemmt_batched.hpp"
+#include "testing_gemmt_strided_batched.hpp"
 #include "testing_her2k.hpp"
 #include "testing_her2k_batched.hpp"
 #include "testing_her2k_strided_batched.hpp"
@@ -189,14 +194,33 @@
 #include "testing_syrk.hpp"
 #include "testing_syrk_batched.hpp"
 #include "testing_syrk_strided_batched.hpp"
-#include "testing_trmm_outofplace.hpp"
-#include "testing_trmm_outofplace_batched.hpp"
-#include "testing_trmm_outofplace_strided_batched.hpp"
-//
+#include "testing_trmm.hpp"
+#include "testing_trmm_batched.hpp"
+#include "testing_trmm_strided_batched.hpp"
 #include "type_dispatch.hpp"
 #include "utility.hpp"
-#include <algorithm>
 #undef I
+
+#if BUILD_WITH_TENSILE
+#include "testing_gemm.hpp"
+#include "testing_gemm_batched.hpp"
+#include "testing_gemm_batched_ex.hpp"
+#include "testing_gemm_batched_ex3.hpp"
+#include "testing_gemm_ex.hpp"
+#include "testing_gemm_ex3.hpp"
+#include "testing_gemm_strided_batched.hpp"
+#include "testing_gemm_strided_batched_ex.hpp"
+#include "testing_gemm_strided_batched_ex3.hpp"
+#include "testing_trsm.hpp"
+#include "testing_trsm_batched.hpp"
+#include "testing_trsm_batched_ex.hpp"
+#include "testing_trsm_ex.hpp"
+#include "testing_trsm_strided_batched.hpp"
+#include "testing_trsm_strided_batched_ex.hpp"
+#include "testing_trtri.hpp"
+#include "testing_trtri_batched.hpp"
+#include "testing_trtri_strided_batched.hpp"
+#endif
 
 using namespace roc; // For emulated program_options
 using namespace std::literals; // For std::string literals of form "str"s
@@ -224,25 +248,6 @@ void run_function(const func_map& map, const Arguments& arg, const std::string& 
 
 #if BUILD_WITH_TENSILE
 
-#include "testing_gemm.hpp"
-#include "testing_gemm_batched.hpp"
-#include "testing_gemm_batched_ex.hpp"
-#include "testing_gemm_ex.hpp"
-#include "testing_gemm_strided_batched.hpp"
-#include "testing_gemm_strided_batched_ex.hpp"
-#include "testing_trmm.hpp"
-#include "testing_trmm_batched.hpp"
-#include "testing_trmm_strided_batched.hpp"
-#include "testing_trsm.hpp"
-#include "testing_trsm_batched.hpp"
-#include "testing_trsm_batched_ex.hpp"
-#include "testing_trsm_ex.hpp"
-#include "testing_trsm_strided_batched.hpp"
-#include "testing_trsm_strided_batched_ex.hpp"
-#include "testing_trtri.hpp"
-#include "testing_trtri_batched.hpp"
-#include "testing_trtri_strided_batched.hpp"
-
 // Template to dispatch testing_gemm_ex for performance tests
 // When Ti == void or Ti == To == Tc == bfloat16, the test is marked invalid
 template <typename Ti, typename To = Ti, typename Tc = To, typename = void>
@@ -251,12 +256,14 @@ struct perf_gemm_ex : rocblas_test_invalid
 };
 
 template <typename Ti, typename To, typename Tc>
-struct perf_gemm_ex<Ti,
-                    To,
-                    Tc,
-                    std::enable_if_t<!std::is_same<Ti, void>{}
-                                     && !(std::is_same<Ti, To>{} && std::is_same<Ti, Tc>{}
-                                          && std::is_same<Ti, rocblas_bfloat16>{})>>
+struct perf_gemm_ex<
+    Ti,
+    To,
+    Tc,
+    std::enable_if_t<
+        !std::is_same_v<
+            Ti,
+            void> && !(std::is_same_v<Ti, To> && std::is_same_v<Ti, Tc> && std::is_same_v<Ti, rocblas_bfloat16>)>>
     : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
@@ -264,6 +271,36 @@ struct perf_gemm_ex<Ti,
         static const func_map map = {
             {"gemm_ex", testing_gemm_ex<Ti, To, Tc>},
             {"gemm_batched_ex", testing_gemm_batched_ex<Ti, To, Tc>},
+        };
+        run_function(map, arg);
+    }
+};
+
+// Template to dispatch testing_gemm_ex3 for performance tests
+// When Ti == void or Ti == To == Tc == bfloat16, the test is marked invalid
+template <typename TiA, typename TiB = TiA, typename To = TiA, typename Tc = To, typename = void>
+struct perf_gemm_ex3 : rocblas_test_invalid
+{
+};
+
+template <typename TiA, typename TiB, typename To, typename Tc>
+struct perf_gemm_ex3<
+    TiA,
+    TiB,
+    To,
+    Tc,
+    std::enable_if_t<(!std::is_same<TiA, void>{} && !std::is_same<TiB, void>{})
+                     && ((std::is_same<TiA, rocblas_f8>{} || std::is_same<TiA, rocblas_bf8>{}
+                          || std::is_same<TiA, rocblas_half>{} || std::is_same<TiA, float>{}))
+                     && (std::is_same<TiB, rocblas_f8>{} || std::is_same<TiB, rocblas_bf8>{}
+                         || std::is_same<TiB, rocblas_half>{} || std::is_same<TiB, float>{})>>
+    : rocblas_test_valid
+{
+    void operator()(const Arguments& arg)
+    {
+        static const func_map map = {
+            {"gemm_ex3", testing_gemm_ex3<TiA, TiB, To, Tc>},
+            {"gemm_batched_ex3", testing_gemm_batched_ex3<TiA, TiB, To, Tc>},
         };
         run_function(map, arg);
     }
@@ -281,14 +318,45 @@ struct perf_gemm_strided_batched_ex<
     Ti,
     To,
     Tc,
-    std::enable_if_t<!std::is_same<Ti, void>{}
-                     && !(std::is_same<Ti, To>{} && std::is_same<Ti, Tc>{}
-                          && std::is_same<Ti, rocblas_bfloat16>{})>> : rocblas_test_valid
+    std::enable_if_t<
+        !std::is_same_v<
+            Ti,
+            void> && !(std::is_same_v<Ti, To> && std::is_same_v<Ti, Tc> && std::is_same_v<Ti, rocblas_bfloat16>)>>
+    : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
         static const func_map map = {
             {"gemm_strided_batched_ex", testing_gemm_strided_batched_ex<Ti, To, Tc>},
+        };
+        run_function(map, arg);
+    }
+};
+
+// Template to dispatch testing_gemm_ex3 for performance tests
+// When Ti == void or Ti == To == Tc == bfloat16, the test is marked invalid
+template <typename TiA, typename TiB = TiA, typename To = TiA, typename Tc = To, typename = void>
+struct perf_gemm_strided_batched_ex3 : rocblas_test_invalid
+{
+};
+
+template <typename TiA, typename TiB, typename To, typename Tc>
+struct perf_gemm_strided_batched_ex3<
+    TiA,
+    TiB,
+    To,
+    Tc,
+    std::enable_if_t<(!std::is_same<TiA, void>{} && !std::is_same<TiB, void>{})
+                     && ((std::is_same<TiA, rocblas_f8>{} || std::is_same<TiA, rocblas_bf8>{}
+                          || std::is_same<TiA, rocblas_half>{} || std::is_same<TiA, float>{}))
+                     && (std::is_same<TiB, rocblas_f8>{} || std::is_same<TiB, rocblas_bf8>{}
+                         || std::is_same<TiB, rocblas_half>{} || std::is_same<TiB, float>{})>>
+    : rocblas_test_valid
+{
+    void operator()(const Arguments& arg)
+    {
+        static const func_map map = {
+            {"gemm_strided_batched_ex3", testing_gemm_strided_batched_ex3<TiA, TiB, To, Tc>},
         };
         run_function(map, arg);
     }
@@ -302,7 +370,7 @@ struct perf_blas : rocblas_test_invalid
 };
 
 template <typename T, typename U>
-struct perf_blas<T, U, std::enable_if_t<std::is_same<T, float>{} || std::is_same<T, double>{}>>
+struct perf_blas<T, U, std::enable_if_t<std::is_same_v<T, float> || std::is_same_v<T, double>>>
     : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
@@ -352,8 +420,6 @@ struct perf_blas<T, U, std::enable_if_t<std::is_same<T, float>{} || std::is_same
                 {"geam_strided_batched", testing_geam_strided_batched<T>},
                 {"geam_ex", testing_geam_ex<T>},
                 {"gemv", testing_gemv<T>},
-                {"gemv_batched", testing_gemv_batched<T>},
-                {"gemv_strided_batched", testing_gemv_strided_batched<T>},
                 {"ger", testing_ger<T, false>},
                 {"ger_batched", testing_ger_batched<T, false>},
                 {"ger_strided_batched", testing_ger_strided_batched<T, false>},
@@ -397,9 +463,15 @@ struct perf_blas<T, U, std::enable_if_t<std::is_same<T, float>{} || std::is_same
                 {"dgmm", testing_dgmm<T>},
                 {"dgmm_batched", testing_dgmm_batched<T>},
                 {"dgmm_strided_batched", testing_dgmm_strided_batched<T>},
+                {"gemmt", testing_gemmt<T>},
+                {"gemmt_batched", testing_gemmt_batched<T>},
+                {"gemmt_strided_batched", testing_gemmt_strided_batched<T>},
                 {"symm", testing_symm_hemm<T, false>},
                 {"symm_batched", testing_symm_hemm_batched<T, false>},
                 {"symm_strided_batched", testing_symm_hemm_strided_batched<T, false>},
+                {"trmm", testing_trmm<T>},
+                {"trmm_batched", testing_trmm_batched<T>},
+                {"trmm_strided_batched", testing_trmm_strided_batched<T>},
                 {"syrk", testing_syrk<T>},
                 {"syrk_batched", testing_syrk_batched<T>},
                 {"syrk_strided_batched", testing_syrk_strided_batched<T>},
@@ -409,16 +481,10 @@ struct perf_blas<T, U, std::enable_if_t<std::is_same<T, float>{} || std::is_same
                 {"trsv", testing_trsv<T>},
                 {"trsv_batched", testing_trsv_batched<T>},
                 {"trsv_strided_batched", testing_trsv_strided_batched<T>},
-                {"trmm_outofplace", testing_trmm_outofplace<T>},
-                {"trmm_outofplace_batched", testing_trmm_outofplace_batched<T>},
-                {"trmm_outofplace_strided_batched", testing_trmm_outofplace_strided_batched<T>},
 #if BUILD_WITH_TENSILE
                 {"syrkx", testing_syr2k<T, false>},
                 {"syrkx_batched", testing_syr2k_batched<T, false>},
                 {"syrkx_strided_batched", testing_syr2k_strided_batched<T, false>},
-                {"trmm", testing_trmm<T>},
-                {"trmm_batched", testing_trmm_batched<T>},
-                {"trmm_strided_batched", testing_trmm_strided_batched<T>},
                 {"trtri", testing_trtri<T>},
                 {"trtri_batched", testing_trtri_batched<T>},
                 {"trtri_strided_batched", testing_trtri_strided_batched<T>},
@@ -438,7 +504,7 @@ struct perf_blas<T, U, std::enable_if_t<std::is_same<T, float>{} || std::is_same
 };
 
 template <typename T, typename U>
-struct perf_blas<T, U, std::enable_if_t<std::is_same<T, rocblas_bfloat16>{}>> : rocblas_test_valid
+struct perf_blas<T, U, std::enable_if_t<std::is_same_v<T, rocblas_bfloat16>>> : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
@@ -452,7 +518,7 @@ struct perf_blas<T, U, std::enable_if_t<std::is_same<T, rocblas_bfloat16>{}>> : 
 };
 
 template <typename T, typename U>
-struct perf_blas<T, U, std::enable_if_t<std::is_same<T, rocblas_half>{}>> : rocblas_test_valid
+struct perf_blas<T, U, std::enable_if_t<std::is_same_v<T, rocblas_half>>> : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
@@ -474,11 +540,46 @@ struct perf_blas<T, U, std::enable_if_t<std::is_same<T, rocblas_half>{}>> : rocb
     }
 };
 
+// rocblas-bench dispatch for gemv_batched and gemv_strided_batched tests
+template <typename Ti, typename Tex = Ti, typename To = Tex, typename = void>
+struct perf_gemv_batched_and_strided_batched : rocblas_test_invalid
+{
+};
+
+template <typename Ti, typename Tex, typename To>
+struct perf_gemv_batched_and_strided_batched<
+    Ti,
+    Tex,
+    To,
+    std::enable_if_t<
+        (std::is_same<Ti, float>{} && std::is_same<To, Ti>{} && std::is_same<Tex, To>{})
+        || (std::is_same<Ti, double>{} && std::is_same<To, Ti>{} && std::is_same<Tex, To>{})
+        || (std::is_same<Ti, rocblas_float_complex>{} && std::is_same<To, Ti>{}
+            && std::is_same<Tex, To>{})
+        || (std::is_same<Ti, rocblas_double_complex>{} && std::is_same<To, Ti>{}
+            && std::is_same<Tex, To>{})
+        || (std::is_same<Ti, rocblas_half>{} && std::is_same<Tex, float>{}
+            && (std::is_same<To, Ti>{} || std::is_same<To, float>{}))
+        || (std::is_same<Ti, rocblas_bfloat16>{} && std::is_same<Tex, float>{}
+            && (std::is_same<To, Ti>{} || std::is_same<To, float>{}))>> : rocblas_test_valid
+{
+    void operator()(const Arguments& arg)
+    {
+        static const func_map map = {
+            {"gemv_batched", testing_gemv_batched<Ti, Tex, To>},
+            {"gemv_strided_batched", testing_gemv_strided_batched<Ti, Tex, To>},
+        };
+        run_function(map, arg);
+    }
+};
+
 template <typename T, typename U>
-struct perf_blas<T,
-                 U,
-                 std::enable_if_t<std::is_same<T, rocblas_double_complex>{}
-                                  || std::is_same<T, rocblas_float_complex>{}>> : rocblas_test_valid
+struct perf_blas<
+    T,
+    U,
+    std::enable_if_t<
+        std::is_same_v<T, rocblas_double_complex> || std::is_same_v<T, rocblas_float_complex>>>
+    : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
@@ -520,8 +621,6 @@ struct perf_blas<T,
                 {"gbmv_batched", testing_gbmv_batched<T>},
                 {"gbmv_strided_batched", testing_gbmv_strided_batched<T>},
                 {"gemv", testing_gemv<T>},
-                {"gemv_batched", testing_gemv_batched<T>},
-                {"gemv_strided_batched", testing_gemv_strided_batched<T>},
                 {"geru", testing_ger<T, false>},
                 {"geru_batched", testing_ger_batched<T, false>},
                 {"geru_strided_batched", testing_ger_strided_batched<T, false>},
@@ -583,6 +682,9 @@ struct perf_blas<T,
                 {"dgmm", testing_dgmm<T>},
                 {"dgmm_batched", testing_dgmm_batched<T>},
                 {"dgmm_strided_batched", testing_dgmm_strided_batched<T>},
+                {"gemmt", testing_gemmt<T>},
+                {"gemmt_batched", testing_gemmt_batched<T>},
+                {"gemmt_strided_batched", testing_gemmt_strided_batched<T>},
                 {"geam", testing_geam<T>},
                 {"geam_batched", testing_geam_batched<T>},
                 {"geam_strided_batched", testing_geam_strided_batched<T>},
@@ -592,9 +694,15 @@ struct perf_blas<T,
                 {"syr2k", testing_syr2k<T>},
                 {"syr2k_batched", testing_syr2k_batched<T>},
                 {"syr2k_strided_batched", testing_syr2k_strided_batched<T>},
+                {"syrkx", testing_syr2k<T, false>},
+                {"syrkx_batched", testing_syr2k_batched<T, false>},
+                {"syrkx_strided_batched", testing_syr2k_strided_batched<T, false>},
                 {"symm", testing_symm_hemm<T, false>},
                 {"symm_batched", testing_symm_hemm_batched<T, false>},
                 {"symm_strided_batched", testing_symm_hemm_strided_batched<T, false>},
+                {"trmm", testing_trmm<T>},
+                {"trmm_batched", testing_trmm_batched<T>},
+                {"trmm_strided_batched", testing_trmm_strided_batched<T>},
                 {"hemm", testing_symm_hemm<T, true>},
                 {"hemm_batched", testing_symm_hemm_batched<T, true>},
                 {"hemm_strided_batched", testing_symm_hemm_strided_batched<T, true>},
@@ -607,16 +715,7 @@ struct perf_blas<T,
                 {"herkx", testing_her2k<T, false>},
                 {"herkx_batched", testing_her2k_batched<T, false>},
                 {"herkx_strided_batched", testing_her2k_strided_batched<T, false>},
-                {"trmm_outofplace", testing_trmm_outofplace<T>},
-                {"trmm_outofplace_batched", testing_trmm_outofplace_batched<T>},
-                {"trmm_outofplace_strided_batched", testing_trmm_outofplace_strided_batched<T>},
 #if BUILD_WITH_TENSILE
-                {"syrkx", testing_syr2k<T, false>},
-                {"syrkx_batched", testing_syr2k_batched<T, false>},
-                {"syrkx_strided_batched", testing_syr2k_strided_batched<T, false>},
-                {"trtri", testing_trtri<T>},
-                {"trtri_batched", testing_trtri_batched<T>},
-                {"trtri_strided_batched", testing_trtri_strided_batched<T>},
                 {"gemm", testing_gemm<T>},
                 {"gemm_batched", testing_gemm_batched<T>},
                 {"gemm_strided_batched", testing_gemm_strided_batched<T>},
@@ -626,9 +725,9 @@ struct perf_blas<T,
                 {"trsm_batched_ex", testing_trsm_batched_ex<T>},
                 {"trsm_strided_batched", testing_trsm_strided_batched<T>},
                 {"trsm_strided_batched_ex", testing_trsm_strided_batched_ex<T>},
-                {"trmm", testing_trmm<T>},
-                {"trmm_batched", testing_trmm_batched<T>},
-                {"trmm_strided_batched", testing_trmm_strided_batched<T>},
+                {"trtri", testing_trtri<T>},
+                {"trtri_batched", testing_trtri_batched<T>},
+                {"trtri_strided_batched", testing_trtri_strided_batched<T>},
 #endif
               };
         run_function(map, arg);
@@ -646,22 +745,37 @@ struct perf_blas_axpy_ex<
     Tx,
     Ty,
     Tex,
-    std::enable_if_t<(std::is_same<Ta, float>{} && std::is_same<Ta, Tx>{} && std::is_same<Tx, Ty>{}
-                      && std::is_same<Ty, Tex>{})
-                     || (std::is_same<Ta, double>{} && std::is_same<Ta, Tx>{}
-                         && std::is_same<Tx, Ty>{} && std::is_same<Ty, Tex>{})
-                     || (std::is_same<Ta, rocblas_half>{} && std::is_same<Ta, Tx>{}
-                         && std::is_same<Tx, Ty>{} && std::is_same<Ty, Tex>{})
-                     || (std::is_same<Ta, rocblas_float_complex>{} && std::is_same<Ta, Tx>{}
-                         && std::is_same<Tx, Ty>{} && std::is_same<Ty, Tex>{})
-                     || (std::is_same<Ta, rocblas_double_complex>{} && std::is_same<Ta, Tx>{}
-                         && std::is_same<Tx, Ty>{} && std::is_same<Ty, Tex>{})
-                     || (std::is_same<Ta, rocblas_half>{} && std::is_same<Ta, Tx>{}
-                         && std::is_same<Tx, Ty>{} && std::is_same<Tex, float>{})
-                     || (std::is_same<Ta, rocblas_half>{} && std::is_same<Ta, Tx>{}
-                         && std::is_same<Ty, Tex>{} && std::is_same<Tex, float>{})
-                     || (std::is_same<Ta, float>{} && std::is_same<Tx, rocblas_half>{}
-                         && std::is_same<Ta, Tex>{} && std::is_same<Tx, Ty>{})>>
+    std::enable_if_t<
+        (std::is_same_v<
+             Ta,
+             float> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tex>)
+        || (std::is_same_v<
+                Ta,
+                double> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tex>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_half> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tex>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_float_complex> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tex>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_double_complex> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tex>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_half> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Ty> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_half> && std::is_same_v<Ta, Tx> && std::is_same_v<Ty, Tex> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<
+                Ta,
+                float> && std::is_same_v<Tx, rocblas_half> && std::is_same_v<Ta, Tex> && std::is_same_v<Tx, Ty>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_bfloat16> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Ty> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<
+                Ta,
+                float> && std::is_same_v<Tx, rocblas_bfloat16> && std::is_same_v<Tx, Ty> && std::is_same_v<Ta, Tex>)>>
     : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
@@ -686,20 +800,28 @@ struct perf_blas_dot_ex<
     Ty,
     Tr,
     Tex,
-    std::enable_if_t<(std::is_same<Tx, float>{} && std::is_same<Tx, Ty>{} && std::is_same<Ty, Tr>{}
-                      && std::is_same<Tr, Tex>{})
-                     || (std::is_same<Tx, double>{} && std::is_same<Tx, Ty>{}
-                         && std::is_same<Ty, Tr>{} && std::is_same<Tr, Tex>{})
-                     || (std::is_same<Tx, rocblas_half>{} && std::is_same<Tx, Ty>{}
-                         && std::is_same<Ty, Tr>{} && std::is_same<Tr, Tex>{})
-                     || (std::is_same<Tx, rocblas_float_complex>{} && std::is_same<Tx, Ty>{}
-                         && std::is_same<Ty, Tr>{} && std::is_same<Tr, Tex>{})
-                     || (std::is_same<Tx, rocblas_double_complex>{} && std::is_same<Tx, Ty>{}
-                         && std::is_same<Ty, Tr>{} && std::is_same<Tr, Tex>{})
-                     || (std::is_same<Tx, rocblas_half>{} && std::is_same<Tx, Ty>{}
-                         && std::is_same<Ty, Tr>{} && std::is_same<Tex, float>{})
-                     || (std::is_same<Tx, rocblas_bfloat16>{} && std::is_same<Tx, Ty>{}
-                         && std::is_same<Ty, Tr>{} && std::is_same<Tex, float>{})>>
+    std::enable_if_t<
+        (std::is_same_v<
+             Tx,
+             float> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tr> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                double> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tr> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_half> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tr> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_float_complex> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tr> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_double_complex> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tr> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_half> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tr> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_bfloat16> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tr> && std::is_same_v<Tex, float>)>>
     : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
@@ -727,14 +849,20 @@ struct perf_blas_nrm2_ex<
     Tr,
     Tex,
     std::enable_if_t<
-        (std::is_same<Tx, float>{} && std::is_same<Tx, Tr>{} && std::is_same<Tr, Tex>{})
-        || (std::is_same<Tx, double>{} && std::is_same<Tx, Tr>{} && std::is_same<Tr, Tex>{})
-        || (std::is_same<Tx, rocblas_float_complex>{} && std::is_same<Tr, float>{}
-            && std::is_same<Tr, Tex>{})
-        || (std::is_same<Tx, rocblas_double_complex>{} && std::is_same<Tr, double>{}
-            && std::is_same<Tr, Tex>{})
-        || (std::is_same<Tx, rocblas_half>{} && std::is_same<Tr, Tx>{}
-            && std::is_same<Tex, float>{})>> : rocblas_test_valid
+        (std::is_same_v<Tx, float> && std::is_same_v<Tx, Tr> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<Tx, double> && std::is_same_v<Tx, Tr> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_float_complex> && std::is_same_v<Tr, float> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_double_complex> && std::is_same_v<Tr, double> && std::is_same_v<Tr, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_bfloat16> && std::is_same_v<Tx, Tr> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<Tx,
+                           rocblas_half> && std::is_same_v<Tr, Tx> && std::is_same_v<Tex, float>)>>
+    : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
@@ -757,17 +885,22 @@ struct perf_blas_rot<
     Ti,
     To,
     Tc,
-    std::enable_if_t<(std::is_same<Ti, float>{} && std::is_same<Ti, To>{} && std::is_same<To, Tc>{})
-                     || (std::is_same<Ti, double>{} && std::is_same<Ti, To>{}
-                         && std::is_same<To, Tc>{})
-                     || (std::is_same<Ti, rocblas_float_complex>{} && std::is_same<To, float>{}
-                         && std::is_same<Tc, rocblas_float_complex>{})
-                     || (std::is_same<Ti, rocblas_float_complex>{} && std::is_same<To, float>{}
-                         && std::is_same<Tc, float>{})
-                     || (std::is_same<Ti, rocblas_double_complex>{} && std::is_same<To, double>{}
-                         && std::is_same<Tc, rocblas_double_complex>{})
-                     || (std::is_same<Ti, rocblas_double_complex>{} && std::is_same<To, double>{}
-                         && std::is_same<Tc, double>{})>> : rocblas_test_valid
+    std::enable_if_t<
+        (std::is_same_v<Ti, float> && std::is_same_v<Ti, To> && std::is_same_v<To, Tc>)
+        || (std::is_same_v<Ti, double> && std::is_same_v<Ti, To> && std::is_same_v<To, Tc>)
+        || (std::is_same_v<
+                Ti,
+                rocblas_float_complex> && std::is_same_v<To, float> && std::is_same_v<Tc, rocblas_float_complex>)
+        || (std::is_same_v<
+                Ti,
+                rocblas_float_complex> && std::is_same_v<To, float> && std::is_same_v<Tc, float>)
+        || (std::is_same_v<
+                Ti,
+                rocblas_double_complex> && std::is_same_v<To, double> && std::is_same_v<Tc, rocblas_double_complex>)
+        || (std::is_same_v<
+                Ti,
+                rocblas_double_complex> && std::is_same_v<To, double> && std::is_same_v<Tc, double>)>>
+    : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
@@ -792,22 +925,31 @@ struct perf_blas_rot_ex<
     Tcs,
     Tex,
     std::enable_if_t<
-        (std::is_same<Tx, float>{} && std::is_same<Tx, Ty>{} && std::is_same<Ty, Tcs>{}
-         && std::is_same<Tcs, Tex>{})
-        || (std::is_same<Tx, double>{} && std::is_same<Ty, Tx>{} && std::is_same<Ty, Tcs>{}
-            && std::is_same<Tex, Tcs>{})
-        || (std::is_same<Tx, rocblas_float_complex>{} && std::is_same<Ty, Tx>{}
-            && std::is_same<Tcs, Ty>{} && std::is_same<Tcs, Tex>{})
-        || (std::is_same<Tx, rocblas_double_complex>{} && std::is_same<Tx, Ty>{}
-            && std::is_same<Tcs, Ty>{} && std::is_same<Tex, Tcs>{})
-        || (std::is_same<Tx, rocblas_float_complex>{} && std::is_same<Ty, Tx>{}
-            && std::is_same<Tcs, float>{} && std::is_same<Tex, rocblas_float_complex>{})
-        || (std::is_same<Tx, rocblas_double_complex>{} && std::is_same<Tx, Ty>{}
-            && std::is_same<Tcs, double>{} && std::is_same<Tex, rocblas_double_complex>{})
-        || (std::is_same<Tx, rocblas_half>{} && std::is_same<Ty, Tx>{} && std::is_same<Tcs, Ty>{}
-            && std::is_same<Tex, float>{})
-        || (std::is_same<Tx, rocblas_bfloat16>{} && std::is_same<Ty, Tx>{}
-            && std::is_same<Tcs, Ty>{} && std::is_same<Tex, float>{})>> : rocblas_test_valid
+        (std::is_same_v<
+             Tx,
+             float> && std::is_same_v<Tx, Ty> && std::is_same_v<Ty, Tcs> && std::is_same_v<Tcs, Tex>)
+        || (std::is_same_v<
+                Tx,
+                double> && std::is_same_v<Ty, Tx> && std::is_same_v<Ty, Tcs> && std::is_same_v<Tex, Tcs>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_float_complex> && std::is_same_v<Ty, Tx> && std::is_same_v<Tcs, Ty> && std::is_same_v<Tcs, Tex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_double_complex> && std::is_same_v<Tx, Ty> && std::is_same_v<Tcs, Ty> && std::is_same_v<Tex, Tcs>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_float_complex> && std::is_same_v<Ty, Tx> && std::is_same_v<Tcs, float> && std::is_same_v<Tex, rocblas_float_complex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_double_complex> && std::is_same_v<Tx, Ty> && std::is_same_v<Tcs, double> && std::is_same_v<Tex, rocblas_double_complex>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_half> && std::is_same_v<Ty, Tx> && std::is_same_v<Tcs, Ty> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<
+                Tx,
+                rocblas_bfloat16> && std::is_same_v<Ty, Tx> && std::is_same_v<Tcs, Ty> && std::is_same_v<Tex, float>)>>
+    : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
@@ -829,12 +971,12 @@ template <typename Tx, typename Ta>
 struct perf_blas_scal<
     Tx,
     Ta,
-    std::enable_if_t<(std::is_same<Ta, double>{} && std::is_same<Tx, rocblas_double_complex>{})
-                     || (std::is_same<Ta, float>{} && std::is_same<Tx, rocblas_float_complex>{})
-                     || (std::is_same<Tx, Ta>{} && std::is_same<Tx, float>{})
-                     || (std::is_same<Tx, Ta>{} && std::is_same<Tx, double>{})
-                     || (std::is_same<Tx, Ta>{} && std::is_same<Tx, rocblas_float_complex>{})
-                     || (std::is_same<Tx, Ta>{} && std::is_same<Tx, rocblas_double_complex>{})>>
+    std::enable_if_t<(std::is_same_v<Ta, double> && std::is_same_v<Tx, rocblas_double_complex>)
+                     || (std::is_same_v<Ta, float> && std::is_same_v<Tx, rocblas_float_complex>)
+                     || (std::is_same_v<Tx, Ta> && std::is_same_v<Tx, float>)
+                     || (std::is_same_v<Tx, Ta> && std::is_same_v<Tx, double>)
+                     || (std::is_same_v<Tx, Ta> && std::is_same_v<Tx, rocblas_float_complex>)
+                     || (std::is_same_v<Tx, Ta> && std::is_same_v<Tx, rocblas_double_complex>)>>
     : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
@@ -860,21 +1002,32 @@ struct perf_blas_scal_ex<
     Tx,
     Tex,
     std::enable_if_t<
-        (std::is_same<Ta, float>{} && std::is_same<Ta, Tx>{} && std::is_same<Tx, Tex>{})
-        || (std::is_same<Ta, double>{} && std::is_same<Ta, Tx>{} && std::is_same<Tx, Tex>{})
-        || (std::is_same<Ta, rocblas_half>{} && std::is_same<Ta, Tx>{} && std::is_same<Tx, Tex>{})
-        || (std::is_same<Ta, rocblas_float_complex>{} && std::is_same<Ta, Tx>{}
-            && std::is_same<Tx, Tex>{})
-        || (std::is_same<Ta, rocblas_double_complex>{} && std::is_same<Ta, Tx>{}
-            && std::is_same<Tx, Tex>{})
-        || (std::is_same<Ta, rocblas_half>{} && std::is_same<Ta, Tx>{}
-            && std::is_same<Tex, float>{})
-        || (std::is_same<Ta, float>{} && std::is_same<Tx, rocblas_half>{}
-            && std::is_same<Ta, Tex>{})
-        || (std::is_same<Ta, float>{} && std::is_same<Tx, rocblas_float_complex>{}
-            && std::is_same<Tx, Tex>{})
-        || (std::is_same<Ta, double>{} && std::is_same<Tx, rocblas_double_complex>{}
-            && std::is_same<Tx, Tex>{})>> : rocblas_test_valid
+        (std::is_same_v<Ta, float> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Tex>)
+        || (std::is_same_v<Ta, double> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Tex>)
+        || (std::is_same_v<Ta, rocblas_half> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Tex>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_float_complex> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Tex>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_double_complex> && std::is_same_v<Ta, Tx> && std::is_same_v<Tx, Tex>)
+        || (std::is_same_v<Ta,
+                           rocblas_half> && std::is_same_v<Ta, Tx> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<Ta,
+                           float> && std::is_same_v<Tx, rocblas_half> && std::is_same_v<Ta, Tex>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_bfloat16> && std::is_same_v<Ta, Tx> && std::is_same_v<Tex, float>)
+        || (std::is_same_v<
+                Ta,
+                float> && std::is_same_v<Tx, rocblas_bfloat16> && std::is_same_v<Ta, Tex>)
+        || (std::is_same_v<
+                Ta,
+                float> && std::is_same_v<Tx, rocblas_float_complex> && std::is_same_v<Tx, Tex>)
+        || (std::is_same_v<
+                Ta,
+                double> && std::is_same_v<Tx, rocblas_double_complex> && std::is_same_v<Tx, Tex>)>>
+    : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
     {
@@ -898,12 +1051,14 @@ struct perf_blas_rotg<
     Tb,
     Tc,
     std::enable_if_t<
-        (std::is_same<Ta, rocblas_double_complex>{} && std::is_same<Tb, double>{}
-         && std::is_same<Ta, Tc>{})
-        || (std::is_same<Ta, rocblas_float_complex>{} && std::is_same<Tb, float>{}
-            && std::is_same<Ta, Tc>{})
-        || (std::is_same<Ta, Tb>{} && std::is_same<Ta, float>{} && std::is_same<Ta, Tc>{})
-        || (std::is_same<Ta, Tb>{} && std::is_same<Ta, double>{} && std::is_same<Ta, Tc>{})>>
+        (std::is_same_v<
+             Ta,
+             rocblas_double_complex> && std::is_same_v<Tb, double> && std::is_same_v<Ta, Tc>)
+        || (std::is_same_v<
+                Ta,
+                rocblas_float_complex> && std::is_same_v<Tb, float> && std::is_same_v<Ta, Tc>)
+        || (std::is_same_v<Ta, Tb> && std::is_same_v<Ta, float> && std::is_same_v<Ta, Tc>)
+        || (std::is_same_v<Ta, Tb> && std::is_same_v<Ta, double> && std::is_same_v<Ta, Tc>)>>
     : rocblas_test_valid
 {
     void operator()(const Arguments& arg)
@@ -917,12 +1072,16 @@ struct perf_blas_rotg<
     }
 };
 
-int run_bench_test(
-    bool init, Arguments& arg, const std::string& filter, bool any_stride, bool yaml = false)
+int run_bench_test(bool               init,
+                   Arguments&         arg,
+                   const std::string& filter,
+                   const std::string& name_filter,
+                   bool               any_stride,
+                   bool               yaml = false)
 {
     if(init)
     {
-        static int runOnce = (rocblas_client_initialize(), 0); // Initialize rocBLAS
+        static int runOnce = (rocblas_parallel_initialize(1), 0); // Initialize rocBLAS
     }
 
     rocblas_cout << std::setiosflags(std::ios::fixed)
@@ -941,6 +1100,7 @@ int run_bench_test(
     // Skip past any testing_ prefix in function
     static constexpr char prefix[] = "testing_";
     const char*           function = arg.function;
+    const char*           name     = arg.name;
     if(!strncmp(function, prefix, sizeof(prefix) - 1))
         function += sizeof(prefix) - 1;
 
@@ -951,14 +1111,19 @@ int run_bench_test(
         if(!strstr(function, filter.c_str()))
             return 0;
     }
+    if(!name_filter.empty())
+    {
+        if(!strstr(name, name_filter.c_str()))
+            return 0;
+    }
 
 #if BUILD_WITH_TENSILE
     if(!strcmp(function, "gemm") || !strcmp(function, "gemm_batched"))
     {
         // adjust dimension for GEMM routines
-        rocblas_int min_lda = arg.transA == 'N' ? arg.M : arg.K;
-        rocblas_int min_ldb = arg.transB == 'N' ? arg.K : arg.N;
-        rocblas_int min_ldc = arg.M;
+        int64_t min_lda = arg.transA == 'N' ? arg.M : arg.K;
+        int64_t min_ldb = arg.transB == 'N' ? arg.K : arg.N;
+        int64_t min_ldc = arg.M;
 
         if(arg.lda < min_lda)
         {
@@ -985,9 +1150,9 @@ int run_bench_test(
     else if(!strcmp(function, "gemm_strided_batched"))
     {
         // adjust dimension for GEMM routines
-        rocblas_int min_lda = arg.transA == 'N' ? arg.M : arg.K;
-        rocblas_int min_ldb = arg.transB == 'N' ? arg.K : arg.N;
-        rocblas_int min_ldc = arg.M;
+        int64_t min_lda = arg.transA == 'N' ? arg.M : arg.K;
+        int64_t min_ldb = arg.transB == 'N' ? arg.K : arg.N;
+        int64_t min_ldc = arg.M;
         if(arg.lda < min_lda)
         {
             rocblas_cout << "rocblas-bench INFO: lda < min_lda, set lda = " << min_lda << std::endl;
@@ -1003,8 +1168,8 @@ int run_bench_test(
             rocblas_cout << "rocblas-bench INFO: ldc < min_ldc, set ldc = " << min_ldc << std::endl;
             arg.ldc = min_ldc;
         }
-        rocblas_int min_stride_c = arg.ldc * arg.N;
-        rocblas_int min_stride_d = arg.ldd * arg.N;
+        rocblas_stride min_stride_c = arg.ldc * arg.N;
+        rocblas_stride min_stride_d = arg.ldd * arg.N;
         if(!any_stride && arg.stride_c < min_stride_c)
         {
             rocblas_cout << "rocblas-bench INFO: stride_c < min_stride_c, set stride_c = "
@@ -1022,10 +1187,10 @@ int run_bench_test(
     if(!strcmp(function, "gemm_ex") || !strcmp(function, "gemm_batched_ex"))
     {
         // adjust dimension for GEMM routines
-        rocblas_int min_lda = arg.transA == 'N' ? arg.M : arg.K;
-        rocblas_int min_ldb = arg.transB == 'N' ? arg.K : arg.N;
-        rocblas_int min_ldc = arg.M;
-        rocblas_int min_ldd = arg.M;
+        int64_t min_lda = arg.transA == 'N' ? arg.M : arg.K;
+        int64_t min_ldb = arg.transB == 'N' ? arg.K : arg.N;
+        int64_t min_ldc = arg.M;
+        int64_t min_ldd = arg.M;
 
         if(arg.lda < min_lda)
         {
@@ -1055,13 +1220,14 @@ int run_bench_test(
         }
         rocblas_gemm_dispatch<perf_gemm_ex>(arg);
     }
-    else if(!strcmp(function, "gemm_strided_batched_ex"))
+    else if(!strcmp(function, "gemm_ex3") || !strcmp(function, "gemm_batched_ex3"))
     {
         // adjust dimension for GEMM routines
-        rocblas_int min_lda = arg.transA == 'N' ? arg.M : arg.K;
-        rocblas_int min_ldb = arg.transB == 'N' ? arg.K : arg.N;
-        rocblas_int min_ldc = arg.M;
-        rocblas_int min_ldd = arg.M;
+        int64_t min_lda = arg.transA == 'N' ? arg.M : arg.K;
+        int64_t min_ldb = arg.transB == 'N' ? arg.K : arg.N;
+        int64_t min_ldc = arg.M;
+        int64_t min_ldd = arg.M;
+
         if(arg.lda < min_lda)
         {
             rocblas_cout << "rocblas-bench INFO: lda < min_lda, set lda = " << min_lda << std::endl;
@@ -1082,8 +1248,43 @@ int run_bench_test(
             rocblas_cout << "rocblas-bench INFO: ldd < min_ldd, set ldd = " << min_ldc << std::endl;
             arg.ldd = min_ldd;
         }
-        rocblas_int min_stride_c = arg.ldc * arg.N;
-        rocblas_int min_stride_d = arg.ldd * arg.N;
+        if(!strcmp(function, "gemm_ex3") && arg.batch_count > 1)
+        {
+            rocblas_cout << "rocblas-bench INFO: batch_count can only be 1 for function gemm_ex3"
+                         << ", set batch_count = 1" << std::endl;
+            arg.batch_count = 1;
+        }
+        rocblas_gemm_dispatch<perf_gemm_ex3>(arg);
+    }
+    else if(!strcmp(function, "gemm_strided_batched_ex"))
+    {
+        // adjust dimension for GEMM routines
+        int64_t min_lda = arg.transA == 'N' ? arg.M : arg.K;
+        int64_t min_ldb = arg.transB == 'N' ? arg.K : arg.N;
+        int64_t min_ldc = arg.M;
+        int64_t min_ldd = arg.M;
+        if(arg.lda < min_lda)
+        {
+            rocblas_cout << "rocblas-bench INFO: lda < min_lda, set lda = " << min_lda << std::endl;
+            arg.lda = min_lda;
+        }
+        if(arg.ldb < min_ldb)
+        {
+            rocblas_cout << "rocblas-bench INFO: ldb < min_ldb, set ldb = " << min_ldb << std::endl;
+            arg.ldb = min_ldb;
+        }
+        if(arg.ldc < min_ldc)
+        {
+            rocblas_cout << "rocblas-bench INFO: ldc < min_ldc, set ldc = " << min_ldc << std::endl;
+            arg.ldc = min_ldc;
+        }
+        if(arg.ldd < min_ldd)
+        {
+            rocblas_cout << "rocblas-bench INFO: ldd < min_ldd, set ldd = " << min_ldc << std::endl;
+            arg.ldd = min_ldd;
+        }
+        rocblas_stride min_stride_c = arg.ldc * arg.N;
+        rocblas_stride min_stride_d = arg.ldd * arg.N;
         if(!any_stride && arg.stride_c < min_stride_c)
         {
             rocblas_cout << "rocblas-bench INFO: stride_c < min_stride_c, set stride_c = "
@@ -1098,6 +1299,50 @@ int run_bench_test(
         }
 
         rocblas_gemm_dispatch<perf_gemm_strided_batched_ex>(arg);
+    }
+    else if(!strcmp(function, "gemm_strided_batched_ex3"))
+    {
+        // adjust dimension for GEMM routines
+        int64_t min_lda = arg.transA == 'N' ? arg.M : arg.K;
+        int64_t min_ldb = arg.transB == 'N' ? arg.K : arg.N;
+        int64_t min_ldc = arg.M;
+        int64_t min_ldd = arg.M;
+        if(arg.lda < min_lda)
+        {
+            rocblas_cout << "rocblas-bench INFO: lda < min_lda, set lda = " << min_lda << std::endl;
+            arg.lda = min_lda;
+        }
+        if(arg.ldb < min_ldb)
+        {
+            rocblas_cout << "rocblas-bench INFO: ldb < min_ldb, set ldb = " << min_ldb << std::endl;
+            arg.ldb = min_ldb;
+        }
+        if(arg.ldc < min_ldc)
+        {
+            rocblas_cout << "rocblas-bench INFO: ldc < min_ldc, set ldc = " << min_ldc << std::endl;
+            arg.ldc = min_ldc;
+        }
+        if(arg.ldd < min_ldd)
+        {
+            rocblas_cout << "rocblas-bench INFO: ldd < min_ldd, set ldd = " << min_ldc << std::endl;
+            arg.ldd = min_ldd;
+        }
+        rocblas_stride min_stride_c = arg.ldc * arg.N;
+        rocblas_stride min_stride_d = arg.ldd * arg.N;
+        if(!any_stride && arg.stride_c < min_stride_c)
+        {
+            rocblas_cout << "rocblas-bench INFO: stride_c < min_stride_c, set stride_c = "
+                         << min_stride_c << std::endl;
+            arg.stride_c = min_stride_c;
+        }
+        if(!any_stride && arg.stride_d < min_stride_d)
+        {
+            rocblas_cout << "rocblas-bench INFO: stride_d < min_stride_d, set stride_d = "
+                         << min_stride_d << std::endl;
+            arg.stride_d = min_stride_d;
+        }
+
+        rocblas_gemm_dispatch<perf_gemm_strided_batched_ex3>(arg);
     }
     else
 #endif
@@ -1128,17 +1373,22 @@ int run_bench_test(
         else if(!strcmp(function, "scal_ex") || !strcmp(function, "scal_batched_ex")
                 || !strcmp(function, "scal_strided_batched_ex"))
             rocblas_blas1_ex_dispatch<perf_blas_scal_ex>(arg);
+        else if(!strcmp(function, "gemv_batched") || !strcmp(function, "gemv_strided_batched"))
+            rocblas_gemv_batched_and_strided_batched_dispatch<
+                perf_gemv_batched_and_strided_batched>(arg);
         else
             rocblas_simple_dispatch<perf_blas>(arg);
     }
     return 0;
 }
 
-int rocblas_bench_datafile(const std::string& filter, bool any_stride)
+int rocblas_bench_datafile(const std::string& filter,
+                           const std::string& name_filter,
+                           bool               any_stride)
 {
     int ret = 0;
     for(Arguments arg : RocBLAS_TestData())
-        ret |= run_bench_test(true, arg, filter, any_stride, true);
+        ret |= run_bench_test(true, arg, filter, name_filter, any_stride, true);
     test_cleanup::cleanup();
     return ret;
 }
@@ -1150,20 +1400,20 @@ void gpu_thread_init_device(int                id,
 {
     CHECK_HIP_ERROR(hipSetDevice(id));
 
-    rocblas_client_initialize();
-
-    Arguments a(arg);
-    a.cold_iters = 1;
-    a.iters      = 0;
-    run_bench_test(false, a, filter, any_stride, false);
+    Arguments   a(arg);
+    std::string name_filter = "";
+    a.cold_iters            = 1;
+    a.iters                 = 0;
+    run_bench_test(false, a, filter, name_filter, any_stride, false);
 }
 
 void gpu_thread_run_bench(int id, const Arguments& arg, const std::string& filter, bool any_stride)
 {
     CHECK_HIP_ERROR(hipSetDevice(id));
 
-    Arguments a(arg);
-    run_bench_test(false, a, filter, any_stride, false);
+    Arguments   a(arg);
+    std::string name_filter = "";
+    run_bench_test(false, a, filter, name_filter, any_stride, false);
 }
 
 int run_bench_gpu_test(int                parallel_devices,
@@ -1178,6 +1428,9 @@ int run_bench_gpu_test(int                parallel_devices,
         return 1;
 
     // initialization
+    rocblas_parallel_initialize(parallel_devices);
+
+    // run cold call on each device
     auto thread_init = std::make_unique<std::thread[]>(parallel_devices);
 
     for(int id = 0; id < parallel_devices; ++id)
@@ -1186,7 +1439,7 @@ int run_bench_gpu_test(int                parallel_devices,
     for(int id = 0; id < parallel_devices; ++id)
         thread_init[id].join();
 
-    // synchronzied launch of cold & hot calls
+    // synchronized launch of cold & hot calls
     auto thread = std::make_unique<std::thread[]>(parallel_devices);
 
     for(int id = 0; id < parallel_devices; ++id)
@@ -1226,18 +1479,25 @@ try
     std::string c_type;
     std::string d_type;
     std::string compute_type;
+    std::string composite_compute_type;
     std::string initialization;
-    std::string arithmetic_check;
     std::string filter;
-    rocblas_int device_id;
-    rocblas_int parallel_devices;
-    int         flags               = 0;
-    int         geam_ex_op          = 0;
+    std::string name_filter;
+    int32_t     device_id           = 0;
+    int32_t     parallel_devices    = 0;
+    int32_t     flags               = 0;
+    int32_t     geam_ex_op          = 0;
+    int32_t     api                 = 0;
     bool        datafile            = rocblas_parse_data(argc, argv);
+    bool        atomics_allowed     = true;
     bool        atomics_not_allowed = false;
     bool        log_function_name   = false;
     bool        log_datatype        = false;
     bool        any_stride          = false;
+    uint32_t    math_mode           = 0;
+    uint64_t    flush_batch_count   = 1;
+    uint64_t    flush_memory_size   = 0;
+    bool        fortran             = false;
 
     arg.init(); // set all defaults
 
@@ -1245,44 +1505,44 @@ try
     desc.add_options()
         // clang-format off
         ("sizem,m",
-         value<rocblas_int>(&arg.M)->default_value(128),
+         value<int64_t>(&arg.M)->default_value(128),
          "Specific matrix size: sizem is only applicable to BLAS-2 & BLAS-3: the number of "
          "rows or columns in matrix.")
 
         ("sizen,n",
-         value<rocblas_int>(&arg.N)->default_value(128),
+         value<int64_t>(&arg.N)->default_value(128),
          "Specific matrix/vector size: BLAS-1: the length of the vector. BLAS-2 & "
          "BLAS-3: the number of rows or columns in matrix")
 
         ("sizek,k",
-         value<rocblas_int>(&arg.K)->default_value(128),
+         value<int64_t>(&arg.K)->default_value(128),
          "Specific matrix size: BLAS-2: the number of sub or super-diagonals of A. BLAS-3: "
          "the number of columns in A and rows in B.")
 
         ("kl",
-         value<rocblas_int>(&arg.KL)->default_value(32),
+         value<int64_t>(&arg.KL)->default_value(32),
          "Specific matrix size: kl is only applicable to BLAS-2: The number of sub-diagonals "
          "of the banded matrix A.")
 
         ("ku",
-         value<rocblas_int>(&arg.KU)->default_value(32),
+         value<int64_t>(&arg.KU)->default_value(32),
          "Specific matrix size: ku is only applicable to BLAS-2: The number of super-diagonals "
          "of the banded matrix A.")
 
         ("lda",
-         value<rocblas_int>(&arg.lda)->default_value(128),
+         value<int64_t>(&arg.lda)->default_value(128),
          "Leading dimension of matrix A, is only applicable to BLAS-2 & BLAS-3.")
 
         ("ldb",
-         value<rocblas_int>(&arg.ldb)->default_value(128),
+         value<int64_t>(&arg.ldb)->default_value(128),
          "Leading dimension of matrix B, is only applicable to BLAS-2 & BLAS-3.")
 
         ("ldc",
-         value<rocblas_int>(&arg.ldc)->default_value(128),
+         value<int64_t>(&arg.ldc)->default_value(128),
          "Leading dimension of matrix C, is only applicable to BLAS-2 & BLAS-3.")
 
         ("ldd",
-         value<rocblas_int>(&arg.ldd)->default_value(128),
+         value<int64_t>(&arg.ldd)->default_value(128),
          "Leading dimension of matrix D, is only applicable to BLAS-EX ")
 
         ("any_stride",
@@ -1320,16 +1580,12 @@ try
          "BLAS_2: leading dimension.")
 
         ("incx",
-         value<rocblas_int>(&arg.incx)->default_value(1),
+         value<int64_t>(&arg.incx)->default_value(1),
          "increment between values in x vector")
 
         ("incy",
-         value<rocblas_int>(&arg.incy)->default_value(1),
+         value<int64_t>(&arg.incy)->default_value(1),
          "increment between values in y vector")
-
-        ("incb",
-         value<rocblas_int>(&arg.incb)->default_value(1),
-         "increment between values in b vector")
 
         ("alpha",
           value<double>(&arg.alpha)->default_value(1.0), "specifies the scalar alpha")
@@ -1349,7 +1605,7 @@ try
 
         ("precision,r",
          value<std::string>(&precision)->default_value("f32_r"), "Precision. "
-         "Options: h,s,d,c,z,f16_r,f32_r,f64_r,bf16_r,f32_c,f64_c,i8_r,i32_r")
+         "Options: h,s,d,c,z,f8_r, bf8_r, f16_r,f32_r,f64_r,bf16_r,f32_c,f64_c,i8_r,i32_r")
 
         ("a_type",
          value<std::string>(&a_type), "Precision of matrix A. "
@@ -1371,15 +1627,14 @@ try
          value<std::string>(&compute_type), "Precision of computation. "
          "Options: h,s,d,c,z,f16_r,f32_r,f64_r,bf16_r,f32_c,f64_c,i8_r,i32_r")
 
+        ("composite_compute_type",
+         value<std::string>(&composite_compute_type), "Precision of computation. "
+         "Options: f32, f8_f8_f32, f8_bf8_f32, bf8_f8_f32, bf8_bf8_f32")
+
         ("initialization",
          value<std::string>(&initialization)->default_value("hpl"),
-         "Intialize with random integers, trig functions sin and cos, or hpl-like input. "
+         "Initialize with random integers, trig functions sin and cos, or hpl-like input. "
          "Options: rand_int, trig_float, hpl")
-
-        ("arithmetic_check",
-         value<std::string>(&arithmetic_check)->default_value("no_check"),
-         "Check arithmetic for mixed precision gemm_ex. "
-         "Options: ieee16_ieee32, no_check")
 
         ("transposeA",
          value<char>(&arg.transA)->default_value('N'),
@@ -1402,7 +1657,7 @@ try
          "U = unit diagonal, N = non unit diagonal. Only applicable to certain routines") // xtrsm xtrsm_ex xtrsv xtrmm
 
         ("batch_count",
-         value<rocblas_int>(&arg.batch_count)->default_value(1),
+         value<int64_t>(&arg.batch_count)->default_value(1),
          "Number of matrices. Only applicable to batched and strided_batched routines")
 
         ("HMM",
@@ -1414,11 +1669,11 @@ try
          "Validate GPU results with CPU? 0 = No, 1 = Yes (default: No)")
 
         ("iters,i",
-         value<rocblas_int>(&arg.iters)->default_value(10),
+         value<int32_t>(&arg.iters)->default_value(10),
          "Iterations to run inside timing loop")
 
         ("cold_iters,j",
-         value<rocblas_int>(&arg.cold_iters)->default_value(2),
+         value<int32_t>(&arg.cold_iters)->default_value(2),
          "Cold Iterations to run before entering the timing loop")
 
         ("algo",
@@ -1429,33 +1684,41 @@ try
          value<int32_t>(&arg.solution_index)->default_value(0),
          "extended precision gemm solution index")
 
+        ("flags",
+         value<int32_t>(&flags)->default_value(rocblas_gemm_flags_none),
+         "gemm_ex flags, see rocblas_gemm_flags enum in documentation")
+
         ("geam_ex_op",
-         value<int>(&geam_ex_op)->default_value(rocblas_geam_ex_operation_min_plus),
+         value<int32_t>(&geam_ex_op)->default_value(rocblas_geam_ex_operation_min_plus),
          "geam_ex_operation, 0: min_plus operation, 1: plus_min operation")
 
-        ("flags",
-         value<int>(&flags)->default_value(rocblas_gemm_flags_none),
-         "gemm_ex flags, 1: Use packed-i8, 0: (default) uses unpacked-i8, available on matrix-inst-supported device")
+        ("atomics_allowed",
+         bool_switch(&atomics_allowed)->default_value(true),
+         "Atomic operations with non-determinism in results are allowed (default true)")
 
         ("atomics_not_allowed",
          bool_switch(&atomics_not_allowed)->default_value(false),
-         "Atomic operations with non-determinism in results are not allowed")
+         "Atomic operations with non-determinism in results are not allowed (default false)")
 
         ("device",
-         value<rocblas_int>(&device_id)->default_value(0),
+         value<int32_t>(&device_id)->default_value(0),
          "Set default device to be used for subsequent program runs")
 
         ("parallel_devices",
-         value<rocblas_int>(&parallel_devices)->default_value(0),
+         value<int32_t>(&parallel_devices)->default_value(0),
          "Set number of devices used for parallel runs (device 0 to parallel_devices-1)")
 
-        ("c_noalias_d",
-         bool_switch(&arg.c_noalias_d)->default_value(false),
-         "C and D are stored in separate memory")
+        ("outofplace",
+         bool_switch(&arg.outofplace)->default_value(false),
+         "for gemm_ex C and D are stored in separate memory, for trmm B and C are stored in separate memory")
 
         ("fortran",
-         bool_switch(&arg.fortran)->default_value(false),
+         bool_switch(&fortran)->default_value(false),
          "Run using Fortran interface")
+
+        ("api",
+         value<int32_t>(&api)->default_value(0),
+         "Use API, supercedes fortran flag (0==C, 1==C_64, ...)")
 
         ("workspace",
          value<size_t>(&arg.user_allocated_workspace)->default_value(0),
@@ -1473,9 +1736,43 @@ try
          value<std::string>(&filter),
          "Simple strstr filter on function name only without wildcards")
 
-        ("help,h", "produces this help message")
+        ("math_mode",
+         value<uint32_t>(&arg.math_mode)->default_value(rocblas_default_math),
+         "extended precision gemm math mode")
 
-        ("version", "Prints the version number");
+        ("flush_batch_count",
+         value<uint64_t>(&arg.flush_batch_count)->default_value(1),
+         "number of copies of arrays to allocate for cache flushing in timing code. Functions"
+         " are called iters times in a timing loop. If the problem memory footprint is small"
+         " enough, then arrays will be cached. flush_batch_count can be used to prevent caching."
+         " For example, for sgemm with transA=transB=N:"
+         " problem_memory_footprint = (m*k + k*n + m*n) * sizeof(float)."
+         " To flush arrays before reuse set:"
+         " flush_batch_count >= 1 + cache_size / problem_memory_footprint"
+         " Note that in the calculation of flush_batch_count any padding from leading"
+         " dimensions is not loaded to cache and not included in the problem_memory_footprint."
+         " If you specify flush_batch_count you cannot also specify flush_memory_size")
+
+        ("flush_memory_size",
+         value<uint64_t>(&arg.flush_memory_size)->default_value(0),
+         "bytes of memory that will be occupied by arrays. Used only in timing code for cache flushing. Set to greater than"
+         " cache size so arrays are flushed from cache before they are reused. When the size of arrays (the problem_memory_footprint)"
+         " is smaller than flush_memory_size, then flush_batch_count copies of arrays are allocated where:"
+         " flush_batch_count = flush_memory_size / problem_memory_footprint."
+         " For sgemm with transA=transB=N"
+         " problem_memory_footprint = (m*k + k*n + m*n) * sizeof(float). Note that any padding from leading"
+         " dimensions is not loaded to cache and not included in the problem_memory_footprint."
+         " If you specify flush_memory_size you cannot also specify flush_batch_count")
+
+        ("name_filter",
+         value<std::string>(&name_filter),
+         "Simple strstr filter on test name only without wildcards, only used with --yaml or --data")
+
+        ("version", "Prints the version number")
+
+        ("rocblas_tensile_commit_hash", "Prints the rocBLAS and Tensile commit-hashes")
+
+        ("help,h", "produces this help message");
     // clang-format on
 
     // parse command line into arg structure and stack variables using desc
@@ -1508,9 +1805,35 @@ try
         return 0;
     }
 
+    const char* rocblas_tensile_commit_hash[] = {ROCBLAS_TENSILE_COMMIT_ID};
+
+#if BUILD_WITH_TENSILE
+    rocblas_cout << std::endl
+                 << "rocBLAS-commit-hash: " << rocblas_tensile_commit_hash[0] << std::endl
+                 << std::endl;
+    rocblas_cout << "Tensile-commit-hash: " << rocblas_tensile_commit_hash[1] << std::endl
+                 << std::endl;
+
+    if(vm.find("rocblas_tensile_commit_hash") != vm.end())
+        return 0;
+#else
+    rocblas_cout << std::endl
+                 << "rocBLAS-commit-hash: " << rocblas_tensile_commit_hash[0] << std::endl
+                 << std::endl;
+    rocblas_cout << "Tensile-commit-hash: N/A, as rocBLAS was built without Tensile" << std::endl
+                 << std::endl;
+    if(vm.find("rocblas_tensile_commit_hash") != vm.end())
+        return 0;
+#endif
+
     // transfer local variable state
 
     arg.atomics_mode = atomics_not_allowed ? rocblas_atomics_not_allowed : rocblas_atomics_allowed;
+
+    if(api)
+        arg.api = rocblas_client_api(api);
+    else if(fortran)
+        arg.api = FORTRAN;
 
     static const char* fp16AltImplEnvStr = std::getenv("ROCBLAS_INTERNAL_FP16_ALT_IMPL");
     static const int   fp16AltImplEnv
@@ -1523,9 +1846,22 @@ try
             flags |= rocblas_gemm_flags_fp16_alt_impl;
     }
 
-    if((rocblas_gemm_flags_fp16_alt_impl & arg.flags)
-       && rocblas_internal_get_arch_name() != "gfx90a")
+    static const char* fp16AltImplRoundEnvStr = std::getenv("ROCBLAS_INTERNAL_FP16_ALT_IMPL_RNZ");
+    static const int   fp16AltImplRoundEnv
+        = (fp16AltImplRoundEnvStr == NULL ? -1 : (std::atoi(fp16AltImplRoundEnvStr) == 0 ? 0 : 1));
+    if(fp16AltImplRoundEnv != -1)
+    {
+        if(fp16AltImplRoundEnv == 0)
+            flags &= ~rocblas_gemm_flags_fp16_alt_impl_rnz;
+        else
+            flags |= rocblas_gemm_flags_fp16_alt_impl_rnz;
+    }
+
+    if(rocblas_internal_get_arch_name() != "gfx90a")
+    {
         flags &= ~rocblas_gemm_flags_fp16_alt_impl;
+        flags &= ~rocblas_gemm_flags_fp16_alt_impl_rnz;
+    }
 
     arg.flags = rocblas_gemm_flags(flags);
 
@@ -1544,8 +1880,11 @@ try
     if(device_id >= 0)
         set_device(device_id);
 
+    FrequencyMonitor& freq_monitor = getFrequencyMonitor();
+    freq_monitor.set_device_id(device_id);
+
     if(datafile)
-        return rocblas_bench_datafile(filter, any_stride);
+        return rocblas_bench_datafile(filter, name_filter, any_stride);
 
     // single bench run
 
@@ -1576,13 +1915,14 @@ try
     if(arg.compute_type == rocblas_datatype_invalid)
         throw std::invalid_argument("Invalid value for --compute_type " + compute_type);
 
+    arg.composite_compute_type = string2rocblas_computetype(composite_compute_type);
+    if(arg.composite_compute_type == static_cast<rocblas_computetype>(-1))
+        throw std::invalid_argument("Invalid value for --composite_compute_type "
+                                    + composite_compute_type);
+
     arg.initialization = string2rocblas_initialization(initialization);
     if(arg.initialization == static_cast<rocblas_initialization>(0)) // zero not in enum
         throw std::invalid_argument("Invalid value for --initialization " + initialization);
-
-    arg.arithmetic_check = string2rocblas_arithmetic_check(arithmetic_check);
-    if(arg.arithmetic_check == static_cast<rocblas_arithmetic_check>(0)) // zero not in enum
-        throw std::invalid_argument("Invalid value for --arithmetic_check " + arithmetic_check);
 
     if(arg.M < 0)
         throw std::invalid_argument("Invalid value for -m " + std::to_string(arg.M));
@@ -1595,10 +1935,17 @@ try
     if(copied <= 0 || copied >= sizeof(arg.function))
         throw std::invalid_argument("Invalid value for --function");
 
+    int status;
     if(!parallel_devices)
-        return run_bench_test(true, arg, filter, any_stride);
+    {
+        std::string name_filter = "";
+        status                  = run_bench_test(true, arg, filter, name_filter, any_stride);
+    }
     else
-        return run_bench_gpu_test(parallel_devices, arg, filter, any_stride);
+        status = run_bench_gpu_test(parallel_devices, arg, filter, any_stride);
+
+    freeFrequencyMonitor();
+    return status;
 }
 catch(const std::invalid_argument& exp)
 {

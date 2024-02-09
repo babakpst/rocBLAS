@@ -113,28 +113,29 @@ install_packages( )
   fi
 
   # dependencies needed to build the rocblas library
+  # Note python3-joblib is for Tensile and also installed by pip requirements.txt but there are known packaging errors so added here as workaround
   local library_dependencies_ubuntu=( "make"
-                                      "python3" "python3-yaml" "python3-venv" "python3*-pip" )
+                                      "python3" "python3-yaml" "python3-venv" "python3-joblib" "python3*-pip" )
   local library_dependencies_centos_rhel=( "epel-release"
                                       "make" "rpm-build"
-                                      "python34" "python3*-PyYAML" "python3-virtualenv"
+                                      "python34" "python3*-PyYAML" "python3-virtualenv" "python3-joblib"
                                       "gcc-c++" )
   local library_dependencies_centos_8=( "epel-release"
                                       "make" "rpm-build"
-                                      "python3" "python3*-PyYAML" "python3-virtualenv"
+                                      "python3" "python3*-PyYAML" "python3-virtualenv" "python3-joblib"
                                       "gcc-c++" )
   local library_dependencies_rhel_8=( "epel-release"
                                       "make" "rpm-build"
-                                      "python36" "python3*-PyYAML" "python3-virtualenv"
+                                      "python36" "python3*-PyYAML" "python3-virtualenv" "python3-joblib"
                                       "gcc-c++" )
   local library_dependencies_rhel_9=( "epel-release" "openssl-devel"
                                       "make" "rpm-build"
-                                      "python39" "python3*-PyYAML" "python3-virtualenv"
+                                      "python39" "python3*-PyYAML" "python3-virtualenv" "python3-joblib"
                                       "gcc-c++" )
   local library_dependencies_fedora=( "make" "rpm-build"
-                                      "python34" "python3*-PyYAML" "python3-virtualenv"
+                                      "python34" "python3*-PyYAML" "python3-virtualenv" "python3-joblib"
                                       "gcc-c++" "libcxx-devel" )
-  local library_dependencies_sles=(   "make" "python3-PyYAML" "python3-virtualenv"
+  local library_dependencies_sles=(   "make" "python3-PyYAML" "python3-virtualenv" "python3-joblib"
                                       "gcc-c++" "libcxxtools9" "rpm-build" )
 
   if [[ "${tensile_msgpack_backend}" == true ]]; then
@@ -280,7 +281,7 @@ rocBLAS dependency & installation helper script. Invokes rmake.py for build step
     $0 (build rocBLAS and put library files at e.g. <builddir>/release/rocblas-install)
     $0 <options> (modify default behavior according to the following flags)
 
-  Options:
+  General Build Options:
     --build_dir <builddir>           Specify the directory path to build and save library files, dependencies and executables.
                                      Relative paths are relative to the current directory. (Default is ./build)
 
@@ -301,6 +302,8 @@ rocBLAS dependency & installation helper script. Invokes rmake.py for build step
     -h, --help                       Print this help message
 
     -i, --install                    Generate and install library package after build.
+
+  Experimental Build Options:
 
     -k, --relwithdebinfo             Build-in release debug mode, equivalent to set CMAKE_BUILD_TYPE=RelWithDebInfo.
                                      (Default build type is Release)
@@ -402,27 +405,31 @@ printf "\033[32mCreating project build directory in: \033[33m${build_dir}\033[0m
 
 install_blis()
 {
-    #Download prebuilt AMD multithreaded blis
-    if [[ ! -e "./blis/lib/libblis.a" ]]; then
-      case "${ID}" in
-          centos|rhel|sles|opensuse-leap)
-              wget -nv -O blis.tar.gz https://github.com/amd/blis/releases/download/2.0/aocl-blis-mt-centos-2.0.tar.gz
-              ;;
-          ubuntu)
-              wget -nv -O blis.tar.gz https://github.com/amd/blis/releases/download/2.0/aocl-blis-mt-ubuntu-2.0.tar.gz
-              ;;
-          *)
-              echo "Unsupported OS for this script"
-              wget -nv -O blis.tar.gz https://github.com/amd/blis/releases/download/2.0/aocl-blis-mt-ubuntu-2.0.tar.gz
-              ;;
-      esac
+    if [[ ! -e "/opt/AMD/aocl/aocl-linux-aocc-4.1.0/aocc/lib_ILP64/libblis-mt.a" ]] && [[ ! -e "/opt/AMD/aocl/aocl-linux-aocc-4.0/lib_ILP64/libblis-mt.a"  ]] && [[ ! -e "/usr/local/lib/libblis.a" ]]; then
+        pushd .
+        #Download prebuilt AMD multithreaded blis
+        if [[ ! -e "./blis/lib/libblis.a" ]]; then
+          case "${ID}" in
+              centos|rhel|sles|opensuse-leap)
+                  wget -nv -O blis.tar.gz https://github.com/amd/blis/releases/download/2.0/aocl-blis-mt-centos-2.0.tar.gz
+                  ;;
+              ubuntu)
+                  wget -nv -O blis.tar.gz https://github.com/amd/blis/releases/download/2.0/aocl-blis-mt-ubuntu-2.0.tar.gz
+                  ;;
+              *)
+                  echo "Unsupported OS for this script"
+                  wget -nv -O blis.tar.gz https://github.com/amd/blis/releases/download/2.0/aocl-blis-mt-ubuntu-2.0.tar.gz
+                  ;;
+          esac
 
-      tar -xvf blis.tar.gz
-      rm -rf blis/amd-blis-mt
-      mv amd-blis-mt blis
-      rm blis.tar.gz
-      cd blis/lib
-      ln -sf libblis-mt.a libblis.a
+          tar -xvf blis.tar.gz
+          rm -rf blis/amd-blis-mt
+          mv amd-blis-mt blis
+          rm blis.tar.gz
+          cd blis/lib
+          ln -sf libblis-mt.a libblis.a
+        fi
+        popd
     fi
 }
 
@@ -456,7 +463,7 @@ if [[ "${install_dependencies}" == true ]]; then
         cd cmake-3.16.8
         ./bootstrap --no-system-curl --parallel=16
         make -j16
-        sudo make install
+        elevate_if_not_root make install
         popd
       else
           echo "rocBLAS requires CMake version >= 3.16.8 and CMake version ${CMAKE_VERSION} is installed. Run install.sh again with --cmake_install flag and CMake version 3.16.8 will be installed to /usr/local"
@@ -476,14 +483,14 @@ if [[ "${install_dependencies}" == true ]]; then
   if [[ "${build_clients}" == true ]]; then
     # The following builds googletest from source, installs into cmake default /usr/local
     pushd .
-    printf "\033[32mBuilding \033[33mgoogletest; installing into \033[33m/usr/local\033[0m\n"
     mkdir -p ${build_dir}/deps && cd ${build_dir}/deps
+    install_blis
+
+    # build other deps
+    printf "\033[32mBuilding \033[33mgoogletest; installing into \033[33m/usr/local\033[0m\n"
     CXX=${cxx} CC=${cc} FC=${fc} ${cmake_executable} ${ROCBLAS_SRC_PATH}/deps
     make build_deps
     elevate_if_not_root make install_deps
-    if [[ ! -e "${build_dir}/deps/blis/lib/libblis.a" ]] && [[ ! -e "/usr/local/lib/libblis.a" ]]; then
-      install_blis
-    fi
     popd
   fi
 elif [[ "${build_clients}" == true ]]; then

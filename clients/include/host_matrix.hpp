@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -98,6 +98,24 @@ struct host_matrix : std::vector<T, host_memory_allocator<T>>
     }
 
     //!
+    //! @brief Transfer only the first matrix from a device_strided_batch matrix.
+    //! @param  that That device_strided_batch matrix.
+    //! @return the hip error.
+    //!
+    hipError_t transfer_one_matrix_from(const device_strided_batch_matrix<T>& that)
+    {
+        hipError_t hip_err;
+
+        if(that.use_HMM && hipSuccess != (hip_err = hipDeviceSynchronize()))
+            return hip_err;
+
+        return hipMemcpy(*this,
+                         that,
+                         sizeof(T) * this->size(),
+                         that.use_HMM ? hipMemcpyHostToHost : hipMemcpyDeviceToHost);
+    }
+
+    //!
     //! @brief Returns the rows of the Matrix.
     //!
     size_t m() const
@@ -142,7 +160,7 @@ struct host_matrix : std::vector<T, host_memory_allocator<T>>
     //! @param batch_index the batch index.
     //! @return The mutable pointer.
     //!
-    T* operator[](rocblas_int batch_index)
+    T* operator[](int64_t batch_index)
     {
         return this->data();
     }
@@ -152,7 +170,7 @@ struct host_matrix : std::vector<T, host_memory_allocator<T>>
     //! @param batch_index the batch index.
     //! @return The non-mutable pointer.
     //!
-    const T* operator[](rocblas_int batch_index) const
+    const T* operator[](int64_t batch_index) const
     {
         return this->data();
     }

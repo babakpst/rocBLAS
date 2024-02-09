@@ -77,7 +77,7 @@ rocblas_symm_scale_kernel(rocblas_int    m,
   * kernel
   */
 template <bool HERM, bool RIGHT, rocblas_int TILE_NK, typename T>
-ROCBLAS_KERNEL_ILF void rocblas_symm_hemm_mult_add_device(bool        upper,
+ROCBLAS_KERNEL_ILF void rocblas_symm_hemm_mult_add_device(bool        is_upper,
                                                           rocblas_int m,
                                                           rocblas_int n,
                                                           T           alpha,
@@ -119,8 +119,8 @@ ROCBLAS_KERNEL_ILF void rocblas_symm_hemm_mult_add_device(bool        upper,
             row_loc = row_pos + threadIdx.x;
             col_loc = k_pos + threadIdx.y;
 
-            from = upper ? row_loc : col_loc;
-            to   = upper ? col_loc : row_loc;
+            from = is_upper ? row_loc : col_loc;
+            to   = is_upper ? col_loc : row_loc;
 
             r = from > to ? col_loc : row_loc;
             c = from > to ? row_loc : col_loc;
@@ -166,8 +166,8 @@ ROCBLAS_KERNEL_ILF void rocblas_symm_hemm_mult_add_device(bool        upper,
             row_loc = k_pos + threadIdx.x;
             col_loc = col_pos + threadIdx.y;
 
-            from = upper ? row_loc : col_loc;
-            to   = upper ? col_loc : row_loc;
+            from = is_upper ? row_loc : col_loc;
+            to   = is_upper ? col_loc : row_loc;
 
             r = from > to ? col_loc : row_loc;
             c = from > to ? row_loc : col_loc;
@@ -216,7 +216,7 @@ template <bool        HERM,
           typename TConstPtr,
           typename TPtr>
 ROCBLAS_KERNEL(DIM_XYT* DIM_XYT)
-rocblas_symm_hemm_kernel(bool           upper,
+rocblas_symm_hemm_kernel(bool           is_upper,
                          rocblas_int    m,
                          rocblas_int    n,
                          TScal          alpha_host_device,
@@ -244,7 +244,7 @@ rocblas_symm_hemm_kernel(bool           upper,
     // compute matrix multiplies and accumulate on the fly into C
     // when HERM does ^H in place of ^T for A fetches to symmetric empty side
     rocblas_symm_hemm_mult_add_device<HERM, RIGHT, DIM_XYT>(
-        upper, m, n, alpha, A, lda, B, ldb, C, ldc);
+        is_upper, m, n, alpha, A, lda, B, ldb, C, ldc);
 }
 
 /**
@@ -295,66 +295,66 @@ rocblas_status rocblas_symm_dispatch(rocblas_handle handle,
     if(handle->pointer_mode == rocblas_pointer_mode_device)
     {
         // first scale C so we can use directly for output without work buffer
-        hipLaunchKernelGGL((rocblas_symm_scale_kernel<symm_SCALE_DIM_X, symm_SCALE_DIM_Y>),
-                           symm_scale_grid,
-                           symm_scale_threads,
-                           0,
-                           handle->get_stream(),
-                           m,
-                           n,
-                           beta,
-                           CP,
-                           offsetC,
-                           ldc,
-                           strideC);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_symm_scale_kernel<symm_SCALE_DIM_X, symm_SCALE_DIM_Y>),
+                              symm_scale_grid,
+                              symm_scale_threads,
+                              0,
+                              handle->get_stream(),
+                              m,
+                              n,
+                              beta,
+                              CP,
+                              offsetC,
+                              ldc,
+                              strideC);
 
         if(side == rocblas_side_left)
         {
-            hipLaunchKernelGGL((rocblas_symm_hemm_kernel<HERM, false, symm_DIM_XY>),
-                               symm_grid,
-                               symm_threads,
-                               0,
-                               handle->get_stream(),
-                               uplo == rocblas_fill_upper,
-                               m,
-                               n,
-                               alpha,
-                               AP,
-                               offsetA,
-                               lda,
-                               strideA,
-                               BP,
-                               offsetB,
-                               ldb,
-                               strideB,
-                               CP,
-                               offsetC,
-                               ldc,
-                               strideC);
+            ROCBLAS_LAUNCH_KERNEL((rocblas_symm_hemm_kernel<HERM, false, symm_DIM_XY>),
+                                  symm_grid,
+                                  symm_threads,
+                                  0,
+                                  handle->get_stream(),
+                                  uplo == rocblas_fill_upper,
+                                  m,
+                                  n,
+                                  alpha,
+                                  AP,
+                                  offsetA,
+                                  lda,
+                                  strideA,
+                                  BP,
+                                  offsetB,
+                                  ldb,
+                                  strideB,
+                                  CP,
+                                  offsetC,
+                                  ldc,
+                                  strideC);
         }
         else
         {
-            hipLaunchKernelGGL((rocblas_symm_hemm_kernel<HERM, true, symm_DIM_XY>),
-                               symm_grid,
-                               symm_threads,
-                               0,
-                               handle->get_stream(),
-                               uplo == rocblas_fill_upper,
-                               m,
-                               n,
-                               alpha,
-                               AP,
-                               offsetA,
-                               lda,
-                               strideA,
-                               BP,
-                               offsetB,
-                               ldb,
-                               strideB,
-                               CP,
-                               offsetC,
-                               ldc,
-                               strideC);
+            ROCBLAS_LAUNCH_KERNEL((rocblas_symm_hemm_kernel<HERM, true, symm_DIM_XY>),
+                                  symm_grid,
+                                  symm_threads,
+                                  0,
+                                  handle->get_stream(),
+                                  uplo == rocblas_fill_upper,
+                                  m,
+                                  n,
+                                  alpha,
+                                  AP,
+                                  offsetA,
+                                  lda,
+                                  strideA,
+                                  BP,
+                                  offsetB,
+                                  ldb,
+                                  strideB,
+                                  CP,
+                                  offsetC,
+                                  ldc,
+                                  strideC);
         }
     }
     else
@@ -363,66 +363,66 @@ rocblas_status rocblas_symm_dispatch(rocblas_handle handle,
             return rocblas_status_success;
 
         // first scale C so we can use directly for output without work buffer
-        hipLaunchKernelGGL((rocblas_symm_scale_kernel<symm_SCALE_DIM_X, symm_SCALE_DIM_Y>),
-                           symm_scale_grid,
-                           symm_scale_threads,
-                           0,
-                           handle->get_stream(),
-                           m,
-                           n,
-                           *beta,
-                           CP,
-                           offsetC,
-                           ldc,
-                           strideC);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_symm_scale_kernel<symm_SCALE_DIM_X, symm_SCALE_DIM_Y>),
+                              symm_scale_grid,
+                              symm_scale_threads,
+                              0,
+                              handle->get_stream(),
+                              m,
+                              n,
+                              *beta,
+                              CP,
+                              offsetC,
+                              ldc,
+                              strideC);
 
         if(side == rocblas_side_left)
         {
-            hipLaunchKernelGGL((rocblas_symm_hemm_kernel<HERM, false, symm_DIM_XY>),
-                               symm_grid,
-                               symm_threads,
-                               0,
-                               handle->get_stream(),
-                               uplo == rocblas_fill_upper,
-                               m,
-                               n,
-                               *alpha,
-                               AP,
-                               offsetA,
-                               lda,
-                               strideA,
-                               BP,
-                               offsetB,
-                               ldb,
-                               strideB,
-                               CP,
-                               offsetC,
-                               ldc,
-                               strideC);
+            ROCBLAS_LAUNCH_KERNEL((rocblas_symm_hemm_kernel<HERM, false, symm_DIM_XY>),
+                                  symm_grid,
+                                  symm_threads,
+                                  0,
+                                  handle->get_stream(),
+                                  uplo == rocblas_fill_upper,
+                                  m,
+                                  n,
+                                  *alpha,
+                                  AP,
+                                  offsetA,
+                                  lda,
+                                  strideA,
+                                  BP,
+                                  offsetB,
+                                  ldb,
+                                  strideB,
+                                  CP,
+                                  offsetC,
+                                  ldc,
+                                  strideC);
         }
         else
         {
-            hipLaunchKernelGGL((rocblas_symm_hemm_kernel<HERM, true, symm_DIM_XY>),
-                               symm_grid,
-                               symm_threads,
-                               0,
-                               handle->get_stream(),
-                               uplo == rocblas_fill_upper,
-                               m,
-                               n,
-                               *alpha,
-                               AP,
-                               offsetA,
-                               lda,
-                               strideA,
-                               BP,
-                               offsetB,
-                               ldb,
-                               strideB,
-                               CP,
-                               offsetC,
-                               ldc,
-                               strideC);
+            ROCBLAS_LAUNCH_KERNEL((rocblas_symm_hemm_kernel<HERM, true, symm_DIM_XY>),
+                                  symm_grid,
+                                  symm_threads,
+                                  0,
+                                  handle->get_stream(),
+                                  uplo == rocblas_fill_upper,
+                                  m,
+                                  n,
+                                  *alpha,
+                                  AP,
+                                  offsetA,
+                                  lda,
+                                  strideA,
+                                  BP,
+                                  offsetB,
+                                  ldb,
+                                  strideB,
+                                  CP,
+                                  offsetC,
+                                  ldc,
+                                  strideC);
         }
     }
     return rocblas_status_success;
@@ -450,19 +450,19 @@ rocblas_status rocblas_symm_template_non_batched(rocblas_handle handle,
     // a. It is also the starting size for subdiagonal blocks in calls to gemm.
     rocblas_int nb_diag = 32; // size of diag blocks of triangle matrix a
 
-    if(std::is_same<T, float>{})
+    if(std::is_same_v<T, float>)
     {
         nb_diag = SSYMM_MIN_NB;
     }
-    else if(std::is_same<T, double>{})
+    else if(std::is_same_v<T, double>)
     {
         nb_diag = DSYMM_MIN_NB;
     }
-    else if(std::is_same<T, rocblas_float_complex>{})
+    else if(std::is_same_v<T, rocblas_float_complex>)
     {
         nb_diag = CSYMM_MIN_NB;
     }
-    else if(std::is_same<T, rocblas_double_complex>{})
+    else if(std::is_same_v<T, rocblas_double_complex>)
     {
         nb_diag = ZSYMM_MIN_NB;
     }
@@ -490,9 +490,9 @@ rocblas_status rocblas_symm_template_non_batched(rocblas_handle handle,
     rocblas_int symm_m = rocblas_side_left == side ? nb_diag : m; // diag block symm argument m
     rocblas_int symm_n = rocblas_side_left == side ? n : nb_diag; // diag block symm argument n
 
-    rocblas_int diag_a_stride = 1 + lda; // stride for diag blocks in a
-    rocblas_int diag_b_stride = rocblas_side_left == side ? 1 : ldb; // stride of b panels
-    rocblas_int diag_c_stride = rocblas_side_left == side ? 1 : ldc; // stride of c panels
+    int64_t diag_a_stride = 1 + lda; // stride for diag blocks in a
+    int64_t diag_b_stride = rocblas_side_left == side ? 1 : ldb; // stride of b panels
+    int64_t diag_c_stride = rocblas_side_left == side ? 1 : ldc; // stride of c panels
 
     rocblas_int i_diag; // index of diag block
 
@@ -518,8 +518,8 @@ rocblas_status rocblas_symm_template_non_batched(rocblas_handle handle,
                  c, i_diag * diag_c_stride + offsetC, ldc, 0, 1)));
     }
 
-    rocblas_int stride, stride_rem, i_start;
-    rocblas_int nb; // size of sub-diagonal blocks of matrix a
+    int64_t stride, stride_rem, i_start;
+    int64_t nb; // size of sub-diagonal blocks of matrix a
 
     // calls to gemm for sub-diagonal square blocks in matrix a with size m = n = nb.
     // Start with nb = nb_diag. Each iteration of the outer loop nb doubles, and the
@@ -535,8 +535,8 @@ rocblas_status rocblas_symm_template_non_batched(rocblas_handle handle,
             n_nb += 1;
         }
 
-        rocblas_int i1       = i_start;
-        rocblas_int i2       = i_start - nb;
+        int64_t i1       = i_start;
+        int64_t i2       = i_start - nb;
 
         if(rocblas_side_right == side)
         {
@@ -612,8 +612,8 @@ rocblas_status rocblas_symm_template_non_batched(rocblas_handle handle,
         // remainder gemm block of size nb_rem x nb where n_rem < nb
         if(stride_rem != 0)
         {
-            rocblas_int i1     = i_start + n_nb * stride;
-            rocblas_int i2     = i1 - nb;
+            int64_t i1     = i_start + n_nb * stride;
+            int64_t i2     = i1 - nb;
             rocblas_int nb_rem = ka - i1;
 
             if(rocblas_side_right == side)
@@ -799,10 +799,10 @@ rocblas_status rocblas_symm_template_batched(rocblas_handle handle,
     // a. It is also the starting size for subdiagonal blocks in calls to gemm.
     rocblas_int nb_diag = 32; // size of diag blocks of triangle matrix a
 
-    if     (std::is_same<T, float>{})                  { nb_diag = SSYMM_BATCHED_MIN_NB; }
-    else if(std::is_same<T, double>{})                 { nb_diag = DSYMM_BATCHED_MIN_NB; }
-    else if(std::is_same<T, rocblas_float_complex>{})  { nb_diag = CSYMM_BATCHED_MIN_NB; }
-    else if(std::is_same<T, rocblas_double_complex>{}) { nb_diag = ZSYMM_BATCHED_MIN_NB; }
+    if     (std::is_same_v<T, float>)                  { nb_diag = SSYMM_BATCHED_MIN_NB; }
+    else if(std::is_same_v<T, double>)                 { nb_diag = DSYMM_BATCHED_MIN_NB; }
+    else if(std::is_same_v<T, rocblas_float_complex>)  { nb_diag = CSYMM_BATCHED_MIN_NB; }
+    else if(std::is_same_v<T, rocblas_double_complex>) { nb_diag = ZSYMM_BATCHED_MIN_NB; }
 
     rocblas_operation trans_a = HERM ? rocblas_operation_conjugate_transpose : rocblas_operation_transpose;
 
@@ -826,9 +826,9 @@ rocblas_status rocblas_symm_template_batched(rocblas_handle handle,
     rocblas_int symm_m = rocblas_side_left == side ? nb_diag : m; // diag block symm argument m
     rocblas_int symm_n = rocblas_side_left == side ? n : nb_diag; // diag block symm argument n
 
-    rocblas_int diag_a_stride = 1 + lda; // stride for diag blocks in a
-    rocblas_int diag_b_stride = rocblas_side_left == side ? 1 : ldb; // stride of b panels
-    rocblas_int diag_c_stride = rocblas_side_left == side ? 1 : ldc; // stride of c panels
+    int64_t     diag_a_stride = 1 + lda; // stride for diag blocks in a
+    int64_t     diag_b_stride = rocblas_side_left == side ? 1 : ldb; // stride of b panels
+    int64_t     diag_c_stride = rocblas_side_left == side ? 1 : ldc; // stride of c panels
 
     rocblas_int i_diag; // index of diag block
 
@@ -857,8 +857,8 @@ rocblas_status rocblas_symm_template_batched(rocblas_handle handle,
                  c, i_diag * diag_c_stride + offsetC, ldc, strideC, batch_count)));
     }
 
-    rocblas_int stride, stride_rem, i_start;
-    rocblas_int nb; // size of sub-diagonal blocks of matrix a
+    int64_t stride, stride_rem, i_start;
+    int64_t nb; // size of sub-diagonal blocks of matrix a
     // calls to gemm for sub-diagonal square blocks in matrix a with size m = n = nb.
     // Start with nb = nb_diag. Each iteration of the outer loop nb doubles, and the
     // number of gemm calls halves.
@@ -873,8 +873,8 @@ rocblas_status rocblas_symm_template_batched(rocblas_handle handle,
             n_nb += 1;
         }
 
-        rocblas_int i1       = i_start;
-        rocblas_int i2       = i_start - nb;
+        int64_t i1       = i_start;
+        int64_t i2       = i_start - nb;
 
         for(int i_nb = 0; i_nb < n_nb; i_nb++)
         {
@@ -952,8 +952,8 @@ rocblas_status rocblas_symm_template_batched(rocblas_handle handle,
         // remainder gemm block of size nb_rem x nb where n_rem < nb
         if(stride_rem != 0)
         {
-            rocblas_int i1     = i_start + n_nb * stride;
-            rocblas_int i2     = i1 - nb;
+            int64_t i1     = i_start + n_nb * stride;
+            int64_t i2     = i1 - nb;
             rocblas_int nb_rem = ka - i1;
 
             if(rocblas_side_right == side)
@@ -1031,49 +1031,150 @@ rocblas_status rocblas_symm_template_batched(rocblas_handle handle,
     return rocblas_status_success;
 }
 
-/**
-  *  TScal     is always: const T* (either host or device)
-  *  TConstPtr is either: const T* OR const T* const*
-  *  TPtr      is either:       T* OR       T* const*
-  */
-template <bool BATCHED, bool HERM, typename T, typename TScal, typename TConstPtr, typename TPtr>
+template <typename T>
 ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     rocblas_internal_symm_template(rocblas_handle handle,
                                    rocblas_side   side,
                                    rocblas_fill   uplo,
                                    rocblas_int    m,
                                    rocblas_int    n,
-                                   TScal          alpha,
-                                   TConstPtr      AP,
+                                   const T*       alpha,
+                                   const T*       A,
                                    rocblas_stride offsetA,
                                    rocblas_int    lda,
                                    rocblas_stride strideA,
-                                   TConstPtr      BP,
+                                   const T*       B,
                                    rocblas_stride offsetB,
                                    rocblas_int    ldb,
                                    rocblas_stride strideB,
-                                   TScal          beta,
-                                   TPtr           CP,
+                                   const T*       beta,
+                                   T*             C,
                                    rocblas_stride offsetC,
                                    rocblas_int    ldc,
                                    rocblas_stride strideC,
                                    rocblas_int    batch_count)
 {
-    if(BATCHED == false && batch_count == 1)
+    constexpr bool HERM = false;
+    constexpr bool BATCHED = false;
+    if(batch_count == 1)
     {
         return rocblas_symm_template_non_batched<BATCHED, HERM, T>(
             handle, side, uplo, m, n, alpha,
-            AP, offsetA, lda,
-            BP, offsetB, ldb, beta,
-            CP, offsetC, ldc);
+            A, offsetA, lda,
+            B, offsetB, ldb, beta,
+            C, offsetC, ldc);
     }
     else
     {
         return rocblas_symm_template_batched<BATCHED, HERM, T>(handle, side, uplo, m, n, alpha,
-            AP, offsetA, lda, strideA,
-            BP, offsetB, ldb, strideB, beta,
-            CP, offsetC, ldc, strideC, batch_count);
+            A, offsetA, lda, strideA,
+            B, offsetB, ldb, strideB, beta,
+            C, offsetC, ldc, strideC, batch_count);
     }
+}
+
+template <typename T>
+ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
+    rocblas_internal_symm_batched_template(rocblas_handle handle,
+                                   rocblas_side   side,
+                                   rocblas_fill   uplo,
+                                   rocblas_int    m,
+                                   rocblas_int    n,
+                                   const T*       alpha,
+                                   const T* const* A,
+                                   rocblas_stride offsetA,
+                                   rocblas_int    lda,
+                                   rocblas_stride strideA,
+                                   const T* const* B,
+                                   rocblas_stride offsetB,
+                                   rocblas_int    ldb,
+                                   rocblas_stride strideB,
+                                   const T*       beta,
+                                   T* const*      C,
+                                   rocblas_stride offsetC,
+                                   rocblas_int    ldc,
+                                   rocblas_stride strideC,
+                                   rocblas_int    batch_count)
+{
+    constexpr bool HERM = false;
+    constexpr bool BATCHED = true;
+    return rocblas_symm_template_batched<BATCHED, HERM, T>(handle, side, uplo, m, n, alpha,
+        A, offsetA, lda, strideA,
+        B, offsetB, ldb, strideB, beta,
+        C, offsetC, ldc, strideC, batch_count);
+}
+
+template <typename T>
+ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
+    rocblas_internal_hemm_template(rocblas_handle handle,
+                                   rocblas_side   side,
+                                   rocblas_fill   uplo,
+                                   rocblas_int    m,
+                                   rocblas_int    n,
+                                   const T*       alpha,
+                                   const T*       A,
+                                   rocblas_stride offsetA,
+                                   rocblas_int    lda,
+                                   rocblas_stride strideA,
+                                   const T*       B,
+                                   rocblas_stride offsetB,
+                                   rocblas_int    ldb,
+                                   rocblas_stride strideB,
+                                   const T*       beta,
+                                   T*             C,
+                                   rocblas_stride offsetC,
+                                   rocblas_int    ldc,
+                                   rocblas_stride strideC,
+                                   rocblas_int    batch_count)
+{
+    constexpr bool HERM = true;
+    constexpr bool BATCHED = false;
+    if(batch_count == 1)
+    {
+        return rocblas_symm_template_non_batched<BATCHED, HERM, T>(
+            handle, side, uplo, m, n, alpha,
+            A, offsetA, lda,
+            B, offsetB, ldb, beta,
+            C, offsetC, ldc);
+    }
+    else
+    {
+        return rocblas_symm_template_batched<BATCHED, HERM, T>(handle, side, uplo, m, n, alpha,
+            A, offsetA, lda, strideA,
+            B, offsetB, ldb, strideB, beta,
+            C, offsetC, ldc, strideC, batch_count);
+    }
+}
+
+template <typename T>
+ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
+    rocblas_internal_hemm_batched_template(rocblas_handle handle,
+                                   rocblas_side   side,
+                                   rocblas_fill   uplo,
+                                   rocblas_int    m,
+                                   rocblas_int    n,
+                                   const T*       alpha,
+                                   const T* const* A,
+                                   rocblas_stride offsetA,
+                                   rocblas_int    lda,
+                                   rocblas_stride strideA,
+                                   const T* const* B,
+                                   rocblas_stride offsetB,
+                                   rocblas_int    ldb,
+                                   rocblas_stride strideB,
+                                   const T*       beta,
+                                   T* const*      C,
+                                   rocblas_stride offsetC,
+                                   rocblas_int    ldc,
+                                   rocblas_stride strideC,
+                                   rocblas_int    batch_count)
+{
+    constexpr bool HERM = true;
+    constexpr bool BATCHED = true;
+    return rocblas_symm_template_batched<BATCHED, HERM, T>(handle, side, uplo, m, n, alpha,
+        A, offsetA, lda, strideA,
+        B, offsetB, ldb, strideB, beta,
+        C, offsetC, ldc, strideC, batch_count);
 }
 
 // Instantiations below will need to be manually updated to match any change in
@@ -1084,47 +1185,133 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
 #error INSTANTIATE_SYMM_TEMPLATE already defined
 #endif
 
-#define INSTANTIATE_SYMM_TEMPLATE(BATCHED_, HERM_, T_, TScal_, TConstPtr_, TPtr_)       \
-template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_symm_template \
-                                  <BATCHED_, HERM_, T_, TScal_, TConstPtr_, TPtr_>      \
-                                  (rocblas_handle handle,                               \
-                                   rocblas_side   side,                                 \
-                                   rocblas_fill   uplo,                                 \
-                                   rocblas_int    m,                                    \
-                                   rocblas_int    n,                                    \
-                                   TScal_         alpha,                                \
-                                   TConstPtr_     AP,                                   \
-                                   rocblas_stride offsetA,                              \
-                                   rocblas_int    lda,                                  \
-                                   rocblas_stride strideA,                              \
-                                   TConstPtr_     BP,                                   \
-                                   rocblas_stride offsetB,                              \
-                                   rocblas_int    ldb,                                  \
-                                   rocblas_stride strideB,                              \
-                                   TScal_         beta,                                 \
-                                   TPtr_          CP,                                   \
-                                   rocblas_stride offsetC,                              \
-                                   rocblas_int    ldc,                                  \
-                                   rocblas_stride strideC,                              \
-                                   rocblas_int    batch_count);
+#define INSTANTIATE_SYMM_TEMPLATE(T_)                                                       \
+template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_symm_template<T_> \
+                                        (rocblas_handle handle,                             \
+                                        rocblas_side   side,                                \
+                                        rocblas_fill   uplo,                                \
+                                        rocblas_int    m,                                   \
+                                        rocblas_int    n,                                   \
+                                        const T_*      alpha,                               \
+                                        const T_*      A,                                   \
+                                        rocblas_stride offsetA,                             \
+                                        rocblas_int    lda,                                 \
+                                        rocblas_stride strideA,                             \
+                                        const T_*      B,                                   \
+                                        rocblas_stride offsetB,                             \
+                                        rocblas_int    ldb,                                 \
+                                        rocblas_stride strideB,                             \
+                                        const T_*      beta,                                \
+                                        T_*            C,                                   \
+                                        rocblas_stride offsetC,                             \
+                                        rocblas_int    ldc,                                 \
+                                        rocblas_stride strideC,                             \
+                                        rocblas_int    batch_count);
 
-// instantiate for rocblas_Xsymm and rocblas_Xsymm_strided_batched
-INSTANTIATE_SYMM_TEMPLATE(false, false,  float,  float const*,  float const*,  float*)
-INSTANTIATE_SYMM_TEMPLATE(false, false, double, double const*, double const*, double*)
-INSTANTIATE_SYMM_TEMPLATE(false, false,  rocblas_float_complex,  rocblas_float_complex const*,  rocblas_float_complex const*,  rocblas_float_complex*)
-INSTANTIATE_SYMM_TEMPLATE(false,  true,  rocblas_float_complex,  rocblas_float_complex const*,  rocblas_float_complex const*,  rocblas_float_complex*)
-INSTANTIATE_SYMM_TEMPLATE(false, false, rocblas_double_complex, rocblas_double_complex const*, rocblas_double_complex const*, rocblas_double_complex*)
-INSTANTIATE_SYMM_TEMPLATE(false,  true, rocblas_double_complex, rocblas_double_complex const*, rocblas_double_complex const*, rocblas_double_complex*)
+INSTANTIATE_SYMM_TEMPLATE(float)
+INSTANTIATE_SYMM_TEMPLATE(double)
+INSTANTIATE_SYMM_TEMPLATE(rocblas_float_complex)
+INSTANTIATE_SYMM_TEMPLATE(rocblas_double_complex)
 
-// instantiate for rocblas_Xsymm_batched
-INSTANTIATE_SYMM_TEMPLATE(true, false,  float,  float const*,  float const* const*,  float* const*)
-INSTANTIATE_SYMM_TEMPLATE(true, false, double, double const*, double const* const*, double* const*)
-INSTANTIATE_SYMM_TEMPLATE(true, false,  rocblas_float_complex,  rocblas_float_complex const*,  rocblas_float_complex const* const*,  rocblas_float_complex* const*)
-INSTANTIATE_SYMM_TEMPLATE(true,  true,  rocblas_float_complex,  rocblas_float_complex const*,  rocblas_float_complex const* const*,  rocblas_float_complex* const*)
-INSTANTIATE_SYMM_TEMPLATE(true, false, rocblas_double_complex, rocblas_double_complex const*, rocblas_double_complex const* const*, rocblas_double_complex* const*)
-INSTANTIATE_SYMM_TEMPLATE(true,  true, rocblas_double_complex, rocblas_double_complex const*, rocblas_double_complex const* const*, rocblas_double_complex* const*)
+#undef INSTANTIATE_SYMM_TEMPLATE
 
-#undef INSTANTIATE_HEMM_SYMM_NUMERICS
+#ifdef INSTANTIATE_SYMM_BATCHED_TEMPLATE
+#error INSTANTIATE_SYMM_BATCHED_TEMPLATE already defined
+#endif
+
+#define INSTANTIATE_SYMM_BATCHED_TEMPLATE(T_)                                                       \
+template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_symm_batched_template<T_> \
+                                                (rocblas_handle handle,                             \
+                                                rocblas_side    side,                               \
+                                                rocblas_fill    uplo,                               \
+                                                rocblas_int     m,                                  \
+                                                rocblas_int     n,                                  \
+                                                const T_*       alpha,                              \
+                                                const T_* const* A,                                 \
+                                                rocblas_stride  offsetA,                            \
+                                                rocblas_int     lda,                                \
+                                                rocblas_stride  strideA,                            \
+                                                const T_* const* B,                                 \
+                                                rocblas_stride  offsetB,                            \
+                                                rocblas_int     ldb,                                \
+                                                rocblas_stride  strideB,                            \
+                                                const T_*       beta,                               \
+                                                T_* const*      C,                                  \
+                                                rocblas_stride  offsetC,                            \
+                                                rocblas_int     ldc,                                \
+                                                rocblas_stride  strideC,                            \
+                                                rocblas_int     batch_count);
+
+INSTANTIATE_SYMM_BATCHED_TEMPLATE(float)
+INSTANTIATE_SYMM_BATCHED_TEMPLATE(double)
+INSTANTIATE_SYMM_BATCHED_TEMPLATE(rocblas_float_complex)
+INSTANTIATE_SYMM_BATCHED_TEMPLATE(rocblas_double_complex)
+
+#undef INSTANTIATE_SYMM_BATCHED_TEMPLATE
+
+#ifdef INSTANTIATE_HEMM_TEMPLATE
+#error INSTANTIATE_HEMM_TEMPLATE already defined
+#endif
+
+#define INSTANTIATE_HEMM_TEMPLATE(T_)                                                       \
+template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_hemm_template<T_> \
+                                        (rocblas_handle handle,                             \
+                                        rocblas_side   side,                                \
+                                        rocblas_fill   uplo,                                \
+                                        rocblas_int    m,                                   \
+                                        rocblas_int    n,                                   \
+                                        const T_*      alpha,                               \
+                                        const T_*      A,                                   \
+                                        rocblas_stride offsetA,                             \
+                                        rocblas_int    lda,                                 \
+                                        rocblas_stride strideA,                             \
+                                        const T_*      B,                                   \
+                                        rocblas_stride offsetB,                             \
+                                        rocblas_int    ldb,                                 \
+                                        rocblas_stride strideB,                             \
+                                        const T_*      beta,                                \
+                                        T_*            C,                                   \
+                                        rocblas_stride offsetC,                             \
+                                        rocblas_int    ldc,                                 \
+                                        rocblas_stride strideC,                             \
+                                        rocblas_int    batch_count);
+
+INSTANTIATE_HEMM_TEMPLATE(rocblas_float_complex)
+INSTANTIATE_HEMM_TEMPLATE(rocblas_double_complex)
+
+#undef INSTANTIATE_HEMM_TEMPLATE
+
+#ifdef INSTANTIATE_HEMM_BATCHED_TEMPLATE
+#error INSTANTIATE_HEMM_BATCHED_TEMPLATE already defined
+#endif
+
+#define INSTANTIATE_HEMM_BATCHED_TEMPLATE(T_)                                                       \
+template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_hemm_batched_template<T_> \
+                                                (rocblas_handle handle,                             \
+                                                rocblas_side    side,                               \
+                                                rocblas_fill    uplo,                               \
+                                                rocblas_int     m,                                  \
+                                                rocblas_int     n,                                  \
+                                                const T_*       alpha,                              \
+                                                const T_* const* A,                                 \
+                                                rocblas_stride  offsetA,                            \
+                                                rocblas_int     lda,                                \
+                                                rocblas_stride  strideA,                            \
+                                                const T_* const* B,                                 \
+                                                rocblas_stride  offsetB,                            \
+                                                rocblas_int     ldb,                                \
+                                                rocblas_stride  strideB,                            \
+                                                const T_*       beta,                               \
+                                                T_* const*      C,                                  \
+                                                rocblas_stride  offsetC,                            \
+                                                rocblas_int     ldc,                                \
+                                                rocblas_stride  strideC,                            \
+                                                rocblas_int     batch_count);
+
+INSTANTIATE_HEMM_BATCHED_TEMPLATE(rocblas_float_complex)
+INSTANTIATE_HEMM_BATCHED_TEMPLATE(rocblas_double_complex)
+
+#undef INSTANTIATE_HEMM_BATCHED_TEMPLATE
 
 #ifdef INSTANTIATE_HEMM_SYMM_NUMERICS
 #error INSTANTIATE_HEMM_SYMM_NUMERICS already defined

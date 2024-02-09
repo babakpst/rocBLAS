@@ -46,7 +46,7 @@ rocblas_status rocblas_set_matrix_zero_if_alpha_zero_template(rocblas_handle han
                                                               rocblas_int    lda,
                                                               rocblas_stride a_st_or_of,
                                                               rocblas_int    batch_count);
-
+/*
 template <typename TScal, typename TPtr, typename TConstPtr>
 rocblas_status rocblas_trmm_arg_check(rocblas_handle    handle,
                                       rocblas_side      side,
@@ -87,23 +87,23 @@ rocblas_status rocblas_trmm_arg_check(rocblas_handle    handle,
 
     return rocblas_status_continue;
 }
-
+*/
 template <typename TScal, typename TPtr, typename TConstPtr>
-rocblas_status rocblas_trmm_outofplace_arg_check(rocblas_handle    handle,
-                                                 rocblas_side      side,
-                                                 rocblas_fill      uplo,
-                                                 rocblas_operation trans,
-                                                 rocblas_diagonal  diag,
-                                                 rocblas_int       m,
-                                                 rocblas_int       n,
-                                                 const TScal*      alpha,
-                                                 TConstPtr         a,
-                                                 rocblas_int       lda,
-                                                 TConstPtr         b,
-                                                 rocblas_int       ldb,
-                                                 TPtr              c,
-                                                 rocblas_int       ldc,
-                                                 rocblas_int       batch_count)
+rocblas_status rocblas_trmm_arg_check(rocblas_handle    handle,
+                                      rocblas_side      side,
+                                      rocblas_fill      uplo,
+                                      rocblas_operation trans,
+                                      rocblas_diagonal  diag,
+                                      rocblas_int       m,
+                                      rocblas_int       n,
+                                      const TScal*      alpha,
+                                      TConstPtr         a,
+                                      rocblas_int       lda,
+                                      TConstPtr         b,
+                                      rocblas_int       ldb,
+                                      TPtr              c,
+                                      rocblas_int       ldc,
+                                      rocblas_int       batch_count)
 {
     if(side != rocblas_side_left && side != rocblas_side_right)
         return rocblas_status_invalid_value;
@@ -132,7 +132,7 @@ rocblas_status rocblas_trmm_outofplace_arg_check(rocblas_handle    handle,
     // ensuring ldb == ldc when B and C are the same
     // matching gemm_ex behaviour
     if(b == c && ldb != ldc)
-        return rocblas_status_invalid_size;
+        return rocblas_status_invalid_value;
 
     return rocblas_status_continue;
 }
@@ -198,7 +198,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                                              rocblas_stride    stride_c,
                                              rocblas_int       batch_count);
 
-template <int NB, bool BATCHED, typename T, typename TScal, typename TConstPtr, typename TPtr>
+template <typename T>
 ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     rocblas_internal_trmm_template(rocblas_handle    handle,
                                    rocblas_side      side,
@@ -207,21 +207,46 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                                    rocblas_diagonal  diag,
                                    rocblas_int       m,
                                    rocblas_int       n,
-                                   TScal*            alpha,
+                                   const T*          alpha,
                                    rocblas_stride    stride_alpha,
-                                   TConstPtr*        dA,
+                                   const T*          dA,
                                    rocblas_stride    offset_a,
                                    rocblas_int       lda,
                                    rocblas_stride    stride_a,
-                                   TConstPtr*        dB,
+                                   const T*          dB,
                                    rocblas_stride    offset_b,
                                    rocblas_int       ldb,
                                    rocblas_stride    stride_b,
-                                   TPtr*             dC,
+                                   T*                dC,
                                    rocblas_stride    offset_c,
                                    rocblas_int       lddc,
                                    rocblas_stride    stride_c,
                                    rocblas_int       batch_count);
+
+template <typename T>
+ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
+    rocblas_internal_trmm_batched_template(rocblas_handle    handle,
+                                           rocblas_side      side,
+                                           rocblas_fill      uplo,
+                                           rocblas_operation trans_a,
+                                           rocblas_diagonal  diag,
+                                           rocblas_int       m,
+                                           rocblas_int       n,
+                                           const T*          alpha,
+                                           rocblas_stride    stride_alpha,
+                                           const T* const*   dA,
+                                           rocblas_stride    offset_a,
+                                           rocblas_int       lda,
+                                           rocblas_stride    stride_a,
+                                           const T* const*   dB,
+                                           rocblas_stride    offset_b,
+                                           rocblas_int       ldb,
+                                           rocblas_stride    stride_b,
+                                           T* const*         dC,
+                                           rocblas_stride    offset_c,
+                                           rocblas_int       lddc,
+                                           rocblas_stride    stride_c,
+                                           rocblas_int       batch_count);
 
 template <typename TConstPtr, typename TPtr>
 rocblas_status rocblas_trmm_check_numerics(const char*       function_name,

@@ -97,22 +97,22 @@ rocblas_status rocblas_gemm_ex_scale_template(rocblas_handle handle,
     dim3 gemm_grid(blocksX, blocksY, batch_count);
     dim3 gemm_threads(GEMM_DIM_X, GEMM_DIM_Y);
 
-    hipLaunchKernelGGL((gemm_ex_scale_kernel<GEMM_DIM_X, GEMM_DIM_Y>),
-                       gemm_grid,
-                       gemm_threads,
-                       0,
-                       rocblas_stream,
-                       m,
-                       n,
-                       beta,
-                       C,
-                       offset_c,
-                       ldc,
-                       stride_c,
-                       D,
-                       offset_d,
-                       ldd,
-                       stride_d);
+    ROCBLAS_LAUNCH_KERNEL((gemm_ex_scale_kernel<GEMM_DIM_X, GEMM_DIM_Y>),
+                          gemm_grid,
+                          gemm_threads,
+                          0,
+                          rocblas_stream,
+                          m,
+                          n,
+                          beta,
+                          C,
+                          offset_c,
+                          ldc,
+                          stride_c,
+                          D,
+                          offset_d,
+                          ldd,
+                          stride_d);
 
     return rocblas_status_success;
 }
@@ -204,8 +204,8 @@ rocblas_status gemm_ex_batched_template(rocblas_handle     handle,
                                         rocblas_gemm_flags flags)
 {
 #if 0
-    // if tensile supports we can remove special case handling here, this does not support int8x4
-    if(!std::is_same<Ti, rocblas_int8x4>{} && (k == 0 || (alpha && !*alpha)))
+    // if tensile supports we can remove special case handling here
+    if(k == 0 || (alpha && !*alpha))
     {
         // null beta earlier return and always on host here so can dereference
         return rocblas_gemm_ex_scale_template(handle,
@@ -263,11 +263,38 @@ rocblas_status gemm_ex_batched_template(rocblas_handle     handle,
                                         int32_t            solution_index,
                                         rocblas_gemm_flags flags)
 {
-    RocblasContractionProblem<Ti, To, Tc> problem{
-        handle,   trans_a, trans_b,  m,        n,           k,        alpha,    a,
-        nullptr,  lda,     stride_a, offset_a, b,           nullptr,  ldb,      stride_b,
-        offset_b, beta,    c,        nullptr,  ldc,         stride_c, offset_c, d,
-        nullptr,  ldd,     stride_d, offset_d, batch_count, true,     flags};
+    // pre apply offsets for non-batched and strided
+    RocblasContractionProblem<Ti, To, Tc> problem{handle,
+                                                  trans_a,
+                                                  trans_b,
+                                                  m,
+                                                  n,
+                                                  k,
+                                                  alpha,
+                                                  a + offset_a,
+                                                  nullptr,
+                                                  lda,
+                                                  stride_a,
+                                                  0 /* offset_a */,
+                                                  b + offset_b,
+                                                  nullptr,
+                                                  ldb,
+                                                  stride_b,
+                                                  0 /* offset_b */,
+                                                  beta,
+                                                  c + offset_c,
+                                                  nullptr,
+                                                  ldc,
+                                                  stride_c,
+                                                  0 /* offset_c */,
+                                                  d + offset_d,
+                                                  nullptr,
+                                                  ldd,
+                                                  stride_d,
+                                                  0 /* offset_d */,
+                                                  batch_count,
+                                                  true,
+                                                  flags};
 
     return runContractionProblem(problem, algo, solution_index);
 }
@@ -319,8 +346,7 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
         // Pass alpha and beta as simple array (stride of 1)
         // since Tensile does not have gemm_batched, we will have to iterate
         // over batches either way
-        if(check_numerics && !std::is_same<Ti, rocblas_int8x4>{}
-           && !std::is_same<Ti, signed char>{})
+        if(check_numerics && !std::is_same_v<Ti, signed char>)
         {
             bool           is_input = true;
             rocblas_status gemm_ex_check_numerics_status
@@ -332,12 +358,15 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
                                               n,
                                               k,
                                               (const Ti* const*)a,
+                                              offsetAin,
                                               lda,
                                               stride_a,
                                               (const Ti* const*)b,
+                                              offsetBin,
                                               ldb,
                                               stride_b,
                                               (const To* const*)c,
+                                              offsetCin,
                                               ldc,
                                               stride_c,
                                               batch_count,
@@ -378,8 +407,7 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
         if(status != rocblas_status_success)
             return status;
 
-        if(check_numerics && !std::is_same<Ti, rocblas_int8x4>{}
-           && !std::is_same<Ti, signed char>{})
+        if(check_numerics && !std::is_same_v<Ti, signed char>)
         {
             bool           is_input = false;
             rocblas_status gemm_ex_check_numerics_status
@@ -391,12 +419,15 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
                                               n,
                                               k,
                                               (const Ti* const*)a,
+                                              offsetAin,
                                               lda,
                                               stride_a,
                                               (const Ti* const*)b,
+                                              offsetBin,
                                               ldb,
                                               stride_b,
                                               (To* const*)d,
+                                              offsetDin,
                                               ldd,
                                               stride_d,
                                               batch_count,
@@ -412,8 +443,7 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
            || !isAligned(d, sizeof(To)))
             return rocblas_status_invalid_size;
 
-        if(check_numerics && !std::is_same<Ti, rocblas_int8x4>{}
-           && !std::is_same<Ti, signed char>{})
+        if(check_numerics && !std::is_same_v<Ti, signed char>)
         {
             bool           is_input                      = true;
             rocblas_status gemm_ex_check_numerics_status = rocblas_gemm_check_numerics(
@@ -425,12 +455,15 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
                 n,
                 k,
                 (const Ti*)a,
+                offsetAin,
                 lda,
                 stride_a,
                 (const Ti*)b,
+                offsetBin,
                 ldb,
                 stride_b,
                 (const To*)c,
+                offsetCin,
                 ldc,
                 stride_c,
                 batch_count,
@@ -471,8 +504,7 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
         if(status != rocblas_status_success)
             return status;
 
-        if(check_numerics && !std::is_same<Ti, rocblas_int8x4>{}
-           && !std::is_same<Ti, signed char>{})
+        if(check_numerics && !std::is_same_v<Ti, signed char>)
         {
             bool           is_input                      = false;
             rocblas_status gemm_ex_check_numerics_status = rocblas_gemm_check_numerics(
@@ -484,12 +516,15 @@ rocblas_status gemm_ex_typecasting(rocblas_handle     handle,
                 n,
                 k,
                 (const Ti*)a,
+                offsetAin,
                 lda,
                 stride_a,
                 (const Ti*)b,
+                offsetBin,
                 ldb,
                 stride_b,
                 (To*)d,
+                offsetDin,
                 ldd,
                 stride_d,
                 batch_count,
@@ -737,39 +772,7 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
             && c_type == rocblas_datatype_i32_r && d_type == rocblas_datatype_i32_r
             && compute_type == rocblas_datatype_i32_r)
     {
-        bool useInt8x4 = flags & rocblas_gemm_flags_pack_int8x4;
-
-        // Here is point where we decide to branch to real int8 or rocblas_int8x4
-        // MatrixInstruction kernel uses general int8 (unless rocblas_gemm_flags_pack_int8x4 is set)
-        if(!useInt8x4)
-        {
-            rb_status = gemm_ex_typecasting<BATCHED, int8_t, int32_t>(EX_TYPECASTING_PARM);
-        }
-        // Else, we check if we can pack 4 int8:
-        else
-        {
-            // For now, K must be a multiple of 4
-            if(k % 4 != 0 || ((trans_a == rocblas_operation_transpose) && (lda % 4 != 0))
-               || ((trans_b == rocblas_operation_none) && (ldb % 4 != 0))
-               || (batch_count > 1 && (stride_a % 4 != 0 || stride_b % 4 != 0)))
-            {
-                rb_status = rocblas_status_invalid_size;
-            }
-            else
-            {
-                // adjust by 4 for Tensile
-                lda = (trans_a == rocblas_operation_none) ? lda : lda / 4;
-                ldb = (trans_b == rocblas_operation_none) ? ldb / 4 : ldb;
-                k   = k / 4;
-                if(!BATCHED)
-                {
-                    stride_a = stride_a / 4;
-                    stride_b = stride_b / 4;
-                }
-                rb_status
-                    = gemm_ex_typecasting<BATCHED, rocblas_int8x4, int32_t>(EX_TYPECASTING_PARM);
-            }
-        }
+        rb_status = gemm_ex_typecasting<BATCHED, int8_t, int32_t>(EX_TYPECASTING_PARM);
     }
     else if(a_type == rocblas_datatype_f32_c && b_type == rocblas_datatype_f32_c
             && c_type == rocblas_datatype_f32_c && d_type == rocblas_datatype_f32_c

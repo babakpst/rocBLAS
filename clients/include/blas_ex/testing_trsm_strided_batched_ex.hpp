@@ -43,8 +43,9 @@
 template <typename T>
 void testing_trsm_strided_batched_ex_bad_arg(const Arguments& arg)
 {
-    auto rocblas_trsm_strided_batched_ex_fn
-        = arg.fortran ? rocblas_trsm_strided_batched_ex_fortran : rocblas_trsm_strided_batched_ex;
+    auto rocblas_trsm_strided_batched_ex_fn = arg.api == FORTRAN
+                                                  ? rocblas_trsm_strided_batched_ex_fortran
+                                                  : rocblas_trsm_strided_batched_ex;
 
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
@@ -295,8 +296,9 @@ void testing_trsm_strided_batched_ex_bad_arg(const Arguments& arg)
 template <typename T>
 void testing_trsm_strided_batched_ex(const Arguments& arg)
 {
-    auto rocblas_trsm_strided_batched_ex_fn
-        = arg.fortran ? rocblas_trsm_strided_batched_ex_fortran : rocblas_trsm_strided_batched_ex;
+    auto rocblas_trsm_strided_batched_ex_fn = arg.api == FORTRAN
+                                                  ? rocblas_trsm_strided_batched_ex_fortran
+                                                  : rocblas_trsm_strided_batched_ex;
 
     rocblas_int M   = arg.M;
     rocblas_int N   = arg.N;
@@ -404,17 +406,17 @@ void testing_trsm_strided_batched_ex(const Arguments& arg)
 
     // Calculate hB = hA*hX;
     for(int b = 0; b < batch_count; b++)
-        cblas_trmm<T>(side,
-                      uplo,
-                      transA,
-                      diag,
-                      M,
-                      N,
-                      1.0 / alpha_h,
-                      hA + b * stride_A,
-                      lda,
-                      hB + b * stride_B,
-                      ldb);
+        ref_trmm<T>(side,
+                    uplo,
+                    transA,
+                    diag,
+                    M,
+                    N,
+                    1.0 / alpha_h,
+                    hA + b * stride_A,
+                    lda,
+                    hB + b * stride_B,
+                    ldb);
 
     hXorB_1.copy_from(hB);
     hXorB_2.copy_from(hB);
@@ -534,18 +536,20 @@ void testing_trsm_strided_batched_ex(const Arguments& arg)
 
             if(K % TRSM_BLOCK != 0 || blocks == 0)
             {
-                CHECK_ROCBLAS_ERROR(rocblas_trtri_strided_batched<T>(
-                    handle,
-                    uplo,
-                    diag,
-                    K - TRSM_BLOCK * blocks,
-                    (T*)dA + sub_stride_A * blocks + b * stride_A,
-                    lda,
-                    sub_stride_A,
-                    (T*)dinvA + sub_stride_invA * blocks + b * stride_invA,
-                    TRSM_BLOCK,
-                    sub_stride_invA,
-                    1));
+                int remainder = K - TRSM_BLOCK * blocks;
+                if(remainder)
+                    CHECK_ROCBLAS_ERROR(rocblas_trtri_strided_batched<T>(
+                        handle,
+                        uplo,
+                        diag,
+                        remainder,
+                        (T*)dA + sub_stride_A * blocks + b * stride_A,
+                        lda,
+                        sub_stride_A,
+                        (T*)dinvA + sub_stride_invA * blocks + b * stride_invA,
+                        TRSM_BLOCK,
+                        sub_stride_invA,
+                        1));
             }
         }
 
@@ -610,10 +614,8 @@ void testing_trsm_strided_batched_ex(const Arguments& arg)
             trsm_err_res_check<T>(max_err_2, M, error_eps_multiplier, eps);
 
             // hx_or_b contains A * (calculated X), so res = A * (calculated x) - b = hx_or_b - hb
-            cblas_trmm<T>(
-                side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA[b], lda, hXorB_1[b], ldb);
-            cblas_trmm<T>(
-                side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA[b], lda, hXorB_2[b], ldb);
+            ref_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA[b], lda, hXorB_1[b], ldb);
+            ref_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA[b], lda, hXorB_2[b], ldb);
 
             // calculate vector-induced-norm 1 of matrix res
             max_err_1 = rocblas_abs(matrix_norm_1<T>(M, N, ldb, hXorB_1[b], hB[b]));
@@ -691,7 +693,7 @@ void testing_trsm_strided_batched_ex(const Arguments& arg)
         cpu_time_used = get_time_us_no_sync();
 
         for(int b = 0; b < batch_count; b++)
-            cblas_trsm<T>(side, uplo, transA, diag, M, N, alpha_h, hA[b], lda, cpuXorB[b], ldb);
+            ref_trsm<T>(side, uplo, transA, diag, M, N, alpha_h, hA[b], lda, cpuXorB[b], ldb);
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 

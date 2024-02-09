@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -273,7 +273,8 @@ void testing_logging(const Arguments& arg)
 
             rocblas_syrkx<T>(handle, uplo, transA, n, k, &alpha, da, lda, db, ldb, &beta, dc, ldc);
 
-            rocblas_trmm<T>(handle, side, uplo, transA, diag, m, n, &alpha, da, lda, db, ldb);
+            rocblas_trmm<T>(
+                handle, side, uplo, transA, diag, m, n, &alpha, da, lda, db, ldb, dc, ldc);
 
             rocblas_trsm<T>(handle, side, uplo, transA, diag, m, n, &alpha, da, lda, db, ldb);
 
@@ -323,7 +324,7 @@ void testing_logging(const Arguments& arg)
             rocblas_datatype  d_type;
             rocblas_datatype  compute_type;
 
-            if(std::is_same<T, rocblas_half>{})
+            if(std::is_same_v<T, rocblas_half>)
             {
                 a_type       = rocblas_datatype_f16_r;
                 b_type       = rocblas_datatype_f16_r;
@@ -333,7 +334,7 @@ void testing_logging(const Arguments& arg)
                 alpha        = &alpha_half;
                 beta         = &beta_half;
             }
-            else if(std::is_same<T, float>{})
+            else if(std::is_same_v<T, float>)
             {
                 a_type       = rocblas_datatype_f32_r;
                 b_type       = rocblas_datatype_f32_r;
@@ -343,7 +344,7 @@ void testing_logging(const Arguments& arg)
                 alpha        = &alpha_float;
                 beta         = &beta_float;
             }
-            else if(std::is_same<T, double>{})
+            else if(std::is_same_v<T, double>)
             {
                 a_type       = rocblas_datatype_f64_r;
                 b_type       = rocblas_datatype_f64_r;
@@ -749,12 +750,12 @@ void testing_logging(const Arguments& arg)
     // TBMV
     //
     trace_ofs2 << replaceX<T>("rocblas_Xtbmv") << "," << uplo << "," << transA << "," << diag << ","
-               << m << "," << k << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
+               << n << "," << k << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
                << ",atomics_allowed\n";
 
     bench_ofs2 << "./rocblas-bench -f tbmv -r " << rocblas_precision_string<T> << " --uplo "
                << uplo_letter << " --transposeA " << transA_letter << " --diag " << diag_letter
-               << " -m " << m << " -k " << k << " --lda " << lda << " --incx " << incx << "\n";
+               << " -n " << n << " -k " << k << " --lda " << lda << " --incx " << incx << "\n";
 
     //
     // TBSV
@@ -771,22 +772,22 @@ void testing_logging(const Arguments& arg)
     // TRMV
     //
     trace_ofs2 << replaceX<T>("rocblas_Xtrmv") << "," << uplo << "," << transA << "," << diag << ","
-               << m << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
+               << n << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
                << ",atomics_allowed\n";
 
     bench_ofs2 << "./rocblas-bench -f trmv -r " << rocblas_precision_string<T> << " --uplo "
                << uplo_letter << " --transposeA " << transA_letter << " --diag " << diag_letter
-               << " -m " << m << " --lda " << lda << " --incx " << incx << "\n";
+               << " -n " << n << " --lda " << lda << " --incx " << incx << "\n";
 
     //
     // TPMV
     //
     trace_ofs2 << replaceX<T>("rocblas_Xtpmv") << "," << uplo << "," << transA << "," << diag << ","
-               << m << "," << (void*)da << "," << (void*)dx << "," << incx << ",atomics_allowed\n";
+               << n << "," << (void*)da << "," << (void*)dx << "," << incx << ",atomics_allowed\n";
 
     bench_ofs2 << "./rocblas-bench -f tpmv -r " << rocblas_precision_string<T> << " --uplo "
                << uplo_letter << " --transposeA " << transA_letter << " --diag " << diag_letter
-               << " -m " << m << " --incx " << incx << "\n";
+               << " -n " << n << " --incx " << incx << "\n";
 
     //
     // TPSV
@@ -802,23 +803,23 @@ void testing_logging(const Arguments& arg)
     // TRMV
     //
     trace_ofs2 << replaceX<T>("rocblas_Xtrmv") << "," << uplo << "," << transA << "," << diag << ","
-               << m << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
+               << n << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
                << ",atomics_allowed\n";
 
     bench_ofs2 << "./rocblas-bench -f trmv -r " << rocblas_precision_string<T> << " --uplo "
                << uplo_letter << " --transposeA " << transA_letter << " --diag " << diag_letter
-               << " -m " << m << " --lda " << lda << " --incx " << incx << "\n";
+               << " -n " << n << " --lda " << lda << " --incx " << incx << "\n";
 
     //
     // TRSV
     //
     trace_ofs2 << replaceX<T>("rocblas_Xtrsv") << "," << uplo << "," << transA << "," << diag << ","
-               << m << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
+               << n << "," << (void*)da << "," << lda << "," << (void*)dx << "," << incx
                << ",atomics_allowed\n";
 
     bench_ofs2 << "./rocblas-bench -f trsv -r " << rocblas_precision_string<T> << " --uplo "
                << uplo_letter << " --transposeA " << transA_letter << " --diag " << diag_letter
-               << " -m " << m << " --lda " << lda << " --incx " << incx << "\n";
+               << " -n " << n << " --lda " << lda << " --incx " << incx << "\n";
 
     if(BUILD_WITH_TENSILE)
     {
@@ -971,20 +972,21 @@ void testing_logging(const Arguments& arg)
         {
             trace_ofs2 << replaceX<T>("rocblas_Xtrmm") << "," << side << "," << uplo << ","
                        << transA << "," << diag << "," << m << "," << n << "," << alpha << ","
-                       << (void*)da << "," << lda << "," << (void*)db << "," << ldb
-                       << ",atomics_allowed\n";
+                       << (void*)da << "," << lda << "," << (void*)db << "," << ldb << ","
+                       << (void*)dc << "," << ldc << ",atomics_allowed\n";
 
             bench_ofs2 << "./rocblas-bench -f trmm -r " << rocblas_precision_string<T> << " --side "
                        << side_letter << " --uplo " << uplo_letter << " --transposeA "
                        << transA_letter << " --diag " << diag_letter << " -m " << m << " -n " << n
-                       << " --alpha " << alpha << " --lda " << lda << " --ldb " << ldb << "\n";
+                       << " --alpha " << alpha << " --lda " << lda << " --ldb " << ldb << " --ldc "
+                       << ldc << "\n";
         }
         else
         {
             trace_ofs2 << replaceX<T>("rocblas_Xtrmm") << "," << side << "," << uplo << ","
                        << transA << "," << diag << "," << m << "," << n << "," << (void*)&alpha
-                       << "," << (void*)da << "," << lda << "," << (void*)db << "," << ldb
-                       << ",atomics_allowed\n";
+                       << "," << (void*)da << "," << lda << "," << (void*)db << "," << ldb << ","
+                       << (void*)dc << "," << ldc << ",atomics_allowed\n";
         }
 
         //
@@ -1042,7 +1044,7 @@ void testing_logging(const Arguments& arg)
         {
             rocblas_datatype a_type, b_type, c_type, d_type, compute_type;
 
-            if(std::is_same<T, rocblas_half>{})
+            if(std::is_same_v<T, rocblas_half>)
             {
                 a_type       = rocblas_datatype_f16_r;
                 b_type       = rocblas_datatype_f16_r;
@@ -1050,7 +1052,7 @@ void testing_logging(const Arguments& arg)
                 d_type       = rocblas_datatype_f16_r;
                 compute_type = rocblas_datatype_f16_r;
             }
-            else if(std::is_same<T, float>{})
+            else if(std::is_same_v<T, float>)
             {
                 a_type       = rocblas_datatype_f32_r;
                 b_type       = rocblas_datatype_f32_r;
@@ -1058,7 +1060,7 @@ void testing_logging(const Arguments& arg)
                 d_type       = rocblas_datatype_f32_r;
                 compute_type = rocblas_datatype_f32_r;
             }
-            if(std::is_same<T, double>{})
+            if(std::is_same_v<T, double>)
             {
                 a_type       = rocblas_datatype_f64_r;
                 b_type       = rocblas_datatype_f64_r;

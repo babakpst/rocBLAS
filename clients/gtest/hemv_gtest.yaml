@@ -61,6 +61,17 @@ Definitions:
   - &alpha_beta_range_small
     - { alpha: 2.0, beta: 1.5, alphai: -0.5, betai: 2.5 }
 
+  - &alpha_beta_range_size_t_inc
+    - { alpha:  0,    alphai:  0,   beta:  0.5,   betai:  0 } # only incy used
+    - { alpha:  1,    alphai:  0,   beta:  0.5,   betai:  0 }
+
+  - &size_t_index
+    - { N: 46976, lda: 46976, stride_a: 2206744576 }
+
+  - &size_t_incx_incy
+    - { N: 3,     lda: 3,     incx: *c_pos_x2_overflow_int32, incy: 1 }  # x is m element
+    - { N: 3,     lda: 3,     incx: 1,                        incy: *c_pos_x2_overflow_int32 } # y is n element
+
 Tests:
 - name: hemv_bad_arg
   category: pre_checkin
@@ -70,7 +81,7 @@ Tests:
   - hemv_strided_batched_bad_arg
   precision: *single_double_precisions_complex
   uplo: N
-  fortran: [ true, false ]
+  api: [ C, FORTRAN, FORTRAN_64 ]
 
 - name: hemv_NaN
   category: pre_checkin
@@ -92,7 +103,7 @@ Tests:
   matrix_size: *small_matrix_size_range
   incx_incy: *incx_incy_range_small
   alpha_beta: *alpha_beta_range_small
-  fortran: true
+  api: FORTRAN
 
 - name: hemv_small
   category: quick
@@ -120,8 +131,31 @@ Tests:
   matrix_size: *large_matrix_size_range
   incx_incy: *incx_incy_range_small
   alpha_beta: *alpha_beta_range_small
+  pointer_mode_device: false
 
-# gemv_batched
+- name: hemv_size_t
+  category: stress
+  function: hemv
+  precision: *single_precision_complex
+  uplo: [ U, L ]
+  matrix_size: *size_t_index
+  incx: 1
+  incy: 1
+  alpha_beta: *alpha_beta_range_small
+  pointer_mode_host: false
+
+- name: hemv_size_t_inc
+  category: stress
+  function: hemv
+  precision: *single_precision_complex
+  uplo: [ U, L ]
+  arguments: *size_t_incx_incy
+  alpha_beta: *alpha_beta_range_size_t_inc
+  pointer_mode_device: false
+  os_flags: LINUX
+  gpu_arch: ['90a']
+
+# hemv_batched
 - name: hemv_batched_NaN
   category: pre_checkin
   function: hemv_batched
@@ -142,7 +176,7 @@ Tests:
   incx_incy: *incx_incy_range_small
   alpha_beta: *alpha_beta_range_small
   batch_count: [ -1, 0, 3 ]
-  fortran: true
+  api: FORTRAN
 
 - name: hemv_batched_small
   category: quick
@@ -173,6 +207,7 @@ Tests:
   incx_incy: *incx_incy_range_small
   alpha_beta: *alpha_beta_range_small
   batch_count: [ 3 ]
+  pointer_mode_host: false
 
 # hemv_strided_batched
 - name: hemv_strided_batched_NaN
@@ -197,7 +232,7 @@ Tests:
   alpha_beta: *alpha_beta_range_small
   batch_count: [ -1, 0, 3 ]
   stride_scale: [ 2 ]
-  fortran: true
+  api: FORTRAN
 
 - name: hemv_strided_batched_small
   category: quick
@@ -231,6 +266,26 @@ Tests:
   alpha_beta: *alpha_beta_range_small
   batch_count: [ 3 ]
   stride_scale: [ 1 ]
+  pointer_mode_host: false
+
+# 64-bit interface
+- name: hemv_64
+  category: stress
+  arguments:
+    - { N: 2, lda: 2147483649, incx: 1, incy: 1, batch_count: 1 }
+    - { N: 2, lda: 2, incx: 2147483649, incy: 1, batch_count: 1 }
+    - { N: 2, lda: 2, incx: 1, incy: 2147483649, batch_count: 1 }
+    - { N: 2, lda: 2, incx: 1, incy: 1, batch_count: *c_grid_yz_require_passes }
+  uplo: [ U, L ]
+  stride_scale: [ 1 ]
+  alpha_beta: *alpha_beta_range_small
+  pointer_mode_host: false
+  api: [ C_64 ]
+  os_flags: [ LINUX ]
+  function:
+    - hemv: *single_precision_complex
+    - hemv_batched: *single_precision_complex
+    - hemv_strided_batched: *single_precision_complex
 
 - name: hemv_graph_test
   category: pre_checkin

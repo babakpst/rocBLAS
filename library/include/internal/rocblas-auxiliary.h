@@ -72,19 +72,20 @@ ROCBLAS_EXPORT rocblas_status rocblas_set_pointer_mode(rocblas_handle       hand
 ROCBLAS_EXPORT rocblas_status rocblas_get_pointer_mode(rocblas_handle        handle,
                                                        rocblas_pointer_mode* pointer_mode);
 
-ROCBLAS_DEPRECATED_MSG("rocblas_set_int8_type_for_hipblas will be removed in a future release.")
-/*! \brief Set rocblas_int8_type_for_hipblas
- */
-ROCBLAS_EXPORT rocblas_status rocblas_set_int8_type_for_hipblas(
-    rocblas_handle handle, rocblas_int8_type_for_hipblas int8_type);
-
-ROCBLAS_DEPRECATED_MSG("rocblas_get_int8_type_for_hipblas will be removed in a future release.")
-/*! \brief Get rocblas_int8_type_for_hipblas
- */
-ROCBLAS_EXPORT rocblas_status rocblas_get_int8_type_for_hipblas(
-    rocblas_handle handle, rocblas_int8_type_for_hipblas* int8_type);
 /*! \brief Set rocblas_atomics_mode
+ *  \details
+ *  Some rocBLAS functions may have implementations which use atomic operations to increase performance.
+ *  By using atomic operations, results are not guaranteed to be identical between multiple runs.
+ *  Results will be accurate with or without atomic operations, but if it is required to
+ *  have bit-wise reproducible results, atomic operations should not be used.
+ *
+ *  Atomic operations can be turned on or off for a handle by calling rocblas_set_atomics_mode.
+ *  By default, this is set to `rocblas_atomics_allowed`.
  */
+ROCBLAS_DEPRECATED_MSG(
+    " Atomic operations in rocBLAS will be turned off by default in future releases."
+    "The default will be set to 'rocblas_atomics_not_allowed' and users can enable using "
+    "rocblas_set_atomics_mode(). ")
 ROCBLAS_EXPORT rocblas_status rocblas_set_atomics_mode(rocblas_handle       handle,
                                                        rocblas_atomics_mode atomics_mode);
 
@@ -93,20 +94,15 @@ ROCBLAS_EXPORT rocblas_status rocblas_set_atomics_mode(rocblas_handle       hand
 ROCBLAS_EXPORT rocblas_status rocblas_get_atomics_mode(rocblas_handle        handle,
                                                        rocblas_atomics_mode* atomics_mode);
 
-/*! \brief Query the preferable supported int8 input layout for gemm
-     \details
-    Indicates the supported int8 input layout for gemm according to the device.
-    If the device supports packed-int8x4 (1) only, output flag is rocblas_gemm_flags_pack_int8x4
-    and users must bitwise-or your flag with rocblas_gemm_flags_pack_int8x4.
-    If output flag is rocblas_gemm_flags_none (0), then unpacked int8 is preferable and suggested.
-    @param[in]
-    handle      [rocblas_handle]
-                the handle of device
-    @param[out]
-    flag        pointer to rocblas_gemm_flags
-     ********************************************************************/
-ROCBLAS_EXPORT rocblas_status rocblas_query_int8_layout_flag(rocblas_handle      handle,
-                                                             rocblas_gemm_flags* flag);
+/*! \brief Set rocblas_math_mode
+ */
+ROCBLAS_EXPORT rocblas_status rocblas_set_math_mode(rocblas_handle    handle,
+                                                    rocblas_math_mode math_mode);
+
+/*! \brief Get rocblas_math_mode
+ */
+ROCBLAS_EXPORT rocblas_status rocblas_get_math_mode(rocblas_handle     handle,
+                                                    rocblas_math_mode* math_mode);
 
 /*! \brief  Indicates whether the pointer is on the host or device.
  */

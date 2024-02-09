@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -39,7 +39,7 @@
 template <typename T>
 void testing_sbmv_bad_arg(const Arguments& arg)
 {
-    auto rocblas_sbmv_fn = arg.fortran ? rocblas_sbmv<T, true> : rocblas_sbmv<T, false>;
+    auto rocblas_sbmv_fn = arg.api == FORTRAN ? rocblas_sbmv<T, true> : rocblas_sbmv<T, false>;
 
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
@@ -140,7 +140,7 @@ void testing_sbmv_bad_arg(const Arguments& arg)
 template <typename T>
 void testing_sbmv(const Arguments& arg)
 {
-    auto rocblas_sbmv_fn = arg.fortran ? rocblas_sbmv<T, true> : rocblas_sbmv<T, false>;
+    auto rocblas_sbmv_fn = arg.api == FORTRAN ? rocblas_sbmv<T, true> : rocblas_sbmv<T, false>;
 
     rocblas_int N                 = arg.N;
     rocblas_int lda               = arg.lda;
@@ -155,8 +155,6 @@ void testing_sbmv(const Arguments& arg)
     beta[0]  = arg.get_beta<T>();
 
     rocblas_fill uplo = char2rocblas_fill(arg.uplo);
-
-    size_t abs_incy = incy >= 0 ? incy : -incy;
 
     rocblas_local_handle handle{arg};
 
@@ -174,8 +172,7 @@ void testing_sbmv(const Arguments& arg)
     // Allocate host memory
     host_matrix<T> hAb(banded_matrix_row, N, lda);
     host_vector<T> hx(N, incx);
-    host_vector<T> hy_1(N, incy);
-    host_vector<T> hy_2(N, incy);
+    host_vector<T> hy(N, incy);
     host_vector<T> hy_gold(N, incy); // gold standard
 
     // Allocate device memory
@@ -195,63 +192,80 @@ void testing_sbmv(const Arguments& arg)
     // Initialize data on host memory
     rocblas_init_matrix(
         hAb, arg, rocblas_client_alpha_sets_nan, rocblas_client_general_matrix, true);
-    rocblas_init_vector(hx, arg, rocblas_client_alpha_sets_nan, false, false);
-    rocblas_init_vector(hy_1, arg, rocblas_client_beta_sets_nan);
+    rocblas_init_vector(hx, arg, rocblas_client_alpha_sets_nan, false, true);
+    rocblas_init_vector(hy, arg, rocblas_client_beta_sets_nan);
 
     // make copy in hy_gold which will later be used with CPU BLAS
-    hy_gold = hy_1;
-    hy_2    = hy_1; // device memory re-test
+    hy_gold = hy;
 
     // copy data from CPU to device
     dx.transfer_from(hx);
-    dy.transfer_from(hy_1);
+    dy.transfer_from(hy);
     dAb.transfer_from(hAb);
 
     double gpu_time_used, cpu_time_used;
-    double h_error, d_error;
+    double h_error = 0.0, d_error = 0.0;
 
     if(arg.unit_check || arg.norm_check)
     {
-        // rocblas_pointer_mode_host test
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(
-            rocblas_sbmv_fn(handle, uplo, N, K, alpha, dAb, lda, dx, incx, beta, dy, incy));
-        handle.post_test(arg);
+        if(arg.pointer_mode_host)
+        {
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+            handle.pre_test(arg);
+            CHECK_ROCBLAS_ERROR(
+                rocblas_sbmv_fn(handle, uplo, N, K, alpha, dAb, lda, dx, incx, beta, dy, incy));
+            handle.post_test(arg);
 
-        // copy output from device to CPU
-        CHECK_HIP_ERROR(hy_1.transfer_from(dy));
+            // copy output from device to CPU
+            CHECK_HIP_ERROR(hy.transfer_from(dy));
+        }
 
-        // rocblas_pointer_mode_device test
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_HIP_ERROR(d_alpha.transfer_from(alpha));
-        CHECK_HIP_ERROR(d_beta.transfer_from(beta));
+        if(arg.pointer_mode_device)
+        {
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+            CHECK_HIP_ERROR(d_alpha.transfer_from(alpha));
+            CHECK_HIP_ERROR(d_beta.transfer_from(beta));
 
-        dy.transfer_from(hy_2);
+            dy.transfer_from(hy_gold);
 
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(
-            rocblas_sbmv_fn(handle, uplo, N, K, d_alpha, dAb, lda, dx, incx, d_beta, dy, incy));
-        handle.post_test(arg);
-
-        // copy output from device to CPU
-        CHECK_HIP_ERROR(hy_2.transfer_from(dy));
+            handle.pre_test(arg);
+            CHECK_ROCBLAS_ERROR(
+                rocblas_sbmv_fn(handle, uplo, N, K, d_alpha, dAb, lda, dx, incx, d_beta, dy, incy));
+            handle.post_test(arg);
+        }
 
         // cpu ref
         cpu_time_used = get_time_us_no_sync();
-        cblas_sbmv<T>(uplo, N, K, alpha[0], hAb, lda, hx, incx, beta[0], hy_gold, incy);
+        ref_sbmv<T>(uplo, N, K, alpha[0], hAb, lda, hx, incx, beta[0], hy_gold, incy);
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
-        if(arg.unit_check)
+        if(arg.pointer_mode_host)
         {
-            unit_check_general<T>(1, N, abs_incy, hy_gold, hy_1);
-            unit_check_general<T>(1, N, abs_incy, hy_gold, hy_2);
+            if(arg.unit_check)
+            {
+                unit_check_general<T>(1, N, incy, hy_gold, hy);
+            }
+
+            if(arg.norm_check)
+            {
+                h_error = norm_check_general<T>('F', 1, N, incy, hy_gold, hy);
+            }
         }
 
-        if(arg.norm_check)
+        if(arg.pointer_mode_device)
         {
-            h_error = norm_check_general<T>('F', 1, N, abs_incy, hy_gold, hy_1);
-            d_error = norm_check_general<T>('F', 1, N, abs_incy, hy_gold, hy_2);
+            // copy output from device to CPU
+            CHECK_HIP_ERROR(hy.transfer_from(dy));
+
+            if(arg.unit_check)
+            {
+                unit_check_general<T>(1, N, incy, hy_gold, hy);
+            }
+
+            if(arg.norm_check)
+            {
+                d_error = norm_check_general<T>('F', 1, N, incy, hy_gold, hy);
+            }
         }
     }
 

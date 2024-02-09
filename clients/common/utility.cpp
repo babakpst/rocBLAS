@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -64,7 +64,7 @@ std::string rocblas_exepath()
     // std::vector<wchar_t> result(MAX_PATH + 1);
 
     std::vector<TCHAR> result(MAX_PATH + 1);
-    // Ensure result is large enough to accomodate the path
+    // Ensure result is large enough to accommodate the path
     DWORD length = 0;
     for(;;)
     {
@@ -229,7 +229,8 @@ rocblas_int query_device_property()
                 buf,
                 sizeof(buf),
                 "Device ID %d : %s %s\n"
-                "with %3.1f GB memory, max. SCLK %d MHz, max. MCLK %d MHz, compute capability "
+                "with %3.1f GB memory, max. SCLK %d MHz, max. MCLK %d MHz, memoryBusWidth %d "
+                "Bytes, compute capability "
                 "%d.%d\n"
                 "maxGridDimX %d, sharedMemPerBlock %3.1f KB, maxThreadsPerBlock %d, warpSize %d\n",
                 i,
@@ -238,6 +239,7 @@ rocblas_int query_device_property()
                 props.totalGlobalMem / 1e9,
                 (int)(props.clockRate / 1000),
                 (int)(props.memoryClockRate / 1000),
+                (int)(props.memoryBusWidth / 8),
                 props.major,
                 props.minor,
                 props.maxGridSize[0],
@@ -287,6 +289,11 @@ rocblas_local_handle::rocblas_local_handle(const Arguments& arg)
     // Set the atomics mode
     auto status = rocblas_set_atomics_mode(m_handle, arg.atomics_mode);
 
+    // The check_numerics mode is set to "rocblas_check_numerics_mode_no_check" when the arg.initalization == rocblas_initialization::denorm.
+    //This explicit setting, is only applicable when testing the gemm_ex and gemm_strided_batched_ex functions with denorm initialization.
+    if(arg.initialization == rocblas_initialization::denorm)
+        m_handle->check_numerics = rocblas_check_numerics_mode_no_check;
+
     if(status == rocblas_status_success)
     {
         // If the test specifies user allocated workspace, allocate and use it
@@ -303,6 +310,10 @@ rocblas_local_handle::rocblas_local_handle(const Arguments& arg)
 
     if(status != rocblas_status_success)
         throw std::runtime_error(rocblas_status_to_string(status));
+
+    status = rocblas_set_math_mode(m_handle, rocblas_math_mode(arg.math_mode));
+    if(status != rocblas_status_success)
+        throw std::runtime_error(rocblas_status_to_string(status));
 }
 
 rocblas_local_handle::~rocblas_local_handle()
@@ -314,12 +325,7 @@ rocblas_local_handle::~rocblas_local_handle()
 
 void rocblas_local_handle::rocblas_stream_begin_capture()
 {
-    int setenv_status;
-    setenv_status = setenv("ROCBLAS_STREAM_ORDER_ALLOC", "1", true);
-#ifdef GOOGLE_TEST
-    ASSERT_EQ(setenv_status, 0);
-#endif
-
+    m_handle->set_stream_order_memory_allocation(true);
     CHECK_HIP_ERROR(hipStreamCreate(&this->graph_stream));
     CHECK_ROCBLAS_ERROR(rocblas_get_stream(*this, &this->old_stream));
     CHECK_ROCBLAS_ERROR(rocblas_set_stream(*this, this->graph_stream));
@@ -346,38 +352,56 @@ void rocblas_local_handle::rocblas_stream_end_capture()
     CHECK_HIP_ERROR(hipStreamDestroy(this->graph_stream));
     this->graph_stream = nullptr;
 
-    int setenv_status = unsetenv("ROCBLAS_STREAM_ORDER_ALLOC");
-#ifdef GOOGLE_TEST
-    ASSERT_EQ(setenv_status, 0);
-#endif
+    m_handle->set_stream_order_memory_allocation(false);
+}
+
+void rocblas_parallel_initialize_thread(int id, size_t& memory_used)
+{
+    size_t before_init, after_init, total_memory;
+    CHECK_HIP_ERROR(hipSetDevice(id));
+    CHECK_HIP_ERROR(hipMemGetInfo(&before_init, &total_memory));
+    rocblas_initialize();
+    CHECK_HIP_ERROR(hipMemGetInfo(&after_init, &total_memory));
+    memory_used = before_init - after_init;
 }
 
 /*!
- * Initialize rocBLAS for the current HIP device and report
- * the time taken to complete the initialization. This is to
- * avoid costly startup time at the first call on that device.
- * Internal use for benchmark & testing.
+ * Initialize rocBLAS for the requested number of  HIP devices
+ * and report the time taken to complete the initialization.
+ * This is to avoid costly startup time at the first call on
+ * that device. Internal use for benchmark & testing.
+ * Initializes devices indexed from 0 to parallel_devices-1.
+ * If parallel_devices is 1, hipSetDevice should be called
+ * before calling this function.
  */
-void rocblas_client_initialize()
+void rocblas_parallel_initialize(int parallel_devices)
 {
-    // when executed on a CPU under normal load( Disk I/O, memory etc.),
-    // this routine completes execution under max limit of 12 seconds.
-    // The minimum time it takes to complete varies based on
-    // the architecture & build options used while building the library.
-    // Setting a max duration of 5 seconds for rocblas library initialization to complete.
-    constexpr static int max_duration = 5;
+    auto                thread = std::make_unique<std::thread[]>(parallel_devices);
+    std::vector<size_t> init_memory(parallel_devices);
 
     // Store the start timepoint of rocblas initialize
     auto start_time = std::chrono::steady_clock::now();
 
-    rocblas_initialize();
+    if(parallel_devices == 1)
+    {
+        size_t before_init, after_init, total_memory;
+        CHECK_HIP_ERROR(hipMemGetInfo(&before_init, &total_memory));
+        rocblas_initialize();
+        CHECK_HIP_ERROR(hipMemGetInfo(&after_init, &total_memory));
+        init_memory[0] = before_init - after_init;
+    }
+    else
+    {
+
+        for(int id = 0; id < parallel_devices; ++id)
+            thread[id]
+                = std::thread(rocblas_parallel_initialize_thread, id, std::ref(init_memory[id]));
+        for(int id = 0; id < parallel_devices; ++id)
+            thread[id].join();
+    }
 
     // Store the end timepoint of rocblas initialize
     auto end_time = std::chrono::steady_clock::now();
-
-    // Compute the time taken to load the Tensile kernels (in seconds).
-    auto total_library_initialize_time
-        = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
 
     // Compute the time taken to load the Tensile kernels (in milliseconds).
     auto init_time_in_ms
@@ -386,8 +410,63 @@ void rocblas_client_initialize()
     rocblas_cout << "\nrocBLAS info: Time taken to complete rocBLAS library initialization is "
                  << init_time_in_ms << " milliseconds." << std::endl;
 
-    // If initialization time exceeds the max duration, display the following info message.
-    if(total_library_initialize_time > max_duration)
-        rocblas_cerr << "\nrocBLAS info: rocBLAS initialization exceeded the max duration of "
-                     << max_duration << " seconds. Check CPU's load metrics." << std::endl;
+    // Calculate average initialization time per GPU
+    auto avg_init_time_in_ms = init_time_in_ms / parallel_devices;
+    if(parallel_devices > 1)
+    {
+        rocblas_cout
+            << "\nrocBLAS info: Average time taken to complete rocBLAS library initialization "
+               "per device is "
+            << avg_init_time_in_ms << " milliseconds." << std::endl;
+    }
+
+    // If average initialization time exceeds the max duration, display the following info message.
+    constexpr static int max_duration = 5000;
+    if(avg_init_time_in_ms > max_duration)
+        rocblas_cerr << "\nrocBLAS info: average time to initialize each device exceeded the max "
+                        "duration of "
+                     << max_duration << " milliseconds. Check CPU's load metrics." << std::endl;
+
+    constexpr static float max_memory = 1.0;
+    auto                   max_library_size
+        = *std::max_element(std::begin(init_memory), std::end(init_memory)) * 1.0e-9;
+
+    rocblas_cout << "\nrocBLAS info: maximum library size per device is " << max_library_size
+                 << " GB." << std::endl;
+    if(max_library_size > max_memory)
+        rocblas_cerr << "\nrocBLAS info: max kernel library size " << max_library_size
+                     << " GB exceeds the max recommended memory " << max_memory
+                     << " GB. Check library logic file sizes." << std::endl;
+}
+
+size_t calculate_flush_batch_count(size_t arg_flush_batch_count,
+                                   size_t arg_flush_memory_size,
+                                   size_t cached_size)
+{
+    size_t default_arg_flush_batch_count = 1;
+    size_t default_arg_flush_memory_size = 0;
+    size_t flush_batch_count             = default_arg_flush_batch_count;
+
+    if(arg_flush_batch_count != default_arg_flush_batch_count
+       && arg_flush_memory_size != default_arg_flush_memory_size)
+    {
+        rocblas_cout << "rocBLAS WARNING: cannot set both flush_batch_count and flush_memory_size"
+                     << std::endl;
+        rocblas_cout << "rocBLAS WARNING: using flush_batch_count = " << arg_flush_batch_count
+                     << std::endl;
+        flush_batch_count = arg_flush_batch_count;
+    }
+    else if(arg_flush_batch_count != default_arg_flush_batch_count)
+    {
+        flush_batch_count = arg_flush_batch_count;
+        rocblas_cout << "flush_memory_size = ";
+        print_memory_size(flush_batch_count * cached_size);
+        rocblas_cout << std::endl;
+    }
+    else if(arg_flush_memory_size != default_arg_flush_memory_size)
+    {
+        flush_batch_count = 1 + (arg_flush_memory_size - 1) / cached_size;
+        rocblas_cout << "flush_batch_count = " << flush_batch_count << std::endl;
+    }
+    return flush_batch_count;
 }

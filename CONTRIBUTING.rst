@@ -266,9 +266,9 @@ Coding Guidelines
     .. code:: cpp
 
         if(handle->pointer_mode == rocblas_pointer_mode_device)
-            hipLaunchKernelGGL(axpy_kernel, blocks, threads, 0, handle->get_stream(), n, alpha, x, incx, y, incy);
+            ROCBLAS_LAUNCH_KERNEL(axpy_kernel, blocks, threads, 0, handle->get_stream(), n, alpha, x, incx, y, incy);
         else if(*alpha) // alpha is on host
-            hipLaunchKernelGGL(axpy_kernel, blocks, threads, 0, handle->get_stream(), n, *alpha, x, incx, y, incy);
+            ROCBLAS_LAUNCH_KERNEL(axpy_kernel, blocks, threads, 0, handle->get_stream(), n, *alpha, x, incx, y, incy);
 
     When the pointer mode indicates ``alpha`` is on the host, the
     ``alpha`` pointer is dereferenced on the host and the numeric value
@@ -600,23 +600,22 @@ Coding Guidelines
 
 20. ``<type_traits>`` classes which return Boolean values can be
     converted to ``bool`` in Boolean contexts. Hence many traits can be
-    tested by simply creating an instance of them with ``{}``
-    initialization syntax and using it in a Boolean context:
+    tested by simply creating an instance of them with ``{}``. However,
+    for type_traits accessors such as ::value or ::type, these can be replaced by suffixes
+    added in C++17 such as is_same_v and enable_if_t:
 
     .. code:: cpp
 
-        template<typename T, typename = typename std::enable_if<std::is_same<T, float>{} ||
-                                                                std::is_same<T, double>{}>::type>
+        template<typename T, typename = typename std::enable_if_t<std::is_same_v<T, float> ||
+                                                                  std::is_same_v<T, double>>>
         void function(T x)
         {
         }
 
-    Here, instances of the ``std::is_same<...>`` traits class are
-    created with the ``{}`` syntax. The resulting temporary objects can
+    For other traits created with the ``{}`` syntax the resulting temporary objects can
     be explicitly converted to ``bool``, which is what occurs when an
     object appears in a conditional expression (``if``, ``while``,
-    ``for``, ``&&``, ``||``, ``!``, ``? :``, etc.). This is a shorter
-    syntax than using ``std::is_same<...>::value``.
+    ``for``, ``&&``, ``||``, ``!``, ``? :``, etc.).
 
 21. ``rocblas_cout`` and ``rocblas_cerr`` should be used instead of ``std::cout``, ``std::cerr``, ``stdout`` or ``stderr``, and ``rocblas_internal_ostream`` should be used instead of ``std::ostream``, ``std::ofstream`` or ``std::ostringstream``.
 
@@ -706,7 +705,7 @@ Coding Guidelines
                 if(error__ != hipSuccess)                        \
                 {                                                \
                     if(error__ == hipErrorOutOfMemory)           \
-                        SUCCEED() << LIMITED_MEMORY_STRING;      \
+                        GTEST_SKIP() << LIMITED_VRAM_STRING;     \
                     else                                         \
                         FAIL() << hipGetErrorString(error__);    \
                     return;                                      \

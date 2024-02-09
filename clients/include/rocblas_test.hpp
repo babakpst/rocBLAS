@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -53,6 +53,9 @@ typedef long long ssize_t; /* x64 only supported */
 
 #ifdef GOOGLE_TEST
 
+// improve mismatched status reporting
+testing::AssertionResult status_match(rocblas_status expected, rocblas_status status);
+
 // Extra macro so that macro arguments get expanded before calling Google Test
 #define CHECK_HIP_ERROR2(ERROR) ASSERT_EQ(ERROR, hipSuccess)
 #define CHECK_HIP_ERROR(ERROR) CHECK_HIP_ERROR2(ERROR)
@@ -65,7 +68,7 @@ typedef long long ssize_t; /* x64 only supported */
         if(error__ != hipSuccess)                        \
         {                                                \
             if(error__ == hipErrorOutOfMemory)           \
-                GTEST_SKIP() << LIMITED_MEMORY_STRING;   \
+                GTEST_SKIP() << LIMITED_VRAM_STRING;     \
             else                                         \
                 FAIL() << hipGetErrorString(error__);    \
             return;                                      \
@@ -75,22 +78,22 @@ typedef long long ssize_t; /* x64 only supported */
 // This wraps the rocBLAS call with catch_signals_and_exceptions_as_failures().
 // By placing it at the rocBLAS call site, memory resources are less likely to
 // be leaked in the event of a caught signal.
-#define EXPECT_ROCBLAS_STATUS(STATUS, EXPECT)                 \
-    do                                                        \
-    {                                                         \
-        volatile bool signal_or_exception = true;             \
-        /* Use status__ in case STATUS contains "status" */   \
-        rocblas_status status__;                              \
-        catch_signals_and_exceptions_as_failures([&] {        \
-            status__            = (STATUS);                   \
-            signal_or_exception = false;                      \
-        });                                                   \
-        if(signal_or_exception)                               \
-            return;                                           \
-        { /* localize status for ASSERT_EQ message */         \
-            rocblas_status status_ = status__;                \
-            ASSERT_EQ(status_, EXPECT); /* prints "status" */ \
-        }                                                     \
+#define EXPECT_ROCBLAS_STATUS(STATUS, EXPECT)               \
+    do                                                      \
+    {                                                       \
+        volatile bool signal_or_exception = true;           \
+        /* Use status__ in case STATUS contains "status" */ \
+        rocblas_status status__;                            \
+        catch_signals_and_exceptions_as_failures([&] {      \
+            status__            = (STATUS);                 \
+            signal_or_exception = false;                    \
+        });                                                 \
+        if(signal_or_exception)                             \
+            return;                                         \
+        { /* localize status for ASSERT_EQ message */       \
+            rocblas_status status_ = status__;              \
+            ASSERT_TRUE(status_match(EXPECT, status_));     \
+        }                                                   \
     } while(0)
 
 #define CHECK_ALLOC_QUERY(STATUS)                                  \
@@ -182,7 +185,7 @@ bool match_test_category(const Arguments& arg, const char* category);
     ROCBLAS_ALLOW_UNINSTANTIATED_GTEST(testclass) \
     INSTANTIATE_TEST_CATEGORY(testclass, _)
 
-// Category based intantiation requires pass of large yaml data for each category
+// Category based instantiation requires pass of large yaml data for each category
 // Using single '_' named category and category name is moved to test name prefix
 // gtest_filter should be able to select same test subsets
 // INSTANTIATE_TEST_CATEGORY(testclass, quick)       \
@@ -226,10 +229,10 @@ void launch_test_on_streams(std::function<void()> test, size_t numStreams, size_
         size_t      devices      = arg.devices;                                              \
         int         availDevices = 0;                                                        \
         bool        HMM          = arg.HMM;                                                  \
-        hipGetDeviceCount(&availDevices);                                                    \
+        CHECK_HIP_ERROR(hipGetDeviceCount(&availDevices));                                   \
         if(devices > availDevices)                                                           \
         {                                                                                    \
-            GTEST_SKIP() << TOO_MANY_DEVICES_STRING;                                         \
+            GTEST_SKIP() << TOO_FEW_DEVICES_PRESENT_STRING;                                  \
             return;                                                                          \
         }                                                                                    \
         else if(HMM)                                                                         \
@@ -241,7 +244,7 @@ void launch_test_on_streams(std::function<void()> test, size_t numStreams, size_
                     &flag, hipDeviceAttribute_t(hipDeviceAttributeManagedMemory), devices)); \
                 if(!flag)                                                                    \
                 {                                                                            \
-                    GTEST_SKIP() << HMM_NOT_SUPPORTED;                                       \
+                    GTEST_SKIP() << HMM_NOT_SUPPORTED_STRING;                                \
                     return;                                                                  \
                 }                                                                            \
             }                                                                                \
@@ -314,7 +317,7 @@ public:
     // The name should only be generated once before the stream is destroyed
     operator std::string() &&
     {
-        // This table is private to each instantation of RocBLAS_TestName
+        // This table is private to each instantiation of RocBLAS_TestName
         // Placed inside function to avoid dependency on initialization order
         static std::unordered_map<std::string, size_t>* table = test_cleanup::allocate(&table);
         std::string RocBLAS_TestName_to_string(std::unordered_map<std::string, size_t>&,
@@ -342,6 +345,8 @@ public:
     RocBLAS_TestName& operator=(const RocBLAS_TestName&) = delete;
 };
 
+bool rocblas_client_global_filters(const Arguments& args);
+
 // ----------------------------------------------------------------------------
 // RocBLAS_Test base class. All non-legacy rocBLAS Google tests derive from it.
 // It defines a type_filter_functor() and a PrintToStringParamName class
@@ -356,8 +361,13 @@ protected:
     template <typename... T>
     struct type_filter_functor
     {
-        bool operator()(const Arguments&)
+        bool operator()(const Arguments& args)
         {
+            // additional global filters applied first
+            if(!rocblas_client_global_filters(args))
+                return false;
+
+            // type filters
             return static_cast<bool>(FILTER<T...>{});
         }
     };

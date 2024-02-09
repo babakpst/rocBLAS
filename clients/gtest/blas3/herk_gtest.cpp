@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2020-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -110,7 +110,7 @@ namespace
                     name << '_' << arg.batch_count;
             }
 
-            if(arg.fortran)
+            if(arg.api == FORTRAN)
             {
                 name << "_F";
             }
@@ -129,9 +129,10 @@ namespace
     // When the condition in the second argument is satisfied, the type combination
     // is valid. When the condition is false, this specialization does not apply.
     template <typename T>
-    struct herk_testing<T,
-                        std::enable_if_t<std::is_same<T, rocblas_float_complex>{}
-                                         || std::is_same<T, rocblas_double_complex>{}>>
+    struct herk_testing<
+        T,
+        std::enable_if_t<
+            std::is_same_v<T, rocblas_float_complex> || std::is_same_v<T, rocblas_double_complex>>>
         : rocblas_test_valid
     {
         void operator()(const Arguments& arg)

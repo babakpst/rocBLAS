@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -89,11 +89,15 @@ namespace
                 if(HPR2_TYPE == HPR2_STRIDED_BATCHED)
                     name << '_' << arg.stride_x << '_' << arg.stride_y << '_' << arg.stride_a;
 
-                if(HPR2_TYPE == HPR2_STRIDED_BATCHED || HPR2_TYPE == HPR2_BATCHED)
+                if(HPR2_TYPE != HPR2)
                     name << '_' << arg.batch_count;
             }
 
-            if(arg.fortran)
+            if(arg.api & c_API_64)
+            {
+                name << "_I64";
+            }
+            if(arg.api & c_API_FORTRAN)
             {
                 name << "_F";
             }
@@ -112,9 +116,10 @@ namespace
     // When the condition in the second argument is satisfied, the type combination
     // is valid. When the condition is false, this specialization does not apply.
     template <typename T>
-    struct hpr2_testing<T,
-                        std::enable_if_t<std::is_same<T, rocblas_float_complex>{}
-                                         || std::is_same<T, rocblas_double_complex>{}>>
+    struct hpr2_testing<
+        T,
+        std::enable_if_t<
+            std::is_same_v<T, rocblas_float_complex> || std::is_same_v<T, rocblas_double_complex>>>
         : rocblas_test_valid
     {
         void operator()(const Arguments& arg)

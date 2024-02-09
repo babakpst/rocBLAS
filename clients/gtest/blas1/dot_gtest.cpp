@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -54,16 +54,17 @@ namespace
             }
             else
             {
-                bool is_dot
+                constexpr bool is_dot
                     = (BLAS1 == blas1::dot || BLAS1 == blas1::dot_batched
                        || BLAS1 == blas1::dot_strided_batched || BLAS1 == blas1::dotc
                        || BLAS1 == blas1::dotc_batched || BLAS1 == blas1::dotc_strided_batched);
 
-                bool is_batched = (BLAS1 == blas1::dot_batched || BLAS1 == blas1::dotc_batched);
-                bool is_strided
+                constexpr bool is_batched
+                    = (BLAS1 == blas1::dot_batched || BLAS1 == blas1::dotc_batched);
+                constexpr bool is_strided
                     = (BLAS1 == blas1::dot_strided_batched || BLAS1 == blas1::dotc_strided_batched);
 
-                name << '_' << arg.incx;
+                name << '_' << arg.N << '_' << arg.incx;
 
                 if(is_strided)
                 {
@@ -91,7 +92,11 @@ namespace
                 }
             }
 
-            if(arg.fortran)
+            if(arg.api & c_API_64)
+            {
+                name << "_I64";
+            }
+            if(arg.api & c_API_FORTRAN)
             {
                 name << "_F";
             }
@@ -105,18 +110,18 @@ namespace
     using dot_enabled = std::integral_constant<
         bool,
         ((BLAS1 == blas1::dot || BLAS1 == blas1::dot_batched || BLAS1 == blas1::dot_strided_batched)
-             && (std::is_same<Ti, To>{} && std::is_same<To, Tc>{}
-                 && (std::is_same<Ti, rocblas_half>{} || std::is_same<Ti, rocblas_float_complex>{}
-                     || std::is_same<Ti, rocblas_double_complex>{} || std::is_same<Ti, float>{}
-                     || std::is_same<Ti, double>{}))
-         || (std::is_same<Ti, To>{} && std::is_same<Ti, rocblas_bfloat16>{}
-             && std::is_same<Tc, float>{}))
+             && (std::is_same_v<
+                     Ti,
+                     To> && std::is_same_v<To, Tc> && (std::is_same_v<Ti, rocblas_half> || std::is_same_v<Ti, rocblas_float_complex> || std::is_same_v<Ti, rocblas_double_complex> || std::is_same_v<Ti, float> || std::is_same_v<Ti, double>))
+         || (std::is_same_v<
+                 Ti,
+                 To> && std::is_same_v<Ti, rocblas_bfloat16> && std::is_same_v<Tc, float>))
 
             || ((BLAS1 == blas1::dotc || BLAS1 == blas1::dotc_batched
                  || BLAS1 == blas1::dotc_strided_batched)
-                && std::is_same<To, Ti>{} && std::is_same<To, Tc>{}
-                && (std::is_same<Ti, rocblas_float_complex>{}
-                    || std::is_same<Ti, rocblas_double_complex>{}))>;
+                && std::is_same_v<
+                    To,
+                    Ti> && std::is_same_v<To, Tc> && (std::is_same_v<Ti, rocblas_float_complex> || std::is_same_v<Ti, rocblas_double_complex>))>;
 
 // Creates tests for one of the BLAS 1 functions
 // ARG passes 1-3 template arguments to the testing_* function

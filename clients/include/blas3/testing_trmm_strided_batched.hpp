@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -40,8 +40,12 @@
 template <typename T>
 void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
 {
-    auto rocblas_trmm_strided_batched_fn = arg.fortran ? rocblas_trmm_strided_batched<T, true>
-                                                       : rocblas_trmm_strided_batched<T, false>;
+    auto rocblas_trmm_strided_batched_fn = arg.api == FORTRAN
+                                               ? rocblas_trmm_strided_batched<T, true>
+                                               : rocblas_trmm_strided_batched<T, false>;
+    // trmm has both inplace and outofplace versions.
+    // inplace == true for inplace, inplace == false for outofplace
+    bool inplace = !arg.outofplace;
 
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
@@ -49,9 +53,11 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, pointer_mode));
 
         const rocblas_int M           = 100;
-        const rocblas_int N           = 100;
-        const rocblas_int lda         = 100;
-        const rocblas_int ldb         = 100;
+        const rocblas_int N           = 101;
+        const rocblas_int lda         = 101;
+        const rocblas_int ldb         = 101;
+        const rocblas_int ldc         = 101;
+        const rocblas_int ldOut       = inplace ? ldb : ldc;
         const rocblas_int batch_count = 2;
 
         device_vector<T> alpha_d(1), zero_d(1);
@@ -74,18 +80,27 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
         const rocblas_operation transA = rocblas_operation_none;
         const rocblas_diagonal  diag   = rocblas_diagonal_non_unit;
 
-        rocblas_int K = side == rocblas_side_left ? M : N;
-
+        rocblas_int          K        = side == rocblas_side_left ? M : N;
         const rocblas_stride stride_a = lda * K;
         const rocblas_stride stride_b = ldb * N;
+        const rocblas_stride stride_c = ldc * N;
 
         // Allocate device memory
         device_strided_batch_matrix<T> dA(K, K, lda, stride_a, batch_count);
         device_strided_batch_matrix<T> dB(M, N, ldb, stride_b, batch_count);
 
+        rocblas_int dC_M   = inplace ? 1 : M;
+        rocblas_int dC_N   = inplace ? 1 : N;
+        rocblas_int dC_ldc = inplace ? 1 : ldc;
+
+        device_strided_batch_matrix<T> dC(dC_M, dC_N, dC_ldc, stride_c, batch_count);
+
+        device_strided_batch_matrix<T>* dOut = inplace ? &dB : &dC;
+
         // Check device memory allocation
         CHECK_DEVICE_ALLOCATION(dA.memcheck());
         CHECK_DEVICE_ALLOCATION(dB.memcheck());
+        CHECK_DEVICE_ALLOCATION(dC.memcheck());
 
         // check for invalid enum
         EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
@@ -102,6 +117,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_value);
 
@@ -119,6 +137,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_value);
 
@@ -136,6 +157,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_value);
 
@@ -153,6 +177,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_value);
 
@@ -171,6 +198,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_size);
 
@@ -188,6 +218,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_size);
 
@@ -206,6 +239,29 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               M - 1,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
+                                                              batch_count),
+                              rocblas_status_invalid_size);
+
+        EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
+                                                              side,
+                                                              uplo,
+                                                              transA,
+                                                              diag,
+                                                              M,
+                                                              N,
+                                                              alpha,
+                                                              dA,
+                                                              lda,
+                                                              stride_a,
+                                                              dB,
+                                                              ldb,
+                                                              stride_b,
+                                                              *dOut,
+                                                              M - 1,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_size);
 
@@ -223,6 +279,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_size);
 
@@ -240,6 +299,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_size);
 
@@ -258,6 +320,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_handle);
 
@@ -275,6 +340,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_pointer);
 
@@ -292,6 +360,9 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               dB,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_pointer);
 
@@ -309,10 +380,33 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               nullptr,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_invalid_pointer);
 
-        // If alpha==0, A may be nullptr without error
+        EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
+                                                              side,
+                                                              uplo,
+                                                              transA,
+                                                              diag,
+                                                              M,
+                                                              N,
+                                                              alpha,
+                                                              dA,
+                                                              lda,
+                                                              stride_a,
+                                                              dB,
+                                                              ldb,
+                                                              stride_b,
+                                                              nullptr,
+                                                              ldOut,
+                                                              stride_c,
+                                                              batch_count),
+                              rocblas_status_invalid_pointer);
+
+        // quick return: If alpha==0, then A and B can be nullptr without error
         EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
                                                               side,
                                                               uplo,
@@ -324,13 +418,16 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               nullptr,
                                                               lda,
                                                               stride_a,
-                                                              dB,
+                                                              nullptr,
                                                               ldb,
                                                               stride_b,
+                                                              *dOut,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_success);
 
-        // quick return: If M==0, all pointers may be nullptr without error
+        // quick return: If M==0, then all pointers can be nullptr without error
         EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
                                                               side,
                                                               uplo,
@@ -338,17 +435,20 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               diag,
                                                               0,
                                                               N,
-                                                              alpha,
+                                                              nullptr,
                                                               nullptr,
                                                               lda,
                                                               stride_a,
                                                               nullptr,
                                                               ldb,
                                                               stride_b,
+                                                              nullptr,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_success);
 
-        // quick return: If N==0, all pointers may be nullptr without error
+        // quick return: If N==0, then all pointers can be nullptr without error
         EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
                                                               side,
                                                               uplo,
@@ -363,10 +463,13 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               nullptr,
                                                               ldb,
                                                               stride_b,
+                                                              nullptr,
+                                                              ldOut,
+                                                              stride_c,
                                                               batch_count),
                               rocblas_status_success);
 
-        // quick return: If batch_count==0, all pointers may be nullptr without error
+        // quick return: If batch_count==0, then all pointers can be nullptr without error
         EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
                                                               side,
                                                               uplo,
@@ -381,24 +484,59 @@ void testing_trmm_strided_batched_bad_arg(const Arguments& arg)
                                                               nullptr,
                                                               ldb,
                                                               stride_b,
+                                                              nullptr,
+                                                              ldOut,
+                                                              stride_c,
                                                               0),
                               rocblas_status_success);
+
+        // in-place only checks
+        if(inplace)
+        {
+            // if inplace, must have ldb == ldc
+            EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
+                                                                  side,
+                                                                  uplo,
+                                                                  transA,
+                                                                  diag,
+                                                                  M,
+                                                                  N,
+                                                                  alpha,
+                                                                  dA,
+                                                                  lda,
+                                                                  stride_a,
+                                                                  dB,
+                                                                  ldb,
+                                                                  stride_b,
+                                                                  dB,
+                                                                  ldb + 1,
+                                                                  stride_b,
+                                                                  batch_count),
+                                  rocblas_status_invalid_value);
+        }
     }
 }
 
 template <typename T>
 void testing_trmm_strided_batched(const Arguments& arg)
 {
-    auto rocblas_trmm_strided_batched_fn = arg.fortran ? rocblas_trmm_strided_batched<T, true>
-                                                       : rocblas_trmm_strided_batched<T, false>;
+    auto rocblas_trmm_strided_batched_fn = arg.api == FORTRAN
+                                               ? rocblas_trmm_strided_batched<T, true>
+                                               : rocblas_trmm_strided_batched<T, false>;
+    // trmm has both inplace and outofplace versions.
+    // inplace == true for inplace, inplace == false for outofplace
+    bool inplace = !arg.outofplace;
 
-    rocblas_int M           = arg.M;
-    rocblas_int N           = arg.N;
-    rocblas_int lda         = arg.lda;
-    rocblas_int ldb         = arg.ldb;
-    rocblas_int stride_a    = arg.stride_a;
-    rocblas_int stride_b    = arg.stride_b;
-    rocblas_int batch_count = arg.batch_count;
+    rocblas_int    M           = arg.M;
+    rocblas_int    N           = arg.N;
+    int64_t        lda         = arg.lda;
+    int64_t        ldb         = arg.ldb;
+    int64_t        ldc         = arg.ldc;
+    int64_t        ldOut       = inplace ? ldb : ldc;
+    rocblas_stride stride_a    = arg.stride_a;
+    rocblas_stride stride_b    = arg.stride_b;
+    rocblas_stride stride_c    = arg.stride_c;
+    rocblas_int    batch_count = arg.batch_count;
 
     char char_side   = arg.side;
     char char_uplo   = arg.uplo;
@@ -415,19 +553,25 @@ void testing_trmm_strided_batched(const Arguments& arg)
 
     if(stride_a < lda * K)
     {
-        rocblas_cout << "WARNING: setting stride_a = lda * K" << std::endl;
-        stride_a = lda * K;
+        rocblas_cout << "WARNING: setting stride_a = lda * (side == rocblas_side_left ? M : N)"
+                     << std::endl;
+        stride_a = lda * (side == rocblas_side_left ? M : N);
     }
     if(stride_b < ldb * N)
     {
         rocblas_cout << "WARNING: setting stride_b = ldb * N" << std::endl;
         stride_b = ldb * N;
     }
+    if(stride_c < ldc * N)
+    {
+        rocblas_cout << "WARNING: setting stride_c = ldc * N" << std::endl;
+        stride_c = ldc * N;
+    }
 
     rocblas_local_handle handle{arg};
 
     // ensure invalid sizes and quick return checked before pointer check
-    bool invalid_size = M < 0 || N < 0 || lda < K || ldb < M || batch_count < 0;
+    bool invalid_size = M < 0 || N < 0 || lda < K || ldb < M || ldc < M || batch_count < 0;
     if(M == 0 || N == 0 || batch_count == 0 || invalid_size)
     {
         EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
@@ -444,27 +588,32 @@ void testing_trmm_strided_batched(const Arguments& arg)
                                                               nullptr,
                                                               ldb,
                                                               stride_b,
+                                                              nullptr,
+                                                              ldc,
+                                                              stride_c,
                                                               batch_count),
                               invalid_size ? rocblas_status_invalid_size : rocblas_status_success);
         return;
     }
 
+    double gpu_time_used, cpu_time_used;
+    gpu_time_used = cpu_time_used = 0.0;
+    double err_host = 0.0, err_device = 0.0;
+
     // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
     // Allocate host memory
     host_strided_batch_matrix<T> hA(K, K, lda, stride_a, batch_count);
-    host_strided_batch_matrix<T> hB_1(M, N, ldb, stride_b, batch_count);
-    host_strided_batch_matrix<T> hB_2(M, N, ldb, stride_b, batch_count);
-    host_strided_batch_matrix<T> hB_gold(M, N, ldb, stride_b, batch_count);
+    host_strided_batch_matrix<T> hB(M, N, ldb, stride_b, batch_count);
+    host_strided_batch_matrix<T> hC(M, N, ldc, stride_c, batch_count);
+    host_strided_batch_matrix<T> hC_gold(M, N, ldc, stride_c, batch_count);
     host_vector<T>               h_alpha(1);
 
     // Check host memory allocation
+    CHECK_HIP_ERROR(h_alpha.memcheck());
     CHECK_HIP_ERROR(hA.memcheck());
-    CHECK_HIP_ERROR(hB_1.memcheck());
-    CHECK_HIP_ERROR(hB_2.memcheck());
-    CHECK_HIP_ERROR(hB_gold.memcheck());
-
-    //  initialize full random matrix hA and hB_1
-    h_alpha[0] = alpha;
+    CHECK_HIP_ERROR(hB.memcheck());
+    CHECK_HIP_ERROR(hC.memcheck());
+    CHECK_HIP_ERROR(hC_gold.memcheck());
 
     // Allocate device memory
     device_strided_batch_matrix<T> dA(K, K, lda, stride_a, batch_count);
@@ -476,109 +625,182 @@ void testing_trmm_strided_batched(const Arguments& arg)
     CHECK_DEVICE_ALLOCATION(dB.memcheck());
     CHECK_DEVICE_ALLOCATION(d_alpha.memcheck());
 
+    //  initialize full random matrix hA and hB
+    h_alpha[0] = alpha;
+
     // Initialize data on host memory
     rocblas_init_matrix(
         hA, arg, rocblas_client_alpha_sets_nan, rocblas_client_triangular_matrix, true);
     rocblas_init_matrix(
-        hB_1, arg, rocblas_client_alpha_sets_nan, rocblas_client_general_matrix, false, true);
-
-    hB_1.copy_from(hB_1);
-    hB_2.copy_from(hB_1);
-    hB_gold.copy_from(hB_1);
+        hB, arg, rocblas_client_alpha_sets_nan, rocblas_client_general_matrix, false, true);
+    rocblas_init_matrix(hC, arg, rocblas_client_alpha_sets_nan, rocblas_client_general_matrix);
 
     // copy data from CPU to device
     CHECK_HIP_ERROR(dA.transfer_from(hA));
+    CHECK_HIP_ERROR(dB.transfer_from(hB));
+    CHECK_HIP_ERROR(d_alpha.transfer_from(h_alpha));
 
-    double gpu_time_used, cpu_time_used;
-    gpu_time_used = cpu_time_used = 0.0;
-    double rocblas_error          = 0.0;
+    // inplace    trmm is given by B <- alpha * op(A) * B so  matrix C is not used
+    // outofplace trmm is given by C <- alpha * op(A) * B and matrix C is used
+    rocblas_int dC_M   = inplace ? 1 : M;
+    rocblas_int dC_N   = inplace ? 1 : N;
+    rocblas_int dC_ldc = inplace ? 1 : ldc;
+
+    device_strided_batch_matrix<T> dC(dC_M, dC_N, dC_ldc, stride_c, batch_count);
+    CHECK_DEVICE_ALLOCATION(dC.memcheck());
+
+    device_strided_batch_matrix<T>* dOut = inplace ? &dB : &dC;
+
+    if(inplace)
+    {
+        // if stride_b != stride_c inplace will fail
+        if(stride_b != stride_c)
+        {
+            return;
+        }
+        // if ldc != ldb inplace returns rocblas_status_invalid_value
+        if(ldb != ldc)
+        {
+            EXPECT_ROCBLAS_STATUS(rocblas_trmm_strided_batched_fn(handle,
+                                                                  side,
+                                                                  uplo,
+                                                                  transA,
+                                                                  diag,
+                                                                  M,
+                                                                  N,
+                                                                  &h_alpha[0],
+                                                                  dA,
+                                                                  lda,
+                                                                  stride_a,
+                                                                  dB,
+                                                                  ldb,
+                                                                  stride_b,
+                                                                  dC,
+                                                                  ldc,
+                                                                  stride_c,
+                                                                  batch_count),
+                                  rocblas_status_invalid_value);
+            return;
+        }
+
+        hC_gold.copy_from(hB);
+    }
+    else
+    {
+        CHECK_HIP_ERROR(dC.transfer_from(hC));
+        hC_gold.copy_from(hC);
+    }
 
     if(arg.unit_check || arg.norm_check)
     {
-        // calculate dB <- A^(-1) B   rocblas_device_pointer_host
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        CHECK_HIP_ERROR(dB.transfer_from(hB_1));
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(rocblas_trmm_strided_batched_fn(handle,
-                                                            side,
-                                                            uplo,
-                                                            transA,
-                                                            diag,
-                                                            M,
-                                                            N,
-                                                            &h_alpha[0],
-                                                            dA,
-                                                            lda,
-                                                            stride_a,
-                                                            dB,
-                                                            ldb,
-                                                            stride_b,
-                                                            batch_count));
-        handle.post_test(arg);
-        CHECK_HIP_ERROR(hB_1.transfer_from(dB));
+        if(arg.pointer_mode_host)
+        {
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
 
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_HIP_ERROR(dB.transfer_from(hB_2));
-        CHECK_HIP_ERROR(d_alpha.transfer_from(h_alpha));
+            handle.pre_test(arg);
+            CHECK_ROCBLAS_ERROR(rocblas_trmm_strided_batched_fn(handle,
+                                                                side,
+                                                                uplo,
+                                                                transA,
+                                                                diag,
+                                                                M,
+                                                                N,
+                                                                &h_alpha[0],
+                                                                dA,
+                                                                lda,
+                                                                stride_a,
+                                                                dB,
+                                                                ldb,
+                                                                stride_b,
+                                                                *dOut,
+                                                                ldOut,
+                                                                stride_c,
+                                                                batch_count));
+            handle.post_test(arg);
+            CHECK_HIP_ERROR(hC.transfer_from(*dOut));
+        }
+        if(arg.pointer_mode_device)
+        {
+            CHECK_HIP_ERROR((*dOut).transfer_from(hC_gold));
 
-        CHECK_ROCBLAS_ERROR(rocblas_trmm_strided_batched_fn(handle,
-                                                            side,
-                                                            uplo,
-                                                            transA,
-                                                            diag,
-                                                            M,
-                                                            N,
-                                                            d_alpha,
-                                                            dA,
-                                                            lda,
-                                                            stride_a,
-                                                            dB,
-                                                            ldb,
-                                                            stride_b,
-                                                            batch_count));
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
 
-        CHECK_HIP_ERROR(hB_2.transfer_from(dB));
+            CHECK_ROCBLAS_ERROR(rocblas_trmm_strided_batched_fn(handle,
+                                                                side,
+                                                                uplo,
+                                                                transA,
+                                                                diag,
+                                                                M,
+                                                                N,
+                                                                d_alpha,
+                                                                dA,
+                                                                lda,
+                                                                stride_a,
+                                                                dB,
+                                                                ldb,
+                                                                stride_b,
+                                                                *dOut,
+                                                                ldOut,
+                                                                stride_c,
+                                                                batch_count));
+        }
 
         // CPU BLAS
-        if(arg.timing)
-        {
-            cpu_time_used = get_time_us_no_sync();
-        }
-
+        cpu_time_used = get_time_us_no_sync();
         for(int b = 0; b < batch_count; b++)
         {
-            cblas_trmm<T>(side, uplo, transA, diag, M, N, alpha, hA[b], lda, hB_gold[b], ldb);
+            ref_trmm<T>(side, uplo, transA, diag, M, N, alpha, hA[b], lda, hB[b], ldb);
         }
+        cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
-        if(arg.timing)
-        {
-            cpu_time_used = get_time_us_no_sync() - cpu_time_used;
-        }
+        // copy B matrix into C matrix
+        copy_matrix_with_different_leading_dimensions(hB, hC_gold);
 
-        if(arg.unit_check)
+        if(arg.pointer_mode_host)
         {
-            if(std::is_same<T, rocblas_half>{} && K > 10000)
+            if(arg.unit_check)
             {
-                // For large K, rocblas_half tends to diverge proportional to K
-                // Tolerance is slightly greater than 1 / 1024.0
-                const double tol = K * sum_error_tolerance<T>;
-                near_check_general<T>(M, N, ldb, stride_b, hB_gold, hB_1, batch_count, tol);
-                near_check_general<T>(M, N, ldb, stride_b, hB_gold, hB_2, batch_count, tol);
+                if(std::is_same_v<T, rocblas_half> && K > 10000)
+                {
+                    // For large K, rocblas_half tends to diverge proportional to K
+                    // Tolerance is slightly greater than 1 / 1024.0
+                    const double tol = K * sum_error_tolerance<T>;
+                    near_check_general<T>(M, N, ldc, stride_c, hC_gold, hC, batch_count, tol);
+                }
+                else
+                {
+                    unit_check_general<T>(M, N, ldc, stride_c, hC_gold, hC, batch_count);
+                }
             }
-            else
+            if(arg.norm_check)
             {
-                unit_check_general<T>(M, N, ldb, stride_b, hB_gold, hB_1, batch_count);
-                unit_check_general<T>(M, N, ldb, stride_b, hB_gold, hB_2, batch_count);
+                err_host = std::abs(
+                    norm_check_general<T>('F', M, N, ldc, stride_c, hC_gold, hC, batch_count));
             }
         }
-
-        if(arg.norm_check)
+        if(arg.pointer_mode_device)
         {
-            auto err1 = std::abs(
-                norm_check_general<T>('F', M, N, ldb, stride_b, hB_gold, hB_1, batch_count));
-            auto err2 = std::abs(
-                norm_check_general<T>('F', M, N, ldb, stride_b, hB_gold, hB_2, batch_count));
-            rocblas_error = err1 > err2 ? err1 : err2;
+            CHECK_HIP_ERROR(hC.transfer_from(*dOut));
+
+            if(arg.unit_check)
+            {
+                if(std::is_same_v<T, rocblas_half> && K > 10000)
+                {
+                    // For large K, rocblas_half tends to diverge proportional to K
+                    // Tolerance is slightly greater than 1 / 1024.0
+                    const double tol = K * sum_error_tolerance<T>;
+                    near_check_general<T>(M, N, ldc, stride_c, hC_gold, hC, batch_count, tol);
+                }
+                else
+                {
+                    unit_check_general<T>(M, N, ldc, stride_c, hC_gold, hC, batch_count);
+                }
+            }
+            if(arg.norm_check)
+            {
+                err_device = std::abs(
+                    norm_check_general<T>('F', M, N, ldc, stride_c, hC_gold, hC, batch_count));
+            }
         }
     }
 
@@ -605,6 +827,9 @@ void testing_trmm_strided_batched(const Arguments& arg)
                                                                 dB,
                                                                 ldb,
                                                                 stride_b,
+                                                                *dOut,
+                                                                ldOut,
+                                                                stride_c,
                                                                 batch_count));
         }
 
@@ -627,6 +852,9 @@ void testing_trmm_strided_batched(const Arguments& arg)
                                             dB,
                                             ldb,
                                             stride_b,
+                                            *dOut,
+                                            ldOut,
+                                            stride_c,
                                             batch_count);
         }
         gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
@@ -642,6 +870,8 @@ void testing_trmm_strided_batched(const Arguments& arg)
                       e_stride_a,
                       e_ldb,
                       e_stride_b,
+                      e_ldc,
+                      e_stride_c,
                       e_batch_count>{}
             .log_args<T>(rocblas_cout,
                          arg,
@@ -649,6 +879,7 @@ void testing_trmm_strided_batched(const Arguments& arg)
                          trmm_gflop_count<T>(M, N, side),
                          ArgumentLogging::NA_value,
                          cpu_time_used,
-                         rocblas_error);
+                         err_host,
+                         err_device);
     }
 }

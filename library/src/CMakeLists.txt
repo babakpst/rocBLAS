@@ -1,5 +1,5 @@
 # ########################################################################
-# Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2016-2024 Advanced Micro Devices, Inc. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -20,19 +20,6 @@
 #
 # ########################################################################
 
-# ########################################################################
-# A helper function to prefix a source list of files with a common path into a new list (non-destructive)
-# ########################################################################
-function( prepend_path prefix source_list_of_files return_list_of_files )
-  foreach( file ${${source_list_of_files}} )
-    if(IS_ABSOLUTE ${file} )
-      list( APPEND new_list ${file} )
-    else( )
-      list( APPEND new_list ${prefix}/${file} )
-    endif( )
-  endforeach( )
-  set( ${return_list_of_files} ${new_list} PARENT_SCOPE )
-endfunction( )
 
 # ########################################################################
 # Main
@@ -41,8 +28,6 @@ endfunction( )
 # package_targets is used as a list of install target
 set( package_targets rocblas )
 
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
 
 # Set up Tensile Dependency
 if( BUILD_WITH_TENSILE )
@@ -123,15 +108,10 @@ if( BUILD_WITH_TENSILE )
     tensile_host.cpp
   )
 
-  #rocblas gemm_ex, gemm_ext2 and trsv require tensile
   set( rocblas_ex_source
-    blas_ex/rocblas_gemm_ex.cpp
-    blas_ex/rocblas_gemm_batched_ex.cpp
-    blas_ex/rocblas_gemm_strided_batched_ex.cpp
-    blas_ex/rocblas_gemm_ext2.cpp
-    blas_ex/rocblas_trsv_ex.cpp
-    blas_ex/rocblas_trsv_strided_batched_ex.cpp
-    blas_ex/rocblas_trsv_batched_ex.cpp
+    blas_ex/rocblas_gemm_ex3.cpp
+    blas_ex/rocblas_gemm_strided_batched_ex3.cpp
+    blas_ex/rocblas_gemm_batched_ex3.cpp
     ${Tensile_SRC}
   )
 
@@ -143,13 +123,13 @@ set( Tensile_INC
 )
 
 
-
 set(rocblas_ex_source_no_tensile
     blas_ex/rocblas_axpy_ex.cpp
     blas_ex/rocblas_axpy_ex_kernels.cpp
     blas_ex/rocblas_axpy_batched_ex.cpp
     blas_ex/rocblas_axpy_strided_batched_ex.cpp
     blas_ex/rocblas_dot_ex.cpp
+    blas_ex/rocblas_dot_ex_kernels.cpp
     blas_ex/rocblas_dot_batched_ex.cpp
     blas_ex/rocblas_dot_strided_batched_ex.cpp
     blas_ex/rocblas_rot_ex.cpp
@@ -161,13 +141,23 @@ set(rocblas_ex_source_no_tensile
     blas_ex/rocblas_scal_batched_ex.cpp
     blas_ex/rocblas_scal_strided_batched_ex.cpp
     blas_ex/rocblas_nrm2_ex.cpp
+    blas_ex/rocblas_nrm2_ex_kernels.cpp
     blas_ex/rocblas_nrm2_batched_ex.cpp
     blas_ex/rocblas_nrm2_strided_batched_ex.cpp
-    blas_ex/rocblas_trmm_outofplace.cpp
-    blas_ex/rocblas_trmm_outofplace_batched.cpp
-    blas_ex/rocblas_trmm_outofplace_strided_batched.cpp
     blas_ex/rocblas_geam_ex.cpp
     blas_ex/rocblas_geam_ex_kernels.cpp
+    blas_ex/rocblas_gemmt.cpp
+    blas_ex/rocblas_gemmt_batched.cpp
+    blas_ex/rocblas_gemmt_strided_batched.cpp
+    blas_ex/rocblas_gemmt_kernels.cpp
+
+    # these require tensile but export no-op symbols to build downstream components
+    blas_ex/rocblas_gemm_ex.cpp
+    blas_ex/rocblas_gemm_batched_ex.cpp
+    blas_ex/rocblas_gemm_strided_batched_ex.cpp
+    blas_ex/rocblas_trsv_ex.cpp
+    blas_ex/rocblas_trsv_strided_batched_ex.cpp
+    blas_ex/rocblas_trsv_batched_ex.cpp
 )
 
 set( rocblas_blas3_source_no_tensile
@@ -183,6 +173,13 @@ set( rocblas_blas3_source_no_tensile
 
 # rocblas L3 that use tensile but can use source gemm as fallback
 set( rocblas_blas3_source
+    # trsm first as currently slowest
+    blas3/rocblas_trsm.cpp
+    blas3/rocblas_trsm_batched.cpp
+    blas3/rocblas_trsm_strided_batched.cpp
+    blas3/rocblas_trsm_kernels.cpp
+    blas3/rocblas_trsm_batched_kernels.cpp
+    #
     blas3/rocblas_hemm.cpp
     blas3/rocblas_hemm_batched.cpp
     blas3/rocblas_hemm_strided_batched.cpp
@@ -210,6 +207,7 @@ set( rocblas_blas3_source
     blas3/Tensile/gemm.cpp
     blas3/Tensile/gemm_batched.cpp
     blas3/Tensile/gemm_strided_batched.cpp
+    blas3/Tensile/gemm_templates.cpp
     blas3/rocblas_syrkx.cpp
     blas3/rocblas_syrkx_herkx_kernels.cpp
     blas3/rocblas_syrkx_batched.cpp
@@ -218,15 +216,19 @@ set( rocblas_blas3_source
     blas3/rocblas_trmm_kernels.cpp
     blas3/rocblas_trmm_batched.cpp
     blas3/rocblas_trmm_strided_batched.cpp
-    blas3/rocblas_trsm.cpp
-    blas3/rocblas_trsm_batched.cpp
-    blas3/rocblas_trsm_strided_batched.cpp
     blas3/rocblas_trtri.cpp
     blas3/rocblas_trtri_batched.cpp
     blas3/rocblas_trtri_strided_batched.cpp
+    blas3/rocblas_trtri_kernels.cpp
 )
 
 set( rocblas_blas2_source
+  # trsv first as slower
+  blas2/rocblas_trsv.cpp
+  blas2/rocblas_trsv_kernels.cpp
+  blas2/rocblas_trsv_strided_batched.cpp
+  blas2/rocblas_trsv_batched.cpp
+  #
   blas2/rocblas_gemv.cpp
   blas2/rocblas_gemv_kernels.cpp
   blas2/rocblas_gemv_batched.cpp
@@ -314,10 +316,6 @@ set( rocblas_blas2_source
   blas2/rocblas_symv.cpp
   blas2/rocblas_symv_batched.cpp
   blas2/rocblas_symv_strided_batched.cpp
-  blas2/rocblas_trsv.cpp
-  blas2/rocblas_trsv_kernels.cpp
-  blas2/rocblas_trsv_strided_batched.cpp
-  blas2/rocblas_trsv_batched.cpp
 )
 
 set( rocblas_auxiliary_source
@@ -327,6 +325,7 @@ set( rocblas_auxiliary_source
   rocblas_ostream.cpp
   check_numerics_vector.cpp
   check_numerics_matrix.cpp
+  utility.cpp
 )
 
 set( rocblas_blas1_source
@@ -355,7 +354,7 @@ set( rocblas_blas1_source
   blas1/rocblas_nrm2.cpp
   blas1/rocblas_nrm2_batched.cpp
   blas1/rocblas_nrm2_strided_batched.cpp
-  blas1/rocblas_reduction_kernels.cpp
+  blas1/rocblas_asum_nrm2_kernels.cpp
   blas1/rocblas_rot.cpp
   blas1/rocblas_rot_kernels.cpp
   blas1/rocblas_rot_batched.cpp
@@ -382,20 +381,279 @@ set( rocblas_blas1_source
   blas1/rocblas_swap_strided_batched.cpp
 )
 
+#
+# src64 sub-directory adds ILP64 API
+
+set(rocblas64_ex_source_no_tensile
+  src64/blas_ex/rocblas_axpy_ex_64.cpp
+  src64/blas_ex/rocblas_axpy_ex_kernels_64.cpp
+  src64/blas_ex/rocblas_axpy_batched_ex_64.cpp
+  src64/blas_ex/rocblas_axpy_strided_batched_ex_64.cpp
+  src64/blas_ex/rocblas_dot_ex_64.cpp
+  src64/blas_ex/rocblas_dot_ex_kernels_64.cpp
+  src64/blas_ex/rocblas_dot_batched_ex_64.cpp
+  src64/blas_ex/rocblas_dot_strided_batched_ex_64.cpp
+  src64/blas_ex/rocblas_rot_ex_64.cpp
+  src64/blas_ex/rocblas_rot_ex_kernels_64.cpp
+  src64/blas_ex/rocblas_rot_batched_ex_64.cpp
+  src64/blas_ex/rocblas_rot_strided_batched_ex_64.cpp
+  src64/blas_ex/rocblas_scal_ex_64.cpp
+  src64/blas_ex/rocblas_scal_ex_kernels_64.cpp
+  src64/blas_ex/rocblas_scal_batched_ex_64.cpp
+  src64/blas_ex/rocblas_scal_strided_batched_ex_64.cpp
+  src64/blas_ex/rocblas_nrm2_ex_64.cpp
+  src64/blas_ex/rocblas_nrm2_ex_kernels_64.cpp
+  src64/blas_ex/rocblas_nrm2_batched_ex_64.cpp
+  src64/blas_ex/rocblas_nrm2_strided_batched_ex_64.cpp
+  #     src64/blas_ex/rocblas_trmm_outofplace.cpp
+  #     src64/blas_ex/rocblas_trmm_outofplace_batched.cpp
+  #     src64/blas_ex/rocblas_trmm_outofplace_strided_batched.cpp
+  #     src64/blas_ex/rocblas_geam_ex.cpp
+  #     src64/blas_ex/rocblas_geam_ex_kernels.cpp
+)
+
+# set( rocblas64_blas3_source_no_tensile
+#     src64/blas3/rocblas_dgmm.cpp
+#     src64/blas3/rocblas_dgmm_kernels.cpp
+#     src64/blas3/rocblas_dgmm_batched.cpp
+#     src64/blas3/rocblas_dgmm_strided_batched.cpp
+#     src64/blas3/rocblas_geam.cpp
+#     src64/blas3/rocblas_geam_kernels.cpp
+#     src64/blas3/rocblas_geam_batched.cpp
+#     src64/blas3/rocblas_geam_strided_batched.cpp
+# )
+
+# rocblas L3 that use tensile but can use source gemm as fallback
+# set( rocblas64_blas3_source
+#     src64/blas3/rocblas_hemm.cpp
+#     src64/blas3/rocblas_hemm_batched.cpp
+#     src64/blas3/rocblas_hemm_strided_batched.cpp
+#     src64/blas3/rocblas_herk.cpp
+#     src64/blas3/rocblas_herk_batched.cpp
+#     src64/blas3/rocblas_herk_strided_batched.cpp
+#     src64/blas3/rocblas_her2k.cpp
+#     src64/blas3/rocblas_her2k_batched.cpp
+#     src64/blas3/rocblas_her2k_strided_batched.cpp
+#     src64/blas3/rocblas_herkx.cpp
+#     src64/blas3/rocblas_herkx_batched.cpp
+#     src64/blas3/rocblas_herkx_strided_batched.cpp
+#     src64/blas3/rocblas_symm.cpp
+#     src64/blas3/rocblas_symm_kernels.cpp
+#     src64/blas3/rocblas_symm_batched.cpp
+#     src64/blas3/rocblas_symm_strided_batched.cpp
+#     src64/blas3/rocblas_syrk.cpp
+#     src64/blas3/rocblas_syrk_herk_kernels.cpp
+#     src64/blas3/rocblas_syrk_batched.cpp
+#     src64/blas3/rocblas_syrk_strided_batched.cpp
+#     src64/blas3/rocblas_syr2k.cpp
+#     src64/blas3/rocblas_syr2k_her2k_kernels.cpp
+#     src64/blas3/rocblas_syr2k_batched.cpp
+#     src64/blas3/rocblas_syr2k_strided_batched.cpp
+#     src64/blas3/Tensile/gemm.cpp
+#     src64/blas3/Tensile/gemm_batched.cpp
+#     src64/blas3/Tensile/gemm_strided_batched.cpp
+#     src64/blas3/rocblas_syrkx.cpp
+#     src64/blas3/rocblas_syrkx_herkx_kernels.cpp
+#     src64/blas3/rocblas_syrkx_batched.cpp
+#     src64/blas3/rocblas_syrkx_strided_batched.cpp
+#     src64/blas3/rocblas_trmm.cpp
+#     src64/blas3/rocblas_trmm_kernels.cpp
+#     src64/blas3/rocblas_trmm_batched.cpp
+#     src64/blas3/rocblas_trmm_strided_batched.cpp
+#     src64/blas3/rocblas_trsm.cpp
+#     src64/blas3/rocblas_trsm_batched.cpp
+#     src64/blas3/rocblas_trsm_strided_batched.cpp
+#     src64/blas3/rocblas_trtri.cpp
+#     src64/blas3/rocblas_trtri_batched.cpp
+#     src64/blas3/rocblas_trtri_strided_batched.cpp
+# )
+
+set( rocblas64_blas2_source
+  #   src64/blas2/rocblas_gemv.cpp
+  #   src64/blas2/rocblas_gemv_kernels.cpp
+  #   src64/blas2/rocblas_gemv_batched.cpp
+  #   src64/blas2/rocblas_gemv_strided_batched.cpp
+  src64/blas2/rocblas_tpmv_64.cpp
+  src64/blas2/rocblas_tpmv_kernels_64.cpp
+  src64/blas2/rocblas_tpmv_batched_64.cpp
+  src64/blas2/rocblas_tpmv_strided_batched_64.cpp
+  #   src64/blas2/rocblas_gbmv.cpp
+  #   src64/blas2/rocblas_gbmv_kernels.cpp
+  #   src64/blas2/rocblas_gbmv_batched.cpp
+  #   src64/blas2/rocblas_gbmv_strided_batched.cpp
+  #   src64/blas2/rocblas_tbsv.cpp
+  #   src64/blas2/rocblas_tbsv_kernels.cpp
+  #   src64/blas2/rocblas_tbsv_batched.cpp
+  #   src64/blas2/rocblas_tbsv_strided_batched.cpp
+  #   src64/blas2/rocblas_trmv.cpp
+  #   src64/blas2/rocblas_trmv_kernels.cpp
+  #   src64/blas2/rocblas_trmv_batched.cpp
+  #   src64/blas2/rocblas_trmv_strided_batched.cpp
+  src64/blas2/rocblas_ger_64.cpp
+  src64/blas2/rocblas_ger_kernels_64.cpp
+  src64/blas2/rocblas_ger_batched_64.cpp
+  src64/blas2/rocblas_ger_strided_batched_64.cpp
+  #   src64/blas2/rocblas_hbmv.cpp
+  #   src64/blas2/rocblas_hbmv_kernels.cpp
+  #   src64/blas2/rocblas_hbmv_batched.cpp
+  #   src64/blas2/rocblas_hbmv_strided_batched.cpp
+  src64/blas2/rocblas_hemv_64.cpp
+  src64/blas2/rocblas_hemv_symv_kernels_64.cpp
+  src64/blas2/rocblas_hemv_batched_64.cpp
+  src64/blas2/rocblas_hemv_strided_batched_64.cpp
+  src64/blas2/rocblas_her_64.cpp
+  src64/blas2/rocblas_her_kernels_64.cpp
+  src64/blas2/rocblas_her_batched_64.cpp
+  src64/blas2/rocblas_her_strided_batched_64.cpp
+  src64/blas2/rocblas_her2_64.cpp
+  src64/blas2/rocblas_her2_kernels_64.cpp
+  src64/blas2/rocblas_her2_batched_64.cpp
+  src64/blas2/rocblas_her2_strided_batched_64.cpp
+  src64/blas2/rocblas_hpmv_64.cpp
+  src64/blas2/rocblas_hpmv_kernels_64.cpp
+  src64/blas2/rocblas_hpmv_batched_64.cpp
+  src64/blas2/rocblas_hpmv_strided_batched_64.cpp
+  src64/blas2/rocblas_hpr_64.cpp
+  src64/blas2/rocblas_hpr_kernels_64.cpp
+  src64/blas2/rocblas_hpr_batched_64.cpp
+  src64/blas2/rocblas_hpr_strided_batched_64.cpp
+  src64/blas2/rocblas_hpr2_64.cpp
+  src64/blas2/rocblas_hpr2_kernels_64.cpp
+  src64/blas2/rocblas_hpr2_batched_64.cpp
+  src64/blas2/rocblas_hpr2_strided_batched_64.cpp
+  src64/blas2/rocblas_spr_64.cpp
+  src64/blas2/rocblas_spr_kernels_64.cpp
+  src64/blas2/rocblas_spr_batched_64.cpp
+  src64/blas2/rocblas_spr_strided_batched_64.cpp
+  src64/blas2/rocblas_spr2_64.cpp
+  src64/blas2/rocblas_spr2_kernels_64.cpp
+  src64/blas2/rocblas_spr2_batched_64.cpp
+  src64/blas2/rocblas_spr2_strided_batched_64.cpp
+  src64/blas2/rocblas_syr2_64.cpp
+  src64/blas2/rocblas_syr2_kernels_64.cpp
+  src64/blas2/rocblas_syr2_batched_64.cpp
+  src64/blas2/rocblas_syr2_strided_batched_64.cpp
+  src64/blas2/rocblas_tbmv_64.cpp
+  src64/blas2/rocblas_tbmv_kernels_64.cpp
+  src64/blas2/rocblas_tbmv_batched_64.cpp
+  src64/blas2/rocblas_tbmv_strided_batched_64.cpp
+  src64/blas2/rocblas_syr_64.cpp
+  src64/blas2/rocblas_syr_kernels_64.cpp
+  src64/blas2/rocblas_syr_batched_64.cpp
+  src64/blas2/rocblas_syr_strided_batched_64.cpp
+  #   src64/blas2/rocblas_tpsv.cpp
+  #   src64/blas2/rocblas_tpsv_kernels.cpp
+  #   src64/blas2/rocblas_tpsv_batched.cpp
+  #   src64/blas2/rocblas_tpsv_strided_batched.cpp
+  #   src64/blas2/rocblas_sbmv.cpp
+  #   src64/blas2/rocblas_sbmv_kernels.cpp
+  #   src64/blas2/rocblas_sbmv_batched.cpp
+  #   src64/blas2/rocblas_sbmv_strided_batched.cpp
+  src64/blas2/rocblas_spmv_64.cpp
+  src64/blas2/rocblas_spmv_kernels_64.cpp
+  src64/blas2/rocblas_spmv_batched_64.cpp
+  src64/blas2/rocblas_spmv_strided_batched_64.cpp
+  src64/blas2/rocblas_symv_64.cpp
+  src64/blas2/rocblas_symv_batched_64.cpp
+  src64/blas2/rocblas_symv_strided_batched_64.cpp
+  #   src64/blas2/rocblas_trsv.cpp
+  #   src64/blas2/rocblas_trsv_kernels.cpp
+  #   src64/blas2/rocblas_trsv_strided_batched.cpp
+  #   src64/blas2/rocblas_trsv_batched.cpp
+)
+
+set( rocblas64_auxiliary_source
+  # src64/handle.cpp
+  # src64/rocblas_auxiliary.cpp
+  # src64/buildinfo.cpp
+  # src64/rocblas_ostream.cpp
+  # src64/check_numerics_vector.cpp
+  # src64/check_numerics_matrix.cpp
+)
+
+set( rocblas64_blas1_source
+  src64/blas1/rocblas_iamax_iamin_kernels_64.cpp
+  src64/blas1/rocblas_iamin_64.cpp
+  src64/blas1/rocblas_iamin_batched_64.cpp
+  src64/blas1/rocblas_iamin_strided_batched_64.cpp
+  src64/blas1/rocblas_iamax_64.cpp
+  src64/blas1/rocblas_iamax_batched_64.cpp
+  src64/blas1/rocblas_iamax_strided_batched_64.cpp
+  src64/blas1/rocblas_axpy_64.cpp
+  src64/blas1/rocblas_axpy_kernels_64.cpp
+  src64/blas1/rocblas_axpy_batched_64.cpp
+  src64/blas1/rocblas_axpy_strided_batched_64.cpp
+  src64/blas1/rocblas_copy_64.cpp
+  src64/blas1/rocblas_copy_kernels_64.cpp
+  src64/blas1/rocblas_copy_batched_64.cpp
+  src64/blas1/rocblas_copy_strided_batched_64.cpp
+  src64/blas1/rocblas_asum_64.cpp
+  src64/blas1/rocblas_asum_nrm2_kernels_64.cpp
+  src64/blas1/rocblas_asum_batched_64.cpp
+  src64/blas1/rocblas_asum_strided_batched_64.cpp
+  src64/blas1/rocblas_dot_64.cpp
+  src64/blas1/rocblas_dot_kernels_64.cpp
+  src64/blas1/rocblas_dot_strided_batched_64.cpp
+  src64/blas1/rocblas_dot_batched_64.cpp
+  src64/blas1/rocblas_nrm2_64.cpp
+  src64/blas1/rocblas_nrm2_batched_64.cpp
+  src64/blas1/rocblas_nrm2_strided_batched_64.cpp
+  src64/blas1/rocblas_rot_64.cpp
+  src64/blas1/rocblas_rot_kernels_64.cpp
+  src64/blas1/rocblas_rot_batched_64.cpp
+  src64/blas1/rocblas_rot_strided_batched_64.cpp
+  src64/blas1/rocblas_rotg_64.cpp
+  src64/blas1/rocblas_rotg_kernels_64.cpp
+  src64/blas1/rocblas_rotg_batched_64.cpp
+  src64/blas1/rocblas_rotg_strided_batched_64.cpp
+  src64/blas1/rocblas_rotm_64.cpp
+  src64/blas1/rocblas_rotm_kernels_64.cpp
+  src64/blas1/rocblas_rotm_batched_64.cpp
+  src64/blas1/rocblas_rotm_strided_batched_64.cpp
+  src64/blas1/rocblas_rotmg_64.cpp
+  src64/blas1/rocblas_rotmg_kernels_64.cpp
+  src64/blas1/rocblas_rotmg_batched_64.cpp
+  src64/blas1/rocblas_rotmg_strided_batched_64.cpp
+  src64/blas1/rocblas_scal_64.cpp
+  src64/blas1/rocblas_scal_kernels_64.cpp
+  src64/blas1/rocblas_scal_batched_64.cpp
+  src64/blas1/rocblas_scal_strided_batched_64.cpp
+  src64/blas1/rocblas_swap_64.cpp
+  src64/blas1/rocblas_swap_kernels_64.cpp
+  src64/blas1/rocblas_swap_batched_64.cpp
+  src64/blas1/rocblas_swap_strided_batched_64.cpp
+)
+
+set( subdir_src64_list
+  ${rocblas64_ex_source}
+  ${rocblas64_ex_source_no_tensile}
+  ${rocblas64_blas3_source}
+  ${rocblas64_blas3_source_no_tensile}
+  ${rocblas64_blas2_source}
+  ${rocblas64_blas1_source}
+  ${rocblas64_auxiliary_source}
+)
+
 prepend_path( ".." rocblas_headers_public relative_rocblas_headers_public )
 
 add_library( rocblas
-  ${rocblas_ex_source}
-  ${rocblas_ex_source_no_tensile}
+  # ordered from generally slowest to compile to faster to increase parallelism
   ${rocblas_blas3_source}
   ${rocblas_blas3_source_no_tensile}
   ${rocblas_blas2_source}
+  ${rocblas_ex_source}
+  ${rocblas_ex_source_no_tensile}
   ${rocblas_blas1_source}
   ${relative_rocblas_headers_public}
   ${rocblas_auxiliary_source}
+  ${subdir_src64_list}
 )
 
-message(STATUS "*** NOTE: blas2/rocblas_ger_kernels.cpp is compiled with the verbose flag -v for QC purposes.")
+foreach( file ${subdir_src64_list} )
+  SET_SOURCE_FILES_PROPERTIES( ${file} PROPERTIES COMPILE_DEFINITIONS ROCBLAS_INTERNAL_ILP64 )
+endforeach()
+
+message(STATUS "** NOTE: blas2/rocblas_ger_kernels.cpp is compiled with the verbose flag -v for QC purposes.")
 SET_SOURCE_FILES_PROPERTIES( blas2/rocblas_ger_kernels.cpp PROPERTIES COMPILE_FLAGS "-v" )
 
 #if( WIN32 )
@@ -405,31 +663,7 @@ SET_SOURCE_FILES_PROPERTIES( blas2/rocblas_ger_kernels.cpp PROPERTIES COMPILE_FL
 
 add_library( roc::rocblas ALIAS rocblas )
 
-target_link_libraries( rocblas INTERFACE hip::host )
-if (WIN32)
-  target_link_libraries( rocblas PRIVATE hip::device )
-else()
-  target_link_libraries( rocblas PRIVATE hip::device -lstdc++fs --rtlib=compiler-rt --unwindlib=libgcc )
-endif()
-
-#  -fno-gpu-rdc compiler option was used with hcc, so revisit feature at some point
-
-# GCC or hip-clang needs specific flags to turn on f16c intrinsics
-target_compile_options( rocblas PRIVATE -mf16c )
-
-# Do not allow Variable Length Arrays (use unique_ptr instead)
-target_compile_options( rocblas PRIVATE -Werror=vla )
-
-target_include_directories( rocblas
-  PUBLIC  $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/library/include>
-          $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/library/include/internal>
-          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-	  $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/rocblas/internal>
-	  $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/rocblas>
-	  $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
-          $<BUILD_INTERFACE:${Tensile_INC}>
-	  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-          )
+rocblas_library_settings( rocblas )
 
 target_link_libraries( rocblas PRIVATE "-Xlinker --exclude-libs=ALL" ) # HIDE symbols
 
@@ -474,22 +708,12 @@ if( BUILD_WITH_TENSILE )
   target_compile_definitions( rocblas PRIVATE ${TENSILE_DEFINES} )
 endif()
 
-target_compile_definitions( rocblas PRIVATE ROCM_USE_FLOAT16 ROCBLAS_INTERNAL_API ROCBLAS_BETA_FEATURES_API )
+#set_target_properties( rocblas PROPERTIES CXX_VISIBILITY_PRESET "hidden" C_VISIBILITY_PRESET "hidden" VISIBILITY_INLINES_HIDDEN ON )
+#set_target_properties( rocblas PROPERTIES CXX_VISIBILITY_PRESET "default" C_VISIBILITY_PRESET "default" VISIBILITY_INLINES_HIDDEN ON )
 
-rocm_set_soversion( rocblas ${rocblas_SOVERSION} )
-set_target_properties( rocblas PROPERTIES CXX_EXTENSIONS NO )
-set_target_properties( rocblas PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/staging" )
-
-if (WIN32 AND BUILD_CLIENTS)
-  add_custom_command( TARGET rocblas POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/staging/$<TARGET_FILE_NAME:rocblas> ${PROJECT_BINARY_DIR}/clients/staging/$<TARGET_FILE_NAME:rocblas> )
-  if( ${CMAKE_BUILD_TYPE} MATCHES "Debug")
-    add_custom_command( TARGET rocblas POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/staging/rocblas.pdb ${PROJECT_BINARY_DIR}/clients/staging/rocblas.pdb )
-  endif()
-endif()
-
+# The export header generation is now done in parent CMakeLists.txt
 # Package that helps me set visibility for function names exported from shared library
 include( GenerateExportHeader )
-set_target_properties( rocblas PROPERTIES CXX_VISIBILITY_PRESET "hidden" C_VISIBILITY_PRESET "hidden" VISIBILITY_INLINES_HIDDEN ON )
 generate_export_header( rocblas EXPORT_FILE_NAME ${PROJECT_BINARY_DIR}/include/rocblas/internal/rocblas-export.h )
 
 # generate header with prototypes for export reuse
@@ -523,25 +747,12 @@ add_custom_command( OUTPUT ${ROCBLAS_DEVICE_MALLOC}
 add_custom_target( rocblas_device_malloc DEPENDS ${ROCBLAS_DEVICE_MALLOC} )
 add_dependencies( rocblas rocblas_device_malloc )
 
-if(BUILD_FILE_REORG_BACKWARD_COMPATIBILITY AND NOT WIN32)
-  rocm_wrap_header_dir(
-    ${CMAKE_SOURCE_DIR}/library/include
-    PATTERNS "*.h"
-    GUARDS SYMLINK WRAPPER
-    WRAPPER_LOCATIONS ${CMAKE_INSTALL_INCLUDEDIR}
-  )
-  rocm_wrap_header_file(
-    internal/rocblas-version.h internal/rocblas-export.h internal/rocblas-exported-proto.hpp internal/rocblas_device_malloc.hpp
-    GUARDS SYMLINK WRAPPER
-    WRAPPER_LOCATIONS ${CMAKE_INSTALL_INCLUDEDIR} rocblas/${CMAKE_INSTALL_INCLUDEDIR}
-    ORIGINAL_FILES ${PROJECT_BINARY_DIR}/include/rocblas/internal/rocblas-version.h
-  )
-endif( )
 
+
+############################################################
+# Post build
 
 if( NOT BUILD_SHARED_LIBS )
-  # Following Boost conventions of prefixing 'lib' on static built libraries, across all platforms
-  set_target_properties( rocblas PROPERTIES PREFIX "lib" )
 
   if( BUILD_WITH_TENSILE )
     add_custom_command( TARGET rocblas POST_BUILD
@@ -561,15 +772,16 @@ if( NOT BUILD_SHARED_LIBS )
 
 endif( )
 
+if (WIN32 AND BUILD_CLIENTS)
+  add_custom_command( TARGET rocblas POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/staging/$<TARGET_FILE_NAME:rocblas> ${PROJECT_BINARY_DIR}/clients/staging/$<TARGET_FILE_NAME:rocblas> )
+  if( ${CMAKE_BUILD_TYPE} MATCHES "Debug")
+    add_custom_command( TARGET rocblas POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/staging/rocblas.pdb ${PROJECT_BINARY_DIR}/clients/staging/rocblas.pdb )
+  endif()
+endif()
+
 ############################################################
 # Installation
 
-# Force installation of .f90 module file
-rocm_install(FILES "../include/rocblas_module.f90"
-	DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/rocblas/"
-)
-
-execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/library/include ${PROJECT_BINARY_DIR}/include/rocblas)
 rocm_install_targets(
   TARGETS ${package_targets}
   INCLUDE
@@ -582,71 +794,24 @@ if( BUILD_WITH_TENSILE )
   else()
     set( ROCBLAS_TENSILE_LIBRARY_DIR "\${CPACK_PACKAGING_INSTALL_PREFIX}${CMAKE_INSTALL_LIBDIR}/rocblas" CACHE PATH "path to tensile library" )
   endif()
-  rocm_install(
-    DIRECTORY ${CMAKE_BINARY_DIR}/Tensile/library
-    DESTINATION ${ROCBLAS_TENSILE_LIBRARY_DIR}
-    COMPONENT ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME}) # Use this cmake variable to be compatible with rocm-cmake 0.6 and 0.7
-endif()
-
-#         PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ
-
-if( BUILD_SHARED_LIBS )
-  rocm_export_targets(
-    TARGETS roc::rocblas
-    DEPENDS PACKAGE hip
-    NAMESPACE roc::
-    )
-else()
-  # static
-  if (NOT BUILD_WITH_TENSILE OR (Tensile_LIBRARY_FORMAT MATCHES "msgpack"))
-    # header only tensile usage of msgpack
-    rocm_export_targets(
-      TARGETS roc::rocblas
-      DEPENDS PACKAGE hip
-      NAMESPACE roc::
-      )
-  else()
-    # yaml based Tensile uses LLVM
-    rocm_export_targets(
-      TARGETS roc::rocblas
-      DEPENDS PACKAGE hip
-      STATIC_DEPENDS PACKAGE LLVM
-      NAMESPACE roc::
-      )
+  # For ASAN package, Tensile library files(which are not shared libraries) are not required
+  if( NOT ENABLE_ASAN_PACKAGING )
+    rocm_install(
+      DIRECTORY ${CMAKE_BINARY_DIR}/Tensile/library
+      DESTINATION ${ROCBLAS_TENSILE_LIBRARY_DIR}
+      COMPONENT ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME}) # Use this cmake variable to be compatible with rocm-cmake 0.6 and 0.7
   endif()
 endif()
 
-if(BUILD_FILE_REORG_BACKWARD_COMPATIBILITY AND NOT WIN32)
-  rocm_install(
-    DIRECTORY
-       "${PROJECT_BINARY_DIR}/rocblas"
-        DESTINATION "." )
-
-  if ( NOT WIN32 )
-
-    #Create SymLink for Fortran Object Module for backward compatibility
-    rocm_install(
-      CODE "
-        set(PREFIX \$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX})
-        set(INPUT_FILE \${PREFIX}/include/rocblas/rocblas_module.f90)
-        set(SYMLINK_LOCATIONS \${PREFIX}/rocblas/include \${PREFIX}/include)
-        foreach(LOCATION IN LISTS SYMLINK_LOCATIONS)
-          file(MAKE_DIRECTORY \${LOCATION})
-          execute_process(COMMAND ln -sfr \${INPUT_FILE} \${LOCATION})
-          message(STATUS \"Created symlink in \${LOCATION} to \${INPUT_FILE}.\")
-        endforeach()
-        "
-    )
-  endif() #NOT WIN32
-endif()
-
-if(RUN_HEADER_TESTING)
-# Compilation tests to ensure that header files work independently,
-# and that public header files work across several languages
-add_custom_command(
-  TARGET rocblas
-  POST_BUILD
-  COMMAND ${CMAKE_HOME_DIRECTORY}/header_compilation_tests.sh
-  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
- )
+if(NOT WIN32)
+  if(RUN_HEADER_TESTING)
+  # Compilation tests to ensure that header files work independently,
+  # and that public header files work across several languages
+  add_custom_command(
+    TARGET rocblas
+    POST_BUILD
+    COMMAND ${CMAKE_HOME_DIRECTORY}/header_compilation_tests.sh
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+  )
+  endif()
 endif()

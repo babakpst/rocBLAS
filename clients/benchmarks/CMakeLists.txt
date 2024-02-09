@@ -1,5 +1,5 @@
 # ########################################################################
-# Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2016-2024 Advanced Micro Devices, Inc. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -26,6 +26,15 @@ set(rocblas_bench_source
 
 add_executable( rocblas-bench ${rocblas_bench_source} ${rocblas_test_bench_common} )
 
+if( BUILD_WITH_TENSILE )
+  set(rocblas_gemm_tune_source
+    gemm_tune/gemm_tune_client.cpp
+    gemm_tune/gemm_tuners.cpp
+    )
+
+  add_executable( rocblas-gemm-tune ${rocblas_gemm_tune_source} ${rocblas_test_bench_common} )
+endif()
+
 # Internal header includes
 target_include_directories( rocblas-bench
   PRIVATE
@@ -36,7 +45,18 @@ target_include_directories( rocblas-bench
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas_ex>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/src/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/src>
 )
+if( BUILD_WITH_TENSILE )
+  target_include_directories( rocblas-gemm-tune
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas3>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/include>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/src/include>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/src>
+  )
+endif()
 
 # External header includes included as system files
 target_include_directories( rocblas-bench
@@ -45,55 +65,76 @@ target_include_directories( rocblas-bench
     $<BUILD_INTERFACE:${BLAS_INCLUDE_DIR}>
     $<BUILD_INTERFACE:${BLIS_INCLUDE_DIR}> # may be blank if not used
 )
+if( BUILD_WITH_TENSILE )
+  target_include_directories( rocblas-gemm-tune
+    SYSTEM PRIVATE
+      $<BUILD_INTERFACE:${HIP_INCLUDE_DIRS}>
+      $<BUILD_INTERFACE:${BLAS_INCLUDE_DIR}>
+      $<BUILD_INTERFACE:${BLIS_INCLUDE_DIR}> # may be blank if not used
+  )
+endif()
 
 if( BUILD_FORTRAN_CLIENTS )
   target_link_libraries( rocblas-bench PRIVATE rocblas_fortran_client )
-endif( )
-
-target_link_libraries( rocblas-bench PRIVATE ${BLAS_LIBRARY} roc::rocblas )
-
-if( CUDA_FOUND )
-  target_include_directories( rocblas-bench
-    PRIVATE
-      $<BUILD_INTERFACE:${CUDA_INCLUDE_DIRS}>
-      $<BUILD_INTERFACE:${hip_INCLUDE_DIRS}>
-    )
-  target_compile_definitions( rocblas-bench PRIVATE __HIP_PLATFORM_NVCC__ )
-  target_link_libraries( rocblas-bench PRIVATE ${CUDA_LIBRARIES} )
-else( )
-  # auto set in hip_common.h
-  #target_compile_definitions( rocblas-bench PRIVATE __HIP_PLATFORM_HCC__ )
-  target_link_libraries( rocblas-bench PRIVATE hip::host hip::device )
-endif( )
-
-if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  # GCC or hip-clang needs specific flags to turn on f16c intrinsics
-  target_compile_options( rocblas-bench PRIVATE -mf16c )
-endif( )
-
-target_compile_definitions( rocblas-bench PRIVATE ROCBLAS_BENCH ROCM_USE_FLOAT16 ROCBLAS_INTERNAL_API ${TENSILE_DEFINES} )
-if ( NOT BUILD_FORTRAN_CLIENTS )
-  target_compile_definitions( rocblas-bench PRIVATE CLIENTS_NO_FORTRAN )
 endif()
 
-target_compile_options(rocblas-bench PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${COMMON_CXX_OPTIONS}>)
-# target_compile_options does not go to linker like CMAKE_CXX_FLAGS does, so manually add
+target_link_libraries( rocblas-bench PRIVATE ${BLAS_LIBRARY} roc::rocblas hip::host hip::device )
+if( BUILD_WITH_TENSILE )
+  target_link_libraries( rocblas-gemm-tune PRIVATE ${BLAS_LIBRARY} roc::rocblas hip::host hip::device )
+endif()
+
 if (NOT WIN32)
-  list( APPEND COMMON_LINK_LIBS "-lm -lstdc++fs")
+  list( APPEND COMMON_LINK_LIBS "-lm -lstdc++fs" )
   if (NOT BUILD_FORTRAN_CLIENTS)
     list( APPEND COMMON_LINK_LIBS "-lgfortran") # for lapack
   endif()
 else()
   list( APPEND COMMON_LINK_LIBS "libomp")
 endif()
-target_link_libraries( rocblas-bench PRIVATE ${COMMON_LINK_LIBS} )
 
-set_target_properties( rocblas-bench PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/staging"
-)
+target_link_libraries( rocblas-bench PRIVATE ${COMMON_LINK_LIBS} )
+if( BUILD_WITH_TENSILE )
+  target_link_libraries( rocblas-gemm-tune PRIVATE ${COMMON_LINK_LIBS} )
+endif()
+
+if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  # GCC or hip-clang needs specific flags to turn on f16c intrinsics
+  target_compile_options( rocblas-bench PRIVATE -mf16c )
+  if( BUILD_WITH_TENSILE )
+    target_compile_options( rocblas-gemm-tune PRIVATE -mf16c )
+  endif()
+endif()
+
+target_compile_options(rocblas-bench PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${COMMON_CXX_OPTIONS}>)
+if( BUILD_WITH_TENSILE )
+  target_compile_options(rocblas-gemm-tune PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${COMMON_CXX_OPTIONS}>)
+endif()
+
+target_compile_definitions( rocblas-bench PRIVATE ROCBLAS_BENCH ROCM_USE_FLOAT16 ROCBLAS_INTERNAL_API ROCBLAS_NO_DEPRECATED_WARNINGS ${TENSILE_DEFINES} )
+if( BUILD_WITH_TENSILE )
+  target_compile_definitions( rocblas-gemm-tune PRIVATE ROCBLAS_BENCH ROCM_USE_FLOAT16 ROCBLAS_INTERNAL_API ROCBLAS_NO_DEPRECATED_WARNINGS ${TENSILE_DEFINES} )
+endif()
+if ( NOT BUILD_FORTRAN_CLIENTS )
+  target_compile_definitions( rocblas-bench PRIVATE CLIENTS_NO_FORTRAN )
+  if( BUILD_WITH_TENSILE )
+    target_compile_definitions( rocblas-gemm-tune PRIVATE CLIENTS_NO_FORTRAN )
+  endif()
+endif()
+
+
+set_target_properties( rocblas-bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/staging")
+if( BUILD_WITH_TENSILE )
+  set_target_properties( rocblas-gemm-tune PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/staging")
+endif()
 
 add_dependencies( rocblas-bench rocblas-common )
+if( BUILD_WITH_TENSILE )
+  add_dependencies( rocblas-gemm-tune rocblas-common )
+endif()
 
 add_subdirectory ( ./perf_script )
 
 rocm_install(TARGETS rocblas-bench COMPONENT benchmarks)
+if( BUILD_WITH_TENSILE )
+  rocm_install(TARGETS rocblas-gemm-tune COMPONENT benchmarks)
+endif()

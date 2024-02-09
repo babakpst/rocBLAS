@@ -1,5 +1,5 @@
 # Data types are defined as either aliases to Python-recognized ctypes,
-# or enums defined with c_int base clases and attributes.
+# or enums defined with c_int base classes and attributes.
 Datatypes:
   - rocblas_int: c_int
   - rocblas_datatype:
@@ -21,6 +21,16 @@ Datatypes:
         u32_c: 167
         bf16_r: 168
         bf16_c: 169
+        f8_r: 170
+        bf8_r: 171
+  - rocblas_computetype:
+      bases: [ c_int ]
+      attr:
+        f32: 300
+        f8_f8_f32: 301
+        f8_bf8_f32: 302
+        bf8_f8_f32: 303
+        bf8_bf8_f32: 304
   - { half: f16_r, single: f32_r, double: f64_r }
   - { half complex: f16_c, single complex: f32_c, double complex: f64_c }
   - rocblas_initialization:
@@ -29,16 +39,18 @@ Datatypes:
         rand_int: 111
         trig_float: 222
         hpl: 333
-        special: 444
-  - rocblas_arithmetic_check:
-      bases: [ c_uint32 ]
-      attr:
-        no_check: 111
-        ieee16_ieee32: 222
+        denorm: 444
+        denorm2: 555
+        rand_int_zero_one: 666
   - rocblas_gemm_flags:
       bases: [ c_uint32 ]
       attr:
         none: 0
+        use_cu_efficiency: 2
+        fp16_alt_impl: 4
+        check_solution_index: 8
+        fp16_alt_impl_rnz: 16
+        stochastic_rounding: 32
   - rocblas_geam_ex_operation:
       bases: [ c_uint32 ]
       attr:
@@ -49,6 +61,24 @@ Datatypes:
       attr:
         atomics_not_allowed: 0
         atomics_allowed: 1
+  # match client argument_model.hpp enum values
+  - rocblas_client_os:
+      bases: [ c_uint32 ]
+      attr:
+        LINUX: 1
+        WINDOWS: 2
+        ALL: 3
+  # match client argument_model.hpp enum values
+  - rocblas_api:
+      bases: [ c_uint32 ]
+      attr:
+        C: 0
+        C_64: 1
+        FORTRAN: 2
+        FORTRAN_64: 3
+        INTERNAL: 4
+        INTERNAL_64: 5
+
 
 Common threads and streams: &common_threads_streams
   - { threads: 0,  streams: 0}
@@ -74,6 +104,8 @@ Real precisions: &real_precisions
     { a_type:  bf16_r, b_type:  bf16_r, c_type: bf16_r, d_type: bf16_r, compute_type: bf16_r }
   - &hpa_bf16_precision
     { a_type:  bf16_r, b_type:  bf16_r, c_type: bf16_r, d_type: bf16_r, compute_type: f32_r }
+  - &alpha_f32_hpa_bf16_precision
+    { a_type:  f32_r, b_type:  bf16_r, c_type: bf16_r, d_type: bf16_r, compute_type: f32_r }
   - &hpa_bf16_in_single_out_precision
     { a_type:  bf16_r, b_type:  bf16_r, c_type: f32_r, d_type: f32_r, compute_type: f32_r }
   - &hpa_half_float_alpha
@@ -91,11 +123,6 @@ Short precisions: &int8_half_single_precisions
   - *int8_precision
   - *half_precision
   - *single_precision
-
-Hpa half and half: &hpa_half_half_precisions
-  - *hpa_half_precision
-  - *half_precision
-  - *hpa_half_float_alpha
 
 ML precisions: &hpa_half_single_precisions
   - *hpa_half_precision
@@ -221,7 +248,20 @@ Simple precisions complex and real: &half_single_double_precisions_complex_real
   - *single_precision_complex
   - *double_precision_complex
 
+#############################################################################################################
+#               Used for gemv_batched and gemv_strided_batched                                              #
+# Special test cases are added to test gemv_batched and gemv_strided_batched for types HSH, HSS, TST, TSS   #
+#############################################################################################################
 
+gemv batched and strided batched: &gemv_bfloat_half_single_double_complex_real_precisions
+  - *single_precision
+  - *double_precision
+  - *single_precision_complex
+  - *double_precision_complex
+  - *hpa_bf16_precision
+  - *hpa_bf16_in_single_out_precision
+  - *hpa_half_precision
+  - *hpa_half_in_single_out_precision
 
 #############################################
 #               Used for Scal               #
@@ -252,6 +292,17 @@ scal_ex precisions: &scal_ex_complex_real_alpha_complex_out
 scal_ex Single double joined: &scal_ex_single_double_complex_real_alpha_complex_out
   - *scal_ex_single_precision_complex_real_alpha_complex_out
   - *scal_ex_double_precision_complex_real_alpha_complex_out
+
+Hpa bfloat half single double complex real: &scal_ex_bfloat_half_single_double_complex_real_precisions
+  - *single_precision
+  - *double_precision
+  - *single_precision_complex
+  - *double_precision_complex
+  - *hpa_half_precision
+  - *half_precision
+  - *hpa_half_float_alpha
+  - *hpa_bf16_precision
+  - *alpha_f32_hpa_bf16_precision
 
 #############################################
 #           Used for rot* and nrm2_ex       #
@@ -318,10 +369,84 @@ Half bfloat single double complex real: &bfloat_single_double_complex_real_preci
   - *single_precision_complex
   - *double_precision_complex
 
+ ####################################################
+#  Used for gemm_batched and gemm_strided_batched   #
+#####################################################
+Hpa single double complex real: &half_single_double_complex_real_precisions
+  - *hpa_half_float_alpha
+  - *single_precision
+  - *double_precision
+  - *single_precision_complex
+  - *double_precision_complex
+  - *hpa_half_precision
+  - *hpa_half_in_single_out_precision
+  - *half_precision
+
+#############################################
+#           Used for gemm_ex3      #
+#############################################
+F8SS family: &F8SS_family #in_type_out_type_compute_family
+  - &float8_float8_single #a_type_b_type_out_type
+    { a_type: f8_r, b_type: f8_r, c_type: f32_r, d_type: f32_r, composite_compute_type: f32 }
+  - &bfloat8_bfloat8_single
+    { a_type: bf8_r, b_type: bf8_r, c_type: f32_r, d_type: f32_r, composite_compute_type: f32 }
+  - &float8_bfloat8_single
+    { a_type: f8_r, b_type: bf8_r, c_type: f32_r, d_type: f32_r, composite_compute_type: f32 }
+  - &bfloat8_float8_single
+    { a_type: bf8_r, b_type: f8_r, c_type: f32_r, d_type: f32_r, composite_compute_type: f32 }
+
+F8F8S family: &F8F8S_family #in_type_out_type_compute_family
+  - &float8_float8_float8   #a_type_b_type_out_type
+    { a_type: f8_r, b_type: f8_r, c_type: f8_r, d_type: f8_r, composite_compute_type: f32 }
+  - &bfloat8_bfloat8_bfloat8
+    { a_type: bf8_r, b_type: bf8_r, c_type: bf8_r, d_type: bf8_r, composite_compute_type: f32 }
+  - &float8_bfloat8_bfloat8
+    { a_type: f8_r, b_type: bf8_r, c_type: bf8_r, d_type: bf8_r, composite_compute_type: f32 }
+  - &bfloat8_float8_bfloat8
+    { a_type: bf8_r, b_type: f8_r, c_type: bf8_r, d_type: bf8_r, composite_compute_type: f32 }
+
+F8HS family: &F8HS_family #in_type_out_type_compute_family
+  - &float8_float8_half   #a_type_b_type_out_type
+    { a_type: f8_r, b_type: f8_r, c_type: f16_r, d_type: f16_r, composite_compute_type: f32 }
+  - &bfloat8_bfloat8_half
+    { a_type: bf8_r, b_type: bf8_r, c_type: f16_r, d_type: f16_r, composite_compute_type: f32 }
+  - &float8_bfloat8_half
+    { a_type: f8_r, b_type: bf8_r, c_type: f16_r, d_type: f16_r, composite_compute_type: f32 }
+  - &bfloat8_float8_half
+    { a_type: bf8_r, b_type: f8_r, c_type: f16_r, d_type: f16_r, composite_compute_type: f32 }
+
+stage 1 family: &stage1_family
+  - &half_f8_f8_f32 #in/out_composite_compute_type
+    { a_type: f16_r, b_type: f16_r, c_type: f16_r, d_type: f16_r, composite_compute_type: f8_f8_f32 }
+  - &half_f8_bf8_f32
+    { a_type: f16_r, b_type: f16_r, c_type: f16_r, d_type: f16_r, composite_compute_type: f8_bf8_f32 }
+  - &half_bf8_f8_f32
+    { a_type: f16_r, b_type: f16_r, c_type: f16_r, d_type: f16_r, composite_compute_type: bf8_f8_f32 }
+  - &half_bf8_bf8_f32
+    { a_type: f16_r, b_type: f16_r, c_type: f16_r, d_type: f16_r, composite_compute_type: bf8_bf8_f32 }
+
+
+stage 2 family: &stage2_family
+  - &float8_single_float8  #a_type_b_type_out_type
+    { a_type: f8_r, b_type: f32_r, c_type: f8_r, d_type: f8_r, composite_compute_type: f8_f8_f32 }
+  - &single_float8_float8
+    { a_type: f32_r, b_type: f8_r, c_type: f8_r, d_type: f8_r, composite_compute_type: f8_f8_f32 }
+  - &bfloat8_single_bfloat8
+    { a_type: bf8_r, b_type: f32_r, c_type: bf8_r, d_type: bf8_r, composite_compute_type: bf8_bf8_f32 }
+  - &single_bfloat8_bfloat8
+    { a_type: f32_r, b_type: bf8_r, c_type: bf8_r, d_type: bf8_r, composite_compute_type: f8_bf8_f32 }
+  - &bfloat8_single_single
+    { a_type: bf8_r, b_type: f32_r, c_type: f32_r, d_type: f32_r, composite_compute_type: bf8_f8_f32 }
+  - &single_bfloat8_single
+    { a_type: f32_r, b_type: bf8_r, c_type: f32_r, d_type: f32_r, composite_compute_type: f8_bf8_f32 }
+
+
 #############################################
 #           Used for axpy_ex                #
 #############################################
-Hpa single double complex real: &half_single_double_complex_real_precisions
+Hpa bfloat half single double complex real: &bfloat_half_single_double_complex_real_precisions
+  - *hpa_bf16_precision
+  - *alpha_f32_hpa_bf16_precision
   - *hpa_half_float_alpha
   - *single_precision
   - *double_precision
@@ -337,6 +462,8 @@ Hpa single double complex real: &half_single_double_complex_real_precisions
 nrm2_ex precisions: &nrm2_ex_precisions
   - &half_precision_nrm2
     { a_type: f16_r, b_type: f16_r, c_type: f32_r, d_type: f32_r, compute_type: f32_r }
+  - &bfloat_precision_nrm2
+    { a_type: bf16_r, b_type: bf16_r, c_type: f32_r, d_type: f32_r, compute_type: f32_r }
   - *single_precision
   - *double_precision
   - *single_precision_complex_real_in_real_compute
@@ -345,6 +472,28 @@ nrm2_ex precisions: &nrm2_ex_precisions
 nrm2_ex precisions double: &nrm2_ex_precisions_double
   - *double_precision
   - *double_precision_complex_real_in_real_compute
+
+Definitions:
+  # scan extension applied by Arguments class
+  - &c_scan_value
+    - [-999]
+
+  # int64 API testing constants
+  - &c_pos_overflow_int32
+    - [4294967296]
+  - &c_neg_overflow_int32
+    - [-4294967296]
+
+  - &c_pos_x2_overflow_int32
+    - [1073741825]
+  - &c_neg_x2_overflow_int32
+   - [-1073741825]
+
+  - &c_pos_x32_overflow_int32
+    - [67108865]
+
+  - &c_grid_yz_require_passes
+   - [666666] # force looping over y/z chunks
 
 # The Arguments struct passed directly to C++. See rocblas_arguments.hpp.
 # The order of the entries is significant, so it can't simply be a dictionary.
@@ -366,22 +515,21 @@ Arguments:
   - stride_x: c_int64
   - stride_y: c_int64
   - user_allocated_workspace: c_size_t
-  - M: rocblas_int
-  - N: rocblas_int
-  - K: rocblas_int
-  - KL: rocblas_int
-  - KU: rocblas_int
-  - lda: rocblas_int
-  - ldb: rocblas_int
-  - ldc: rocblas_int
-  - ldd: rocblas_int
-  - incx: rocblas_int
-  - incy: rocblas_int
-  - incd: rocblas_int
-  - incb: rocblas_int
-  - batch_count: rocblas_int
-  - iters: rocblas_int
-  - cold_iters: rocblas_int
+  - M: c_int64
+  - N: c_int64
+  - K: c_int64
+  - KL: c_int64
+  - KU: c_int64
+  - lda: c_int64
+  - ldb: c_int64
+  - ldc: c_int64
+  - ldd: c_int64
+  - incx: c_int64
+  - incy: c_int64
+  - batch_count: c_int64
+  - scan: c_int64
+  - iters: c_int32
+  - cold_iters: c_int32
   - algo: c_uint32
   - solution_index: c_int32
   - geam_op: rocblas_geam_ex_operation
@@ -391,25 +539,36 @@ Arguments:
   - c_type: rocblas_datatype
   - d_type: rocblas_datatype
   - compute_type: rocblas_datatype
+  - composite_compute_type: rocblas_computetype
   - initialization: rocblas_initialization
-  - arithmetic_check: rocblas_arithmetic_check
   - atomics_mode: rocblas_atomics_mode
+  - os_flags: rocblas_client_os
+  - gpu_arch: c_char*4
+  - api: rocblas_api
   - pad: c_uint32
+  - math_mode: c_uint32
+  - flush_batch_count: c_uint64
+  - flush_memory_size: c_uint64
   - threads: c_uint16
   - streams: c_uint16
   - devices: c_uint8
   - norm_check: c_int8
   - unit_check: c_int8
+  - res_check: c_int8
   - timing: c_int8
   - transA: c_char
   - transB: c_char
   - side: c_char
   - uplo: c_char
   - diag: c_char
+  - pointer_mode_host: c_bool
+  - pointer_mode_device: c_bool
+  - stochastic_rounding: c_bool
   - c_noalias_d: c_bool
+  - outofplace: c_bool
   - HMM: c_bool
-  - fortran: c_bool
   - graph_test: c_bool
+  - repeatability_check: c_bool
 
 # These named dictionary lists [ {dict1}, {dict2}, etc. ] supply subsets of
 # test arguments in a structured way. The dictionaries are applied to the test
@@ -455,8 +614,6 @@ Defaults:
   KU: 128
   incx: 0
   incy: 0
-  incd: 0
-  incb: 0
   alpha: 1.0
   alphai: 0.0
   beta: 0.0
@@ -467,15 +624,23 @@ Defaults:
   uplo: '*'
   diag: '*'
   batch_count: 1
+  scan: *c_scan_value
   HMM: false
   pad: 4096
+  math_mode: 0
+  flush_batch_count: 1
+  flush_memory_size: 0
   threads: 0
   streams: 0
   devices: 0
-  fortran: false
+  os_flags: ALL
+  gpu_arch: ''
+  api: C
   graph_test: false
+  repeatability_check: false
   norm_check: 0
   unit_check: 1
+  res_check: 0
   timing: 0
   iters: 10
   cold_iters: 2
@@ -486,9 +651,14 @@ Defaults:
   atomics_mode: atomics_allowed
   workspace_size: 0
   initialization: rand_int
-  arithmetic_check: no_check
   category: nightly
   known_bug_platforms: ''
   name: rocblas-bench
+  pointer_mode_host: true
+  pointer_mode_device: true
+  stochastic_rounding: false
   c_noalias_d: false
+  outofplace: false
   user_allocated_workspace: 0
+  composite_compute_type: -1
+  compute_type: -1

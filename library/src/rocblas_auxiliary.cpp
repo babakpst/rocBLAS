@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -82,47 +82,6 @@ catch(...)
 }
 
 /*******************************************************************************
- * ! \brief get int8 datatype, can be int8_t or rocblas_int8x4
- ******************************************************************************/
-extern "C" rocblas_status
-    rocblas_get_int8_type_for_hipblas(rocblas_handle                 handle,
-                                      rocblas_int8_type_for_hipblas* int8_type)
-try
-{
-    // if handle not valid
-    if(!handle)
-        return rocblas_status_invalid_handle;
-    *int8_type = handle->rocblas_int8_type;
-    if(handle->layer_mode & rocblas_layer_mode_log_trace)
-        log_trace(handle, "rocblas_get_int8_type_for_hipblas", *int8_type);
-    return rocblas_status_success;
-}
-catch(...)
-{
-    return exception_to_rocblas_status();
-}
-
-/*******************************************************************************
- * ! \brief set int8 datatype, can be int8_t or rocblas_int8x4
- ******************************************************************************/
-extern "C" rocblas_status rocblas_set_int8_type_for_hipblas(rocblas_handle                handle,
-                                                            rocblas_int8_type_for_hipblas int8_type)
-try
-{
-    // if handle not valid
-    if(!handle)
-        return rocblas_status_invalid_handle;
-    if(handle->layer_mode & rocblas_layer_mode_log_trace)
-        log_trace(handle, "rocblas_set_int8_type_for_hipblas", int8_type);
-    handle->rocblas_int8_type = int8_type;
-    return rocblas_status_success;
-}
-catch(...)
-{
-    return exception_to_rocblas_status();
-}
-
-/*******************************************************************************
  * ! \brief get atomics mode
  ******************************************************************************/
 extern "C" rocblas_status rocblas_get_atomics_mode(rocblas_handle        handle,
@@ -162,44 +121,60 @@ catch(...)
 }
 
 /*******************************************************************************
- * ! \brief query the preferable supported int8 input layout for gemm by device
+ * ! \brief get math mode
  ******************************************************************************/
-extern "C" rocblas_status rocblas_query_int8_layout_flag(rocblas_handle      handle,
-                                                         rocblas_gemm_flags* flag)
-
-// This funnction is called by hipBLAS. The default is to use int8_t only
-// for gfx908. Other architectures use int8x4. This was the behavior before
-// ROCm 4.2. Support for int8_t for all architectures was provided by
-// by the following PRs for ROCm 4.2:
-// - Tensile PR 680
-// - rocBLAS-internal PR 1328
-// Setting rocblas_int8_type in the handle will result in this function
-// selecting int8_t or int8x4 regardless of architecture. It does this by
-// either setting or clearing the rocblas_gemm_flags_pack_int8x4 bit of flags.
+extern "C" rocblas_status rocblas_get_math_mode(rocblas_handle handle, rocblas_math_mode* mode)
 try
 {
+    // if handle not valid
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    *mode = handle->math_mode;
+    if(handle->layer_mode & rocblas_layer_mode_log_trace)
+        log_trace(handle, "rocblas_get_math_mode", *mode);
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return exception_to_rocblas_status();
+}
+
+/*******************************************************************************
+ * ! \brief set math mode
+ ******************************************************************************/
+extern "C" rocblas_status rocblas_set_math_mode(rocblas_handle handle, rocblas_math_mode mode)
+try
+{
+    // if handle not valid
     if(!handle)
         return rocblas_status_invalid_handle;
 
-    if(rocblas_int8_type_for_hipblas_default == handle->rocblas_int8_type)
+    bool supported = true;
+    switch(mode)
     {
-        *flag = handle->getArch() == 908 ? rocblas_gemm_flags_none : rocblas_gemm_flags_pack_int8x4;
+    case rocblas_default_math:
+        supported = true;
+        break;
+    case rocblas_xf32_xdl_math_op:
+        supported = rocblas_internal_tensile_supports_xdl_math_op(mode);
+        break;
+    default:
+        supported = false;
+        break;
     }
-    else if(rocblas_int8_type_for_hipblas_int8 == handle->rocblas_int8_type)
+
+    if(!supported)
     {
-        *flag = rocblas_gemm_flags(*flag & (~rocblas_gemm_flags_pack_int8x4));
-    }
-    else if(rocblas_int8_type_for_hipblas_pack_int8x4 == handle->rocblas_int8_type)
-    {
-        *flag = rocblas_gemm_flags(*flag | rocblas_gemm_flags_pack_int8x4);
+        if(handle->layer_mode & rocblas_layer_mode_log_trace)
+            log_trace(handle, "rocblas_set_math_mode", mode, "is not supported");
     }
     else
     {
-        return rocblas_status_invalid_value;
+        if(handle->layer_mode & rocblas_layer_mode_log_trace)
+            log_trace(handle, "rocblas_set_math_mode", mode);
+
+        handle->math_mode = mode;
     }
-    // clear the rocblas_gemm_flags_pack_int8x4 bit
-    if(handle->layer_mode & rocblas_layer_mode_log_trace)
-        log_trace(handle, "rocblas_query_int8_layout_flag", *flag);
     return rocblas_status_success;
 }
 catch(...)
@@ -370,13 +345,15 @@ try
     if(!x_h || !y_d)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64 = size_t(elem_size);
+
     if(incx == 1 && incy == 1) // contiguous host vector -> contiguous device vector
     {
-        PRINT_IF_HIP_ERROR(hipMemcpy(y_d, x_h, elem_size * n, hipMemcpyHostToDevice));
+        PRINT_IF_HIP_ERROR(hipMemcpy(y_d, x_h, elem_size_u64 * n, hipMemcpyHostToDevice));
     }
     else // either non-contiguous host vector or non-contiguous device vector
     {
-        size_t bytes_to_copy = static_cast<size_t>(elem_size) * static_cast<size_t>(n);
+        size_t bytes_to_copy = elem_size_u64 * n;
         size_t temp_byte_size
             = bytes_to_copy < VEC_BUFF_MAX_BYTES ? bytes_to_copy : VEC_BUFF_MAX_BYTES;
         int n_elem = temp_byte_size / elem_size; // number of elements in buffer
@@ -386,15 +363,15 @@ try
         dim3 grid(blocks);
         dim3 threads(NB_X);
 
-        size_t x_h_byte_stride = (size_t)elem_size * incx;
-        size_t y_d_byte_stride = (size_t)elem_size * incy;
-        size_t t_h_byte_stride = (size_t)elem_size;
+        size_t x_h_byte_stride = elem_size_u64 * incx;
+        size_t y_d_byte_stride = elem_size_u64 * incy;
+        size_t t_h_byte_stride = elem_size_u64;
 
         for(int i_copy = 0; i_copy < n_copy; i_copy++)
         {
             int         i_start     = i_copy * n_elem;
             int         n_elem_max  = n - i_start < n_elem ? n - i_start : n_elem;
-            int         contig_size = n_elem_max * elem_size;
+            size_t      contig_size = n_elem_max * elem_size_u64;
             void*       y_d_start   = (char*)y_d + i_start * y_d_byte_stride;
             const void* x_h_start   = (const char*)x_h + i_start * x_h_byte_stride;
 
@@ -414,22 +391,22 @@ try
                 {
                     memcpy((char*)t_h + i_b * t_h_byte_stride,
                            (const char*)x_h + i_x * x_h_byte_stride,
-                           elem_size);
+                           elem_size_u64);
                 }
                 // host buffer -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, t_h, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device vector
-                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   n_elem_max,
-                                   elem_size,
-                                   t_d,
-                                   1,
-                                   y_d_start,
-                                   incy);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
+                                      grid,
+                                      threads,
+                                      0,
+                                      0,
+                                      n_elem_max,
+                                      elem_size,
+                                      t_d,
+                                      1,
+                                      y_d_start,
+                                      incy);
             }
             else if(incx == 1 && incy != 1)
             {
@@ -441,17 +418,17 @@ try
                 // contiguous host vector -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, x_h_start, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device vector
-                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   n_elem_max,
-                                   elem_size,
-                                   t_d,
-                                   1,
-                                   y_d_start,
-                                   incy);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
+                                      grid,
+                                      threads,
+                                      0,
+                                      0,
+                                      n_elem_max,
+                                      elem_size,
+                                      t_d,
+                                      1,
+                                      y_d_start,
+                                      incy);
             }
             else if(incx != 1 && incy == 1)
             {
@@ -498,13 +475,15 @@ try
     if(!x_d || !y_h)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64 = size_t(elem_size);
+
     if(incx == 1 && incy == 1) // congiguous device vector -> congiguous host vector
     {
-        PRINT_IF_HIP_ERROR(hipMemcpy(y_h, x_d, elem_size * n, hipMemcpyDeviceToHost));
+        PRINT_IF_HIP_ERROR(hipMemcpy(y_h, x_d, elem_size_u64 * n, hipMemcpyDeviceToHost));
     }
     else // either device or host vector is non-contiguous
     {
-        size_t bytes_to_copy = static_cast<size_t>(elem_size) * static_cast<size_t>(n);
+        size_t bytes_to_copy = elem_size_u64 * n;
         size_t temp_byte_size
             = bytes_to_copy < VEC_BUFF_MAX_BYTES ? bytes_to_copy : VEC_BUFF_MAX_BYTES;
         int n_elem = temp_byte_size / elem_size; // number elements in buffer
@@ -514,15 +493,15 @@ try
         dim3 grid(blocks);
         dim3 threads(NB_X);
 
-        size_t x_d_byte_stride = (size_t)elem_size * incx;
-        size_t y_h_byte_stride = (size_t)elem_size * incy;
-        size_t t_h_byte_stride = (size_t)elem_size;
+        size_t x_d_byte_stride = elem_size_u64 * incx;
+        size_t y_h_byte_stride = elem_size_u64 * incy;
+        size_t t_h_byte_stride = elem_size_u64;
 
         for(int i_copy = 0; i_copy < n_copy; i_copy++)
         {
-            int i_start           = i_copy * n_elem;
-            int n_elem_max        = n - (n_elem * i_copy) < n_elem ? n - (n_elem * i_copy) : n_elem;
-            int contig_size       = elem_size * n_elem_max;
+            int    i_start        = i_copy * n_elem;
+            int    n_elem_max     = n - (n_elem * i_copy) < n_elem ? n - (n_elem * i_copy) : n_elem;
+            size_t contig_size    = elem_size_u64 * n_elem_max;
             const void* x_d_start = (const char*)x_d + i_start * x_d_byte_stride;
             void*       y_h_start = (char*)y_h + i_start * y_h_byte_stride;
 
@@ -538,17 +517,17 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device vector -> device buffer
-                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   n_elem_max,
-                                   elem_size,
-                                   x_d_start,
-                                   incx,
-                                   t_d,
-                                   1);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
+                                      grid,
+                                      threads,
+                                      0,
+                                      0,
+                                      n_elem_max,
+                                      elem_size,
+                                      x_d_start,
+                                      incx,
+                                      t_d,
+                                      1);
                 // device buffer -> host buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_h, t_d, contig_size, hipMemcpyDeviceToHost));
                 // host buffer -> non-contiguous host vector
@@ -585,17 +564,17 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device vector -> device buffer
-                hipLaunchKernelGGL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
-                                   grid,
-                                   threads,
-                                   0,
-                                   0,
-                                   n_elem_max,
-                                   elem_size,
-                                   x_d_start,
-                                   incx,
-                                   t_d,
-                                   1);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_copy_void_ptr_vector_kernel<NB_X>),
+                                      grid,
+                                      threads,
+                                      0,
+                                      0,
+                                      n_elem_max,
+                                      elem_size,
+                                      x_d_start,
+                                      incx,
+                                      t_d,
+                                      1);
                 // device buffer -> contiguous host vector
                 PRINT_IF_HIP_ERROR(hipMemcpy(y_h_start, t_d, contig_size, hipMemcpyDeviceToHost));
             }
@@ -628,17 +607,20 @@ try
     if(!x_h || !y_d)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64 = size_t(elem_size);
+
     if(incx == 1 && incy == 1) // contiguous host vector -> contiguous device vector
     {
-        PRINT_IF_HIP_ERROR(hipMemcpyAsync(y_d, x_h, elem_size * n, hipMemcpyHostToDevice, stream));
+        PRINT_IF_HIP_ERROR(
+            hipMemcpyAsync(y_d, x_h, elem_size_u64 * n, hipMemcpyHostToDevice, stream));
     }
     else // either non-contiguous host vector or non-contiguous device vector
     {
         // pretend data is 2D to compensate for non unit increments
         PRINT_IF_HIP_ERROR(hipMemcpy2DAsync(y_d,
-                                            elem_size * incy,
+                                            elem_size_u64 * incy,
                                             x_h,
-                                            elem_size * incx,
+                                            elem_size_u64 * incx,
                                             elem_size,
                                             n,
                                             hipMemcpyHostToDevice,
@@ -671,17 +653,20 @@ try
     if(!x_d || !y_h)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64 = size_t(elem_size);
+
     if(incx == 1 && incy == 1) // congiguous device vector -> congiguous host vector
     {
-        PRINT_IF_HIP_ERROR(hipMemcpyAsync(y_h, x_d, elem_size * n, hipMemcpyDeviceToHost, stream));
+        PRINT_IF_HIP_ERROR(
+            hipMemcpyAsync(y_h, x_d, elem_size_u64 * n, hipMemcpyDeviceToHost, stream));
     }
     else // either device or host vector is non-contiguous
     {
         // pretend data is 2D to compensate for non unit increments
         PRINT_IF_HIP_ERROR(hipMemcpy2DAsync(y_h,
-                                            elem_size * incy,
+                                            elem_size_u64 * incy,
                                             x_d,
-                                            elem_size * incx,
+                                            elem_size_u64 * incx,
                                             elem_size,
                                             n,
                                             hipMemcpyDeviceToHost,
@@ -707,7 +692,7 @@ template <rocblas_int DIM_X, rocblas_int DIM_Y>
 ROCBLAS_KERNEL(DIM_X* DIM_Y)
 rocblas_copy_void_ptr_matrix_kernel(rocblas_int rows,
                                     rocblas_int cols,
-                                    size_t      elem_size,
+                                    size_t      elem_size_u64,
                                     const void* a,
                                     rocblas_int lda,
                                     void*       b,
@@ -717,9 +702,9 @@ rocblas_copy_void_ptr_matrix_kernel(rocblas_int rows,
     rocblas_int ty = blockIdx.y * blockDim.y + threadIdx.y;
 
     if(tx < rows && ty < cols)
-        memcpy((char*)b + (tx + ldb * ty) * elem_size,
-               (const char*)a + (tx + lda * ty) * elem_size,
-               elem_size);
+        memcpy((char*)b + (tx + size_t(ldb) * ty) * elem_size_u64,
+               (const char*)a + (tx + size_t(lda) * ty) * elem_size_u64,
+               elem_size_u64);
 }
 
 /*******************************************************************************
@@ -744,21 +729,22 @@ try
     if(!a_h || !b_d)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64 = size_t(elem_size);
+
     // contiguous host matrix -> contiguous device matrix
     if(lda == rows && ldb == rows)
     {
-        size_t bytes_to_copy = static_cast<size_t>(elem_size) * static_cast<size_t>(rows)
-                               * static_cast<size_t>(cols);
+        size_t bytes_to_copy = elem_size_u64 * rows * cols;
         PRINT_IF_HIP_ERROR(hipMemcpy(b_d, a_h, bytes_to_copy, hipMemcpyHostToDevice));
     }
-    // matrix colums too large to fit in temp buffer, copy matrix col by col
-    else if(rows * elem_size > MAT_BUFF_MAX_BYTES)
+    // matrix columns too large to fit in temp buffer, copy matrix col by col
+    else if(rows * elem_size_u64 > MAT_BUFF_MAX_BYTES)
     {
         for(size_t i = 0; i < cols; i++)
         {
-            PRINT_IF_HIP_ERROR(hipMemcpy((char*)b_d + ldb * i * elem_size,
-                                         (const char*)a_h + lda * i * elem_size,
-                                         (size_t)elem_size * rows,
+            PRINT_IF_HIP_ERROR(hipMemcpy((char*)b_d + ldb * i * elem_size_u64,
+                                         (const char*)a_h + lda * i * elem_size_u64,
+                                         elem_size_u64 * rows,
                                          hipMemcpyHostToDevice));
         }
     }
@@ -766,11 +752,10 @@ try
     // columns
     else
     {
-        size_t bytes_to_copy = static_cast<size_t>(elem_size) * static_cast<size_t>(rows)
-                               * static_cast<size_t>(cols);
+        size_t bytes_to_copy = elem_size_u64 * rows * cols;
         size_t temp_byte_size
             = bytes_to_copy < MAT_BUFF_MAX_BYTES ? bytes_to_copy : MAT_BUFF_MAX_BYTES;
-        int n_cols = temp_byte_size / (elem_size * rows); // number of columns in buffer
+        int n_cols = temp_byte_size / (elem_size_u64 * rows); // number of columns in buffer
         int n_copy = ((cols - 1) / n_cols) + 1; // number of times buffer is copied
 
         rocblas_int blocksX = ((rows - 1) / MATRIX_DIM_X) + 1; // parameters for device kernel
@@ -778,15 +763,15 @@ try
         dim3        grid(blocksX, blocksY);
         dim3        threads(MATRIX_DIM_X, MATRIX_DIM_Y);
 
-        size_t lda_h_byte = (size_t)elem_size * lda;
-        size_t ldb_d_byte = (size_t)elem_size * ldb;
-        size_t ldt_h_byte = (size_t)elem_size * rows;
+        size_t lda_h_byte = elem_size_u64 * lda;
+        size_t ldb_d_byte = elem_size_u64 * ldb;
+        size_t ldt_h_byte = elem_size_u64 * rows;
 
         for(int i_copy = 0; i_copy < n_copy; i_copy++)
         {
             size_t      i_start     = i_copy * n_cols;
             int         n_cols_max  = cols - i_start < n_cols ? cols - i_start : n_cols;
-            int         contig_size = elem_size * rows * n_cols_max;
+            size_t      contig_size = elem_size_u64 * rows * n_cols_max;
             void*       b_d_start   = (char*)b_d + i_start * ldb_d_byte;
             const void* a_h_start   = (const char*)a_h + i_start * lda_h_byte;
 
@@ -811,7 +796,7 @@ try
                 // host buffer -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, t_h, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device matrix
-                hipLaunchKernelGGL(
+                ROCBLAS_LAUNCH_KERNEL(
                     (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
                     grid,
                     threads,
@@ -819,7 +804,7 @@ try
                     0,
                     rows,
                     n_cols_max,
-                    elem_size,
+                    elem_size_u64,
                     t_d,
                     rows,
                     b_d_start,
@@ -835,7 +820,7 @@ try
                 // contiguous host matrix -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, a_h_start, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device matrix
-                hipLaunchKernelGGL(
+                ROCBLAS_LAUNCH_KERNEL(
                     (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
                     grid,
                     threads,
@@ -843,7 +828,7 @@ try
                     0,
                     rows,
                     n_cols_max,
-                    elem_size,
+                    elem_size_u64,
                     t_d,
                     rows,
                     b_d_start,
@@ -897,20 +882,22 @@ try
     if(!a_d || !b_h)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64 = size_t(elem_size);
+
     // congiguous device matrix -> congiguous host matrix
     if(lda == rows && ldb == rows)
     {
-        size_t bytes_to_copy = elem_size * static_cast<size_t>(rows) * cols;
+        size_t bytes_to_copy = elem_size_u64 * rows * cols;
         PRINT_IF_HIP_ERROR(hipMemcpy(b_h, a_d, bytes_to_copy, hipMemcpyDeviceToHost));
     }
     // columns too large for temp buffer, hipMemcpy column by column
-    else if(rows * elem_size > MAT_BUFF_MAX_BYTES)
+    else if(rows * elem_size_u64 > MAT_BUFF_MAX_BYTES)
     {
         for(size_t i = 0; i < cols; i++)
         {
             PRINT_IF_HIP_ERROR(hipMemcpy((char*)b_h + i * ldb * elem_size,
                                          (const char*)a_d + i * lda * elem_size,
-                                         elem_size * rows,
+                                         elem_size_u64 * rows,
                                          hipMemcpyDeviceToHost));
         }
     }
@@ -918,10 +905,10 @@ try
     // columns
     else
     {
-        size_t bytes_to_copy = elem_size * static_cast<size_t>(rows) * cols;
+        size_t bytes_to_copy = elem_size_u64 * rows * cols;
         size_t temp_byte_size
             = bytes_to_copy < MAT_BUFF_MAX_BYTES ? bytes_to_copy : MAT_BUFF_MAX_BYTES;
-        int n_cols = temp_byte_size / (elem_size * rows); // number of columns in buffer
+        int n_cols = temp_byte_size / (elem_size_u64 * rows); // number of columns in buffer
         int n_copy = ((cols - 1) / n_cols) + 1; // number times buffer copied
 
         rocblas_int blocksX = ((rows - 1) / MATRIX_DIM_X) + 1; // parameters for device kernel
@@ -929,15 +916,15 @@ try
         dim3        grid(blocksX, blocksY);
         dim3        threads(MATRIX_DIM_X, MATRIX_DIM_Y);
 
-        size_t lda_d_byte = (size_t)elem_size * lda;
-        size_t ldb_h_byte = (size_t)elem_size * ldb;
-        size_t ldt_h_byte = (size_t)elem_size * rows;
+        size_t lda_d_byte = elem_size_u64 * lda;
+        size_t ldb_h_byte = elem_size_u64 * ldb;
+        size_t ldt_h_byte = elem_size_u64 * rows;
 
         for(int i_copy = 0; i_copy < n_copy; i_copy++)
         {
             int         i_start     = i_copy * n_cols;
             int         n_cols_max  = cols - i_start < n_cols ? cols - i_start : n_cols;
-            size_t      contig_size = elem_size * (size_t)rows * n_cols_max;
+            size_t      contig_size = elem_size_u64 * rows * n_cols_max;
             const void* a_d_start   = (const char*)a_d + i_start * lda_d_byte;
             void*       b_h_start   = (char*)b_h + i_start * ldb_h_byte;
             if(lda != rows && ldb != rows)
@@ -952,7 +939,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device matrix -> device buffer
-                hipLaunchKernelGGL(
+                ROCBLAS_LAUNCH_KERNEL(
                     (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
                     grid,
                     threads,
@@ -960,7 +947,7 @@ try
                     0,
                     rows,
                     n_cols_max,
-                    elem_size,
+                    elem_size_u64,
                     a_d_start,
                     lda,
                     t_d,
@@ -1000,7 +987,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device matrix -> device buffer
-                hipLaunchKernelGGL(
+                ROCBLAS_LAUNCH_KERNEL(
                     (rocblas_copy_void_ptr_matrix_kernel<MATRIX_DIM_X, MATRIX_DIM_Y>),
                     grid,
                     threads,
@@ -1008,7 +995,7 @@ try
                     0,
                     rows,
                     n_cols_max,
-                    elem_size,
+                    elem_size_u64,
                     a_d_start,
                     lda,
                     t_d,
@@ -1047,20 +1034,22 @@ try
     if(!a_h || !b_d)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64(elem_size);
+
     // contiguous host matrix -> contiguous device matrix
     if(lda == rows && ldb == rows)
     {
-        size_t bytes_to_copy = size_t(elem_size) * rows * cols;
+        size_t bytes_to_copy = elem_size_u64 * rows * cols;
         PRINT_IF_HIP_ERROR(hipMemcpyAsync(b_d, a_h, bytes_to_copy, hipMemcpyHostToDevice, stream));
     }
     else
     {
         // width is column vector in matrix
         PRINT_IF_HIP_ERROR(hipMemcpy2DAsync(b_d,
-                                            size_t(elem_size) * ldb,
+                                            elem_size_u64 * ldb,
                                             a_h,
-                                            size_t(elem_size) * lda,
-                                            size_t(elem_size) * rows,
+                                            elem_size_u64 * lda,
+                                            elem_size_u64 * rows,
                                             cols,
                                             hipMemcpyHostToDevice,
                                             stream));
@@ -1095,20 +1084,22 @@ try
     if(!a_d || !b_h)
         return rocblas_status_invalid_pointer;
 
+    size_t elem_size_u64(elem_size);
+
     // contiguous host matrix -> contiguous device matrix
     if(lda == rows && ldb == rows)
     {
-        size_t bytes_to_copy = size_t(elem_size) * rows * cols;
+        size_t bytes_to_copy = elem_size_u64 * rows * cols;
         PRINT_IF_HIP_ERROR(hipMemcpyAsync(b_h, a_d, bytes_to_copy, hipMemcpyDeviceToHost, stream));
     }
     else
     {
         // width is column vector in matrix
         PRINT_IF_HIP_ERROR(hipMemcpy2DAsync(b_h,
-                                            size_t(elem_size) * ldb,
+                                            elem_size_u64 * ldb,
                                             a_d,
-                                            size_t(elem_size) * lda,
-                                            size_t(elem_size) * rows,
+                                            elem_size_u64 * lda,
+                                            elem_size_u64 * rows,
                                             cols,
                                             hipMemcpyDeviceToHost,
                                             stream));
@@ -1142,6 +1133,8 @@ extern "C" const char* rocblas_status_to_string(rocblas_status status)
         CASE(rocblas_status_invalid_value);
         CASE(rocblas_status_continue);
         CASE(rocblas_status_check_numerics_fail);
+        CASE(rocblas_status_excluded_from_build);
+        CASE(rocblas_status_arch_mismatch);
     }
 #undef CASE
     // We don't use default: so that the compiler warns us if any valid enums are missing
@@ -1171,13 +1164,13 @@ extern "C" rocblas_status rocblas_set_start_stop_events(rocblas_handle handle,
 template <typename...>
 using void_t = void;
 
-// By default, use gcnArch converted to a string prepended by gfx
+// If gcnArchName not present, return empty string
 template <typename PROP, typename = void>
 struct ArchName
 {
     std::string operator()(const PROP& prop) const
     {
-        return "gfx" + std::to_string(prop.gcnArch);
+        return "";
     }
 };
 
@@ -1194,9 +1187,52 @@ struct ArchName<PROP, void_t<decltype(PROP::gcnArchName)>>
     }
 };
 
+// If gcnArchName not present, no xnack mode
+template <typename PROP, typename = void>
+struct XnackMode
+{
+    std::string operator()(const PROP& prop) const
+    {
+        return "";
+    }
+};
+
+// If gcnArchName exists as a member, use it
+template <typename PROP>
+struct XnackMode<PROP, void_t<decltype(PROP::gcnArchName)>>
+{
+    std::string operator()(const PROP& prop) const
+    {
+        // strip out xnack/ecc from name
+        std::string gcnArchName(prop.gcnArchName);
+        auto        loc = gcnArchName.find("xnack");
+        std::string xnackMode;
+        if(loc != std::string::npos)
+        {
+            xnackMode = gcnArchName.substr(loc, 6);
+            // guard against missing +/- at end of xnack mode
+            if(xnackMode.size() < 6)
+                xnackMode = "";
+        }
+        return xnackMode;
+    }
+};
+
 bool rocblas_internal_tensile_supports_ldc_ne_ldd(rocblas_handle handle)
 {
     return handle->getArch() >= 906;
+}
+
+bool rocblas_internal_tensile_supports_xdl_math_op(rocblas_math_mode mode)
+{
+    int deviceId;
+    hipGetDevice(&deviceId);
+    hipDeviceProp_t deviceProperties;
+    hipGetDeviceProperties(&deviceProperties, deviceId);
+    std::string deviceString(deviceProperties.gcnArchName);
+    return ((deviceString.find("gfx940") != std::string::npos)
+            || (deviceString.find("gfx941") != std::string::npos)
+            || (deviceString.find("gfx942") != std::string::npos));
 }
 
 // exported. Get architecture name
@@ -1207,6 +1243,16 @@ std::string rocblas_internal_get_arch_name()
     hipDeviceProp_t deviceProperties;
     hipGetDeviceProperties(&deviceProperties, deviceId);
     return ArchName<hipDeviceProp_t>{}(deviceProperties);
+}
+
+// exported. Get xnack mode
+std::string rocblas_internal_get_xnack_mode()
+{
+    int deviceId;
+    hipGetDevice(&deviceId);
+    hipDeviceProp_t deviceProperties;
+    hipGetDeviceProperties(&deviceProperties, deviceId);
+    return XnackMode<hipDeviceProp_t>{}(deviceProperties);
 }
 
 /*******************************************************************************

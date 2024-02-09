@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2019-2023 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -21,6 +21,7 @@
  * ************************************************************************ */
 
 #include "../blas1/rocblas_copy.hpp"
+#include "../blas1/rocblas_copy_kernels.hpp"
 #include "check_numerics_vector.hpp"
 #include "handle.hpp"
 #include "rocblas_tbmv.hpp"
@@ -32,12 +33,12 @@
 template <rocblas_int DIM_Y, typename T>
 __device__ T rocblas_tbmvn_kernel_helper(rocblas_int ty,
                                          rocblas_int ind,
-                                         bool        upper,
-                                         bool        diag,
-                                         rocblas_int m,
+                                         bool        is_upper,
+                                         bool        is_unit_diag,
+                                         rocblas_int n,
                                          rocblas_int k,
                                          const T*    A,
-                                         rocblas_int lda,
+                                         int64_t     lda,
                                          const T*    w_x_copy)
 {
     T           res_A = 0.0;
@@ -45,33 +46,33 @@ __device__ T rocblas_tbmvn_kernel_helper(rocblas_int ty,
 
     // Since the column is consistent, we can iterate up the diagonal
     // ty defines the column of banded & regular matrix
-    for(col = ty; col < m; col += DIM_Y)
+    for(col = ty; col < n; col += DIM_Y)
     {
         // We have to convert ind to banded matrix row
-        rocblas_int row = upper ? ind + (k - col) : ind - col;
+        rocblas_int row = is_upper ? ind + (k - col) : ind - col;
 
-        if(ind < m)
+        if(ind < n)
         {
             // Regular case, simply multiply
             if(row < k && row > 0)
             {
-                res_A += (A[row + col * lda] * w_x_copy[col]);
+                res_A += (A[row + col * size_t(lda)] * w_x_copy[col]);
             }
             else if(row == 0)
             {
                 // If main diagonal && diag, don't reference matrix, assume 1.
-                if(diag && (!upper || k == 0 && upper))
+                if(is_unit_diag && (!is_upper || k == 0 && is_upper))
                     res_A += w_x_copy[col];
                 else
-                    res_A += (A[row + col * lda] * w_x_copy[col]);
+                    res_A += (A[row + col * size_t(lda)] * w_x_copy[col]);
             }
             else if(row == k)
             {
                 // If diag, don't reference matrix, assume 1.
-                if(diag && upper)
+                if(is_unit_diag && is_upper)
                     res_A += w_x_copy[col];
                 else
-                    res_A += (A[row + col * lda] * w_x_copy[col]);
+                    res_A += (A[row + col * size_t(lda)] * w_x_copy[col]);
             }
         }
     }
@@ -89,64 +90,62 @@ template <rocblas_int DIM_Y, typename T>
 __device__ T rocblas_tbmvt_kernel_helper(bool        CONJ,
                                          rocblas_int ty,
                                          rocblas_int ind,
-                                         bool        upper,
-                                         bool        diag,
-                                         rocblas_int m,
+                                         bool        is_upper,
+                                         bool        is_unit_diag,
+                                         rocblas_int n,
                                          rocblas_int k,
                                          const T*    A,
-                                         rocblas_int lda,
+                                         int64_t     lda,
                                          const T*    w_x_copy)
 {
     T           res_A = 0.0;
     rocblas_int row;
 
     // for transpose case, ty defines the row
-    for(row = ty; row < lda; row += DIM_Y)
+    for(row = ty; row < lda && row <= k; row += DIM_Y)
     {
         // We have to convert ind to banded matrix row
         rocblas_int col = ind;
 
-        if(col < m)
+        if(col < n)
         {
-            if(upper)
+            if(is_upper)
             {
                 // Regular case
                 rocblas_int min_row = k - col;
                 // cppcheck-suppress knownConditionTrueFalse
                 if(row < k && row >= k - col && row != k)
                 {
-                    res_A += ((CONJ ? conj(A[row + col * lda]) : A[row + col * lda])
+                    res_A += ((CONJ ? conj(A[row + col * size_t(lda)]) : A[row + col * size_t(lda)])
                               * w_x_copy[row - min_row]);
                 }
                 else if(row == k)
                 {
                     // if main diagonal && diag then don't reference A, assume 1.
-                    if(diag)
+                    if(is_unit_diag)
                         res_A += w_x_copy[row - min_row];
                     else
-                        res_A += ((CONJ ? conj(A[row + col * lda]) : A[row + col * lda])
+                        res_A += ((CONJ ? conj(A[row + col * size_t(lda)])
+                                        : A[row + col * size_t(lda)])
                                   * w_x_copy[row - min_row]);
                 }
-                else if(row > k)
-                    break;
             }
             else
             {
-                if(row <= k && row <= m - 1 - col && row > 0)
+                if(row <= k && row <= n - 1 - col && row > 0)
                 {
-                    res_A += ((CONJ ? conj(A[row + col * lda]) : A[row + col * lda])
+                    res_A += ((CONJ ? conj(A[row + col * size_t(lda)]) : A[row + col * size_t(lda)])
                               * w_x_copy[row + col]);
                 }
                 else if(row == 0)
                 {
-                    if(diag)
+                    if(is_unit_diag)
                         res_A += w_x_copy[row + col];
                     else
-                        res_A += ((CONJ ? conj(A[row + col * lda]) : A[row + col * lda])
+                        res_A += ((CONJ ? conj(A[row + col * size_t(lda)])
+                                        : A[row + col * size_t(lda)])
                                   * w_x_copy[row + col]);
                 }
-                else if(row > k)
-                    break;
             }
         }
     }
@@ -158,15 +157,15 @@ __device__ T rocblas_tbmvt_kernel_helper(bool        CONJ,
   */
 template <rocblas_int DIM_X, rocblas_int DIM_Y, typename T>
 ROCBLAS_KERNEL_ILF void rocblas_tbmvx_kernel_calc(rocblas_operation transA,
-                                                  bool              upper,
-                                                  bool              diag,
-                                                  rocblas_int       m,
+                                                  bool              is_upper,
+                                                  bool              is_unit_diag,
+                                                  rocblas_int       n,
                                                   rocblas_int       k,
                                                   const T*          A,
-                                                  rocblas_int       lda,
+                                                  int64_t           lda,
                                                   const T*          w_x_copy,
                                                   T*                x,
-                                                  rocblas_int       incx)
+                                                  int64_t           incx)
 {
     rocblas_int thread_id = threadIdx.x + threadIdx.y * blockDim.x;
 
@@ -187,13 +186,14 @@ ROCBLAS_KERNEL_ILF void rocblas_tbmvx_kernel_calc(rocblas_operation transA,
     // if more elegant logic is used.
     if(transA == rocblas_operation_none)
     {
-        res_A = rocblas_tbmvn_kernel_helper<DIM_Y>(ty, ind, upper, diag, m, k, A, lda, w_x_copy);
+        res_A = rocblas_tbmvn_kernel_helper<DIM_Y>(
+            ty, ind, is_upper, is_unit_diag, n, k, A, lda, w_x_copy);
     }
     else
     {
         bool CONJ = transA == rocblas_operation_conjugate_transpose;
         res_A     = rocblas_tbmvt_kernel_helper<DIM_Y>(
-            CONJ, ty, ind, upper, diag, m, k, A, lda, w_x_copy);
+            CONJ, ty, ind, is_upper, is_unit_diag, n, k, A, lda, w_x_copy);
     }
     // Store partial sums for the diagonal
     sdata[tx + ty * DIM_X] = res_A;
@@ -201,7 +201,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbmvx_kernel_calc(rocblas_operation transA,
 
     thread_id = threadIdx.x + threadIdx.y * blockDim.x;
     ind       = blockIdx.x * DIM_X + thread_id;
-    if(thread_id < DIM_X && ind < m)
+    if(thread_id < DIM_X && ind < n)
     {
         // Add the partial sums of each diagonal and store
         for(rocblas_int i = 1; i < DIM_Y; i++)
@@ -210,7 +210,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbmvx_kernel_calc(rocblas_operation transA,
         }
 
         // Update x.
-        x[ind * incx] = (sdata[thread_id]);
+        x[ind * int64_t(incx)] = (sdata[thread_id]);
     }
 }
 
@@ -226,7 +226,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbmvx_kernel_calc(rocblas_operation transA,
   *  the k'th super-diagonal resides on the right-hand side of the first row, k-1th on the second,
   *  etc, with the main diagonal on the k'th row.
   *
-  *  Ex: (upper; m = 5; k = 2)
+  *  Ex: (upper; n = 5; k = 2)
   *
   *  1 6 9 0 0              0 0 9 8 7
   *  0 2 7 8 0              0 6 7 8 9
@@ -237,7 +237,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbmvx_kernel_calc(rocblas_operation transA,
   *  For lower-triangular, the main diagonal resides on the 0'th row, working up to the k'th
   *  sub-diagonal residing on the left-hand side of the k'th row.
   *
-  *  Ex: (lower; m = 5; k = 2)
+  *  Ex: (lower; n = 5; k = 2)
   *
   *  1 0 0 0 0              1 2 3 4 5
   *  6 2 0 0 0              6 7 8 9 0
@@ -252,18 +252,18 @@ ROCBLAS_KERNEL_ILF void rocblas_tbmvx_kernel_calc(rocblas_operation transA,
 template <rocblas_int DIM_X, rocblas_int DIM_Y, typename U, typename V>
 ROCBLAS_KERNEL(DIM_X* DIM_Y)
 rocblas_tbmvx_kernel(rocblas_operation transA,
-                     bool              upper,
-                     bool              diag,
-                     rocblas_int       m,
+                     bool              is_upper,
+                     bool              is_unit_diag,
+                     rocblas_int       n,
                      rocblas_int       k,
                      U                 Aa,
                      rocblas_stride    shifta,
-                     rocblas_int       lda,
+                     int64_t           lda,
                      rocblas_stride    strideA,
                      U                 w_xa_copy,
                      V                 xa,
                      rocblas_stride    shiftx,
-                     rocblas_int       incx,
+                     int64_t           incx,
                      rocblas_stride    stridex)
 {
     rocblas_int num_threads = blockDim.x * blockDim.y * blockDim.z;
@@ -271,84 +271,96 @@ rocblas_tbmvx_kernel(rocblas_operation transA,
         return; // need to launch exactly the same number of threads as template parameters indicate
 
     const auto* A        = load_ptr_batch(Aa, blockIdx.y, shifta, strideA);
-    const auto* w_x_copy = load_ptr_batch(w_xa_copy, blockIdx.y, 0, m);
+    const auto* w_x_copy = load_ptr_batch(w_xa_copy, blockIdx.y, 0, n);
     auto*       x        = load_ptr_batch(xa, blockIdx.y, shiftx, stridex);
 
-    rocblas_tbmvx_kernel_calc<DIM_X, DIM_Y>(transA, upper, diag, m, k, A, lda, w_x_copy, x, incx);
+    rocblas_tbmvx_kernel_calc<DIM_X, DIM_Y>(
+        transA, is_upper, is_unit_diag, n, k, A, lda, w_x_copy, x, incx);
 }
 
 /**
   *  First, makes a copy of 'x', then uses a modified gemv algorithm
   *  to perform x := transA(A) * w_x_copy
-  *  w_x_copy is workspace memory and should be of size sizeof(T) * m bytes * batch_count.
+  *  w_x_copy is workspace memory and should be of size sizeof(T) * n bytes * batch_count.
   *
-  *  Here, U is either a `const T* const*` or a `const T*`
-  *  V is either a `T*` or a `T* const*`
+  *  Here, TConstPtr is either a `const T* const*` or a `const T*`
+  *  TPtr is either a `T*` or a `T* const*`
   */
-template <typename U, typename V>
-rocblas_status rocblas_tbmv_template(rocblas_handle    handle,
-                                     rocblas_fill      uplo,
-                                     rocblas_operation transA,
-                                     rocblas_diagonal  diag,
-                                     rocblas_int       m,
-                                     rocblas_int       k,
-                                     U                 A,
-                                     rocblas_stride    offseta,
-                                     rocblas_int       lda,
-                                     rocblas_stride    strideA,
-                                     V                 x,
-                                     rocblas_stride    offsetx,
-                                     rocblas_int       incx,
-                                     rocblas_stride    stridex,
-                                     rocblas_int       batch_count,
-                                     V                 w_x_copy)
+template <typename TConstPtr, typename TPtr>
+rocblas_status rocblas_internal_tbmv_launcher(rocblas_handle    handle,
+                                              rocblas_fill      uplo,
+                                              rocblas_operation transA,
+                                              rocblas_diagonal  diag,
+                                              rocblas_int       n,
+                                              rocblas_int       k,
+                                              TConstPtr         A,
+                                              rocblas_stride    offseta,
+                                              int64_t           lda,
+                                              rocblas_stride    strideA,
+                                              TPtr              x,
+                                              rocblas_stride    offsetx,
+                                              int64_t           incx,
+                                              rocblas_stride    stridex,
+                                              rocblas_int       batch_count,
+                                              TPtr              w_x_copy)
 {
     // quick return
-    if(!m || !batch_count)
+    if(!n || !batch_count)
         return rocblas_status_success;
 
     // First we make a copy of x so we can avoid RAW race conditions in the kernel
-    int  copy_blocks = (m - 1) / 256 + 1;
-    dim3 copy_grid(copy_blocks, batch_count);
-    dim3 copy_threads(256);
+    rocblas_status copy_status;
+    if(incx > c_i32_max)
+        copy_status
+            = rocblas_internal_copy_launcher<int64_t, ROCBLAS_COPY_NB>(handle,
+                                                                       int64_t(n),
+                                                                       x,
+                                                                       offsetx,
+                                                                       incx,
+                                                                       stridex,
+                                                                       w_x_copy,
+                                                                       0,
+                                                                       int64_t(1),
+                                                                       n,
+                                                                       int64_t(batch_count));
+    else
+        copy_status = rocblas_internal_copy_template<rocblas_int>(
+            handle, n, x, offsetx, incx, stridex, w_x_copy, 0, 1, n, batch_count);
 
-    rocblas_status status = rocblas_copy_template<false, 256>(
-        handle, m, x, offsetx, incx, stridex, w_x_copy, 0, 1, m, batch_count);
-
-    if(status != rocblas_status_success)
-        return status;
+    if(copy_status != rocblas_status_success)
+        return copy_status;
 
     // in case of negative inc shift pointer to end of data for negative indexing tid*inc
-    ptrdiff_t shiftx = incx < 0 ? offsetx - ptrdiff_t(incx) * (m - 1) : offsetx;
+    ptrdiff_t shiftx = incx < 0 ? offsetx - ptrdiff_t(incx) * (n - 1) : offsetx;
 
     // (gemv) TBMVX_DIM_Y must be at least 4, 8 * 8 is very slow only 40Gflop/s
     static constexpr int TBMVX_DIM_X = 64;
     static constexpr int TBMVX_DIM_Y = 16;
-    rocblas_int          blocks      = (m - 1) / (TBMVX_DIM_X) + 1;
+    rocblas_int          blocks      = (n - 1) / (TBMVX_DIM_X) + 1;
     dim3                 tbmvx_grid(blocks, batch_count);
     dim3                 tbmvx_threads(TBMVX_DIM_X, TBMVX_DIM_Y);
 
     // Launch a modified gemv kernel. The logic is similar to gemv just with modified
     // indices for the banded matrices.
-    hipLaunchKernelGGL((rocblas_tbmvx_kernel<TBMVX_DIM_X, TBMVX_DIM_Y>),
-                       tbmvx_grid,
-                       tbmvx_threads,
-                       0,
-                       handle->get_stream(),
-                       transA,
-                       uplo == rocblas_fill_upper,
-                       diag == rocblas_diagonal_unit,
-                       m,
-                       k,
-                       A,
-                       offseta,
-                       lda,
-                       strideA,
-                       (U)w_x_copy,
-                       x,
-                       shiftx,
-                       incx,
-                       stridex);
+    ROCBLAS_LAUNCH_KERNEL((rocblas_tbmvx_kernel<TBMVX_DIM_X, TBMVX_DIM_Y>),
+                          tbmvx_grid,
+                          tbmvx_threads,
+                          0,
+                          handle->get_stream(),
+                          transA,
+                          uplo == rocblas_fill_upper,
+                          diag == rocblas_diagonal_unit,
+                          n,
+                          k,
+                          A,
+                          offseta,
+                          lda,
+                          strideA,
+                          (TConstPtr)w_x_copy,
+                          x,
+                          shiftx,
+                          incx,
+                          stridex);
 
     return rocblas_status_success;
 }
@@ -357,23 +369,23 @@ rocblas_status rocblas_tbmv_template(rocblas_handle    handle,
 template <typename T, typename U>
 rocblas_status rocblas_tbmv_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
-                                           rocblas_int    m,
+                                           int64_t        n,
                                            T              A,
                                            rocblas_stride offset_a,
-                                           rocblas_int    lda,
+                                           int64_t        lda,
                                            rocblas_stride stride_a,
                                            U              x,
                                            rocblas_stride offset_x,
-                                           rocblas_int    inc_x,
+                                           int64_t        inc_x,
                                            rocblas_stride stride_x,
-                                           rocblas_int    batch_count,
+                                           int64_t        batch_count,
                                            const int      check_numerics,
                                            bool           is_input)
 {
     rocblas_status check_numerics_status
         = rocblas_internal_check_numerics_vector_template(function_name,
                                                           handle,
-                                                          m,
+                                                          n,
                                                           x,
                                                           offset_x,
                                                           inc_x,
@@ -390,54 +402,54 @@ rocblas_status rocblas_tbmv_check_numerics(const char*    function_name,
 
 // clang-format off
 
-#ifdef INSTANTIATE_TBMV_TEMPLATE
-#error INSTANTIATE_TBMV_TEMPLATE  already defined
+#ifdef INSTANTIATE_TBMV_LAUNCHER
+#error INSTANTIATE_TBMV_LAUNCHER  already defined
 #endif
 
-#define INSTANTIATE_TBMV_TEMPLATE(U_, V_)                           \
-template rocblas_status rocblas_tbmv_template<U_, V_>               \
+#define INSTANTIATE_TBMV_LAUNCHER(U_, V_)                           \
+template rocblas_status rocblas_internal_tbmv_launcher<U_, V_>      \
                                     (rocblas_handle    handle,      \
                                      rocblas_fill      uplo,        \
                                      rocblas_operation transA,      \
                                      rocblas_diagonal  diag,        \
-                                     rocblas_int       m,           \
+                                     rocblas_int       n,           \
                                      rocblas_int       k,           \
-                                     U_                 A,          \
+                                     U_                A,           \
                                      rocblas_stride    offseta,     \
-                                     rocblas_int       lda,         \
+                                     int64_t           lda,         \
                                      rocblas_stride    strideA,     \
-                                     V_                 x,          \
+                                     V_                x,           \
                                      rocblas_stride    offsetx,     \
-                                     rocblas_int       incx,        \
+                                     int64_t           incx,        \
                                      rocblas_stride    stridex,     \
                                      rocblas_int       batch_count, \
-                                     V_                 w_x_copy);
+                                     V_                w_x_copy);
 
-INSTANTIATE_TBMV_TEMPLATE(float const*, float*)
-INSTANTIATE_TBMV_TEMPLATE(double const*, double*)
-INSTANTIATE_TBMV_TEMPLATE(rocblas_float_complex const*, rocblas_float_complex*)
-INSTANTIATE_TBMV_TEMPLATE(rocblas_double_complex const*, rocblas_double_complex*)
-INSTANTIATE_TBMV_TEMPLATE(float const* const*, float* const*)
-INSTANTIATE_TBMV_TEMPLATE(double const* const*, double* const*)
-INSTANTIATE_TBMV_TEMPLATE(rocblas_float_complex const* const*, rocblas_float_complex* const*)
-INSTANTIATE_TBMV_TEMPLATE(rocblas_double_complex const* const*, rocblas_double_complex* const*)
+INSTANTIATE_TBMV_LAUNCHER(float const*, float*)
+INSTANTIATE_TBMV_LAUNCHER(double const*, double*)
+INSTANTIATE_TBMV_LAUNCHER(rocblas_float_complex const*, rocblas_float_complex*)
+INSTANTIATE_TBMV_LAUNCHER(rocblas_double_complex const*, rocblas_double_complex*)
+INSTANTIATE_TBMV_LAUNCHER(float const* const*, float* const*)
+INSTANTIATE_TBMV_LAUNCHER(double const* const*, double* const*)
+INSTANTIATE_TBMV_LAUNCHER(rocblas_float_complex const* const*, rocblas_float_complex* const*)
+INSTANTIATE_TBMV_LAUNCHER(rocblas_double_complex const* const*, rocblas_double_complex* const*)
 
-#undef INSTANTIATE_TBMV_TEMPLATE
+#undef INSTANTIATE_TBMV_LAUNCHER
 
 #define INSTANTIATE_TBMV_NUMERICS(T, U_)                                  \
 template rocblas_status rocblas_tbmv_check_numerics<T, U_>                \
                                           (const char*    function_name,  \
                                            rocblas_handle handle,         \
-                                           rocblas_int    m,              \
+                                           int64_t        n,              \
                                            T              A,              \
-                                           rocblas_stride    offset_a,       \
-                                           rocblas_int    lda,            \
+                                           rocblas_stride offset_a,       \
+                                           int64_t        lda,            \
                                            rocblas_stride stride_a,       \
-                                           U_              x,             \
-                                           rocblas_stride    offset_x,       \
-                                           rocblas_int    inc_x,          \
+                                           U_             x,              \
+                                           rocblas_stride offset_x,       \
+                                           int64_t        inc_x,          \
                                            rocblas_stride stride_x,       \
-                                           rocblas_int    batch_count,    \
+                                           int64_t        batch_count,    \
                                            const int      check_numerics, \
                                            bool           is_input);
 

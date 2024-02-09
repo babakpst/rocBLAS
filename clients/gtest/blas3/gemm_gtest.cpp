@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -26,7 +26,6 @@
 #include "testing_gemm_batched.hpp"
 #include "testing_gemm_batched_ex.hpp"
 #include "testing_gemm_ex.hpp"
-#include "testing_gemm_ext2.hpp"
 #include "testing_gemm_strided_batched.hpp"
 #include "testing_gemm_strided_batched_ex.hpp"
 #include "type_dispatch.hpp"
@@ -45,7 +44,6 @@ namespace
         GEMM_BATCHED_EX,
         GEMM_STRIDED_BATCHED,
         GEMM_STRIDED_BATCHED_EX,
-        GEMM_EXT2,
     };
 
     // ----------------------------------------------------------------------------
@@ -100,10 +98,6 @@ namespace
             case GEMM_STRIDED_BATCHED_EX:
                 return !strcmp(arg.function, "gemm_strided_batched_ex")
                        || !strcmp(arg.function, "gemm_strided_batched_ex_bad_arg");
-
-            case GEMM_EXT2:
-                return !strcmp(arg.function, "gemm_ext2")
-                       || !strcmp(arg.function, "gemm_ext2_bad_arg");
 #endif
             }
 
@@ -123,8 +117,7 @@ namespace
             else
             {
                 constexpr bool isEx = GEMM_TYPE == GEMM_EX || GEMM_TYPE == GEMM_BATCHED_EX
-                                      || GEMM_TYPE == GEMM_STRIDED_BATCHED_EX
-                                      || GEMM_TYPE == GEMM_EXT2;
+                                      || GEMM_TYPE == GEMM_STRIDED_BATCHED_EX;
                 constexpr bool isBatched
                     = (GEMM_TYPE == GEMM_STRIDED_BATCHED || GEMM_TYPE == GEMM_STRIDED_BATCHED_EX
                        || GEMM_TYPE == GEMM_BATCHED || GEMM_TYPE == GEMM_BATCHED_EX);
@@ -148,9 +141,12 @@ namespace
 
                 if(GEMM_TYPE == GEMM_STRIDED_BATCHED || GEMM_TYPE == GEMM_STRIDED_BATCHED_EX)
                     name << '_' << arg.stride_a << '_' << arg.stride_b << '_' << arg.stride_c;
+
+                if(arg.math_mode == rocblas_xf32_xdl_math_op)
+                    name << "_xf32";
             }
 
-            if(arg.fortran)
+            if(arg.api == FORTRAN)
             {
                 name << "_F";
             }
@@ -180,7 +176,7 @@ namespace
         T,
         T,
         T,
-        std::enable_if_t<!std::is_same<T, void>{} && !std::is_same<T, rocblas_bfloat16>{}>>
+        std::enable_if_t<!std::is_same_v<T, void> && !std::is_same_v<T, rocblas_bfloat16>>>
         : rocblas_test_valid
     {
         void operator()(const Arguments& arg)
@@ -228,7 +224,6 @@ namespace
     // gemm_ex
     // gemm_batched_ex
     // gemm_strided_batched_ex
-    // gemm_ext2
     // ----------------------------------------------------------------------------
 
     // In the general case of <Ti, To, Tc>, these tests do not apply, and if this
@@ -246,8 +241,10 @@ namespace
         Ti,
         To,
         Tc,
-        std::enable_if_t<!std::is_same<Ti, void>{}
-                         && !(std::is_same<Ti, Tc>{} && std::is_same<Ti, rocblas_bfloat16>{})>>
+        std::enable_if_t<
+            !std::is_same_v<
+                Ti,
+                void> && !(std::is_same_v<Ti, Tc> && std::is_same_v<Ti, rocblas_bfloat16>)>>
         : rocblas_test_valid
     {
         void operator()(const Arguments& arg)
@@ -264,10 +261,6 @@ namespace
                 testing_gemm_strided_batched_ex<Ti, To, Tc>(arg);
             else if(!strcmp(arg.function, "gemm_strided_batched_ex_bad_arg"))
                 testing_gemm_strided_batched_ex_bad_arg<Ti, To, Tc>(arg);
-            else if(!strcmp(arg.function, "gemm_ext2"))
-                testing_gemm_ext2<Ti, To, Tc>(arg);
-            else if(!strcmp(arg.function, "gemm_ext2_bad_arg"))
-                testing_gemm_ext2_bad_arg<Ti, To, Tc>(arg);
             else
                 FAIL() << "Internal error: Test called with unknown function: " << arg.function;
         }
@@ -296,13 +289,6 @@ namespace
     }
     INSTANTIATE_TEST_CATEGORIES(gemm_strided_batched_ex);
 
-    using gemm_ext2 = gemm_test_template<gemm_ex_testing, GEMM_EXT2>;
-    TEST_P(gemm_ext2, blas3_tensile)
-    {
-        CATCH_SIGNALS_AND_EXCEPTIONS_AS_FAILURES(
-            rocblas_gemm_dispatch<gemm_ex_testing>(GetParam()));
-    }
-    INSTANTIATE_TEST_CATEGORIES(gemm_ext2);
 #endif //  BUILD_WITH_TENSILE
 
 } // namespace

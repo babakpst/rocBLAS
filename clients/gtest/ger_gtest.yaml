@@ -3,6 +3,7 @@ include: rocblas_common.yaml
 include: known_bugs.yaml
 
 Definitions:
+
   - &tiny_matrix
     - { M:   16, N:   16, lda:   16, stride_a:  256 }
 
@@ -49,12 +50,22 @@ Definitions:
     - { incx:   2, incy:   1}
     - { incx:  10, incy:  99}
 
-  - &size_t_index
-    - { M: 46431, N: 46431, lda: 46431, stride_a: 2147488281 }
-
   - &incx_incy_range_small
-    - { incx: 2, incy: 2 }
+    - { incx: 1, incy: 1 }
 
+  - &size_t_index
+    - { M: 4,     N: 46976, lda: 46976, stride_a: 93952 }      # default kernel
+
+  - &size_t_index_gfx90a
+    - { M: 46976, N: 46976, lda: 46976, stride_a: 2206744576 } # m == n && m > 2000 && mod 128 == 0 && gfx90a
+
+  - &size_t_MN_incx_incy
+    - { M: 3,     N: 3,     lda: 3,     stride_a: 16,    incx: *c_pos_x2_overflow_int32, incy: 1 }  # x is m element
+    - { M: 3,     N: 3,     lda: 3,     stride_a: 16,    incx: *c_neg_x2_overflow_int32, incy: 1 }  # x is m element
+    - { M: 3,     N: 3,     lda: 3,     stride_a: 16,    incx: 1,     incy: *c_pos_x2_overflow_int32 } # y is n element
+    - { M: 3,     N: 3,     lda: 3,     stride_a: 16,    incx: 1,     incy: *c_neg_x2_overflow_int32 } # y is n element
+    - { M: 2176,     N: 2176,     lda: 2176,     stride_a: 16,    incx: 1,       incy: 1973792 } # m == n && m > 2000 && mod 128 == 0 && gfx90a
+    - { M: 2176,     N: 2176,     lda: 2176,     stride_a: 16,    incx: 1973792, incy: 1  }
 
 Tests:
 - name: ger_bad_arg
@@ -64,7 +75,7 @@ Tests:
   - ger_batched_bad_arg
   - ger_strided_batched_bad_arg
   precision: *single_double_precisions
-  fortran: [ false, true ]
+  api: [ C, FORTRAN, FORTRAN_64 ]
 
 - name: ger_arg_check
   category: quick
@@ -77,16 +88,41 @@ Tests:
   matrix_size: *special_case_range
 
 - name: ger_size_t_M
-  category: nightly
+  category: stress
   function:
   - ger
   # shared code for size_t with non-batched
   #- ger_batched
   #- ger_strided_batched
-  precision: *single_double_precisions
+  precision: *single_precision
   matrix_size: *size_t_index
   incx_incy: *incx_incy_range_small
   alpha: [ -0.5 ]
+  pointer_mode_host: false
+
+- name: ger_size_t_M
+  category: stress
+  function:
+  - ger
+  precision: *single_precision
+  matrix_size: *size_t_index_gfx90a
+  incx_incy: *incx_incy_range_small
+  alpha: [ -0.5 ]
+  pointer_mode_host: false
+  gpu_arch: '90a'
+
+- name: ger_size_t_inc
+  category: stress
+  function:
+  - ger
+  # shared code for size_t with non-batched
+  #- ger_batched
+  #- ger_strided_batched
+  precision: *single_precision
+  arguments: *size_t_MN_incx_incy
+  alpha: [ 0.5 ]
+  pointer_mode_host: false
+  os_flags: LINUX
 
 # Regular ger
 - name: ger_fortran
@@ -96,7 +132,7 @@ Tests:
   matrix_size: *small_matrix_size_range
   incx_incy: *incx_incy_range_small
   alpha: [ 2.0 ]
-  fortran: [ true ]
+  api: FORTRAN
 
 - name: ger_NaN
   category: quick
@@ -137,7 +173,7 @@ Tests:
   precision: *single_double_precisions
   matrix_size: *large_matrix_size_range
   incx_incy: *incx_incy_range_small
-  alpha: [ -0.5, 2.0, 0.0, 0.6 ]
+  alpha: [ -0.5, 2.0, 0.0 ]
 
 # ger_batched
 - name: ger_batched_fortran
@@ -148,12 +184,12 @@ Tests:
   incx_incy: *incx_incy_range_small
   alpha: [ 2.0 ]
   batch_count: [ -1, 0, 3 ]
-  fortran: [ true ]
+  api: FORTRAN
 
 - name: ger_batched_NaN
   category: quick
   function: ger_batched
-  precision: *double_precision
+  precision: *single_double_precisions
   matrix_size: *tiny_matrix
   incx_incy: *incx_incy_range_small
   alpha: [ .NaN ]
@@ -196,7 +232,7 @@ Tests:
   alpha: [ 2.0 ]
   batch_count: [ -1, 0, 3 ]
   stride_scale: [ 2 ]
-  fortran: [ true ]
+  api: FORTRAN
 
 - name: ger_strided_batched_NaN
   category: quick
@@ -247,6 +283,21 @@ Tests:
   alpha: [ -0.5, 0.0 ]
   stride_scale: [ 1 ]
   batch_count: [ 3 ]
+
+- name: ger_64
+  category: stress
+  arguments:
+    - { M: 2147483649, N: 1, lda: 2147483649, incx: 1, incy: 1, batch_count: 1 }
+    - { M: 1, N: 2147483649, lda: 1, incx: 1, incy: 1, batch_count: 1 }
+    - { M: 1, N: 2, lda: 1, stride_a: 2, incx: 1, incy: -1, batch_count: *c_grid_yz_require_passes }
+  stride_scale: [ 1 ]
+  pointer_mode_host: false
+  api: [ C_64 ]
+  os_flags: [ LINUX ]
+  function:
+    - ger: *single_precision
+    - ger_batched: *single_precision
+    - ger_strided_batched: *single_precision
 
 - name: ger_graph_test
   category: pre_checkin

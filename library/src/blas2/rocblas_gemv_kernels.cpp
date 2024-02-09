@@ -30,7 +30,7 @@
 // The warpSize * 2 corresponds to the number of x-dimension threads per block optimized for better performance in the double_buffered_kernels.
 constexpr int rocblas_gemv_bx()
 {
-    return warpSize * 2;
+    return 64 * 2; // warpSize for gfx9xx: 64
 }
 
 // gemvt_sn is skinny n matrix optimizations
@@ -114,30 +114,29 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE size_t rocblas_internal_gemv_kernel_workspace_s
     return sizeof(To) * blocks * n * batch_count;
 }
 
-template <typename T, typename U, typename V, typename W>
-ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
-    rocblas_internal_gemv_template(rocblas_handle    handle,
-                                   rocblas_operation transA,
-                                   rocblas_int       m,
-                                   rocblas_int       n,
-                                   const U*          alpha,
-                                   rocblas_stride    stride_alpha,
-                                   const V*          A,
-                                   rocblas_stride    offseta,
-                                   rocblas_int       lda,
-                                   rocblas_stride    strideA,
-                                   const V*          x,
-                                   rocblas_stride    offsetx,
-                                   rocblas_int       incx,
-                                   rocblas_stride    stridex,
-                                   const U*          beta,
-                                   rocblas_stride    stride_beta,
-                                   W*                y,
-                                   rocblas_stride    offsety,
-                                   rocblas_int       incy,
-                                   rocblas_stride    stridey,
-                                   rocblas_int       batch_count,
-                                   T*                workspace)
+template <typename Ti, typename Tex, typename To>
+rocblas_status rocblas_internal_gemv_template(rocblas_handle    handle,
+                                              rocblas_operation transA,
+                                              rocblas_int       m,
+                                              rocblas_int       n,
+                                              const Tex*        alpha,
+                                              rocblas_stride    stride_alpha,
+                                              const Ti*         A,
+                                              rocblas_stride    offseta,
+                                              rocblas_int       lda,
+                                              rocblas_stride    strideA,
+                                              const Ti*         x,
+                                              rocblas_stride    offsetx,
+                                              rocblas_int       incx,
+                                              rocblas_stride    stridex,
+                                              const Tex*        beta,
+                                              rocblas_stride    stride_beta,
+                                              To*               y,
+                                              rocblas_stride    offsety,
+                                              rocblas_int       incy,
+                                              rocblas_stride    stridey,
+                                              rocblas_int       batch_count,
+                                              Tex*              workspace)
 {
     //quick return
     if(!m || !n || !batch_count)
@@ -146,19 +145,30 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     hipStream_t rocblas_stream = handle->get_stream();
 
     // in case of negative inc shift pointer to end of data for negative indexing tid*inc
-    auto shiftx
-        = incx < 0 ? offsetx - ptrdiff_t(incx) * (transA == rocblas_operation_none ? n - 1 : m - 1)
-                   : offsetx;
-    auto shifty
-        = incy < 0 ? offsety - ptrdiff_t(incy) * (transA == rocblas_operation_none ? m - 1 : n - 1)
-                   : offsety;
-    bool i64_indices = n * size_t(lda) > std::numeric_limits<rocblas_int>::max();
+    auto shiftx = incx < 0
+                      ? offsetx - int64_t(incx) * (transA == rocblas_operation_none ? n - 1 : m - 1)
+                      : offsetx;
+    auto shifty = incy < 0
+                      ? offsety - int64_t(incy) * (transA == rocblas_operation_none ? m - 1 : n - 1)
+                      : offsety;
+
+    constexpr size_t max_int32 = std::numeric_limits<rocblas_int>::max();
+    bool             i64_indices
+        = size_t(n) * lda > max_int32
+          || size_t(transA == rocblas_operation_none ? n - 1 : m - 1) * std::abs(incx) >= max_int32
+          || size_t(transA == rocblas_operation_none ? m - 1 : n - 1) * std::abs(incy) >= max_int32;
 
     //Identifying the precision to have an appropriate optimization
-    static constexpr bool is_float          = std::is_same<T, float>{};
-    static constexpr bool is_double         = std::is_same<T, double>{};
-    static constexpr bool is_complex_float  = std::is_same<T, rocblas_float_complex>{};
-    static constexpr bool is_complex_double = std::is_same<T, rocblas_double_complex>{};
+    static constexpr bool is_float = std::is_same_v<Ti, float> || std::is_same_v<Ti, float const*>;
+    static constexpr bool is_double
+        = std::is_same_v<Ti, double> || std::is_same_v<Ti, double const*>;
+    static constexpr bool is_complex_float
+        = std::is_same_v<Ti,
+                         rocblas_float_complex> || std::is_same_v<Ti, rocblas_float_complex const*>;
+    static constexpr bool is_complex_double
+        = std::is_same_v<
+              Ti,
+              rocblas_double_complex> || std::is_same_v<Ti, rocblas_double_complex const*>;
     const bool is_atomics_allowed = handle->atomics_mode == rocblas_atomics_allowed ? true : false;
 
     //Identifying the architecture to have an appropriate optimization
@@ -174,14 +184,48 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     gemvn_grid, gemvn_threads, 0, rocblas_stream, m, n, alpha_, stride_alpha, A, offseta, lda, \
         strideA, x, shiftx, incx, stridex, beta_, stride_beta, y, shifty, incy, stridey
 
-        if(n <= 128 && m >= 2048 * n)
+        if(is_gfx90a && m <= 32 && n <= 32 && batch_count >= 256)
+        {
+#define gemvn_sm_mn_batched_KARGS(alpha_, beta_)                                                 \
+    gemvn_sm_mn_batched_grid, gemvn_sm_mn_batched_threads, 0, rocblas_stream, m, n, alpha_,      \
+        stride_alpha, A, offseta, lda, strideA, x, shiftx, incx, stridex, beta_, stride_beta, y, \
+        shifty, incy, stridey, batch_count
+
+            // all rows && cols covered by DIM_X threads
+            static constexpr int GEMVN_SM_MN_BATCHED_DIM_X      = 32;
+            static constexpr int GEMVN_SM_MN_BATCHED_DIM_NBATCH = 24;
+
+            dim3 gemvn_sm_mn_batched_grid((batch_count - 1) / GEMVN_SM_MN_BATCHED_DIM_NBATCH + 1);
+            dim3 gemvn_sm_mn_batched_threads(GEMVN_SM_MN_BATCHED_DIM_X,
+                                             GEMVN_SM_MN_BATCHED_DIM_NBATCH);
+
+            if(handle->pointer_mode == rocblas_pointer_mode_device)
+            {
+                ROCBLAS_LAUNCH_KERNEL(
+                    (rocblas_gemvn_sm_mn_batched_kernel<GEMVN_SM_MN_BATCHED_DIM_X,
+                                                        GEMVN_SM_MN_BATCHED_DIM_NBATCH>),
+                    gemvn_sm_mn_batched_KARGS(alpha, beta));
+            }
+            else
+            {
+                if(!*alpha && *beta == 1)
+                    return rocblas_status_success;
+
+                ROCBLAS_LAUNCH_KERNEL(
+                    (rocblas_gemvn_sm_mn_batched_kernel<GEMVN_SM_MN_BATCHED_DIM_X,
+                                                        GEMVN_SM_MN_BATCHED_DIM_NBATCH>),
+                    gemvn_sm_mn_batched_KARGS(*alpha, *beta));
+            }
+#undef gemvn_sm_mn_batched_KARGS
+        }
+        else if(n <= 128 && m >= 2048 * n)
         {
             // skinny tuned block size
 
             static constexpr int GEMVN_DIM_X = 64;
             static constexpr int GEMVN_DIM_Y = 4;
             rocblas_int          blocks      = (m - 1) / (GEMVN_DIM_X * 4) + 1;
-            if(std::is_same<T, rocblas_double_complex>{})
+            if(std::is_same_v<Tex, rocblas_double_complex>)
                 blocks = (m - 1) / (GEMVN_DIM_X) + 1;
             dim3 gemvn_grid(blocks, batch_count);
             dim3 gemvn_threads(GEMVN_DIM_X, GEMVN_DIM_Y);
@@ -189,12 +233,12 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
                 if(!i64_indices)
-                    hipLaunchKernelGGL(
-                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int, T>),
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int>),
                         gemvn_KARGS(alpha, beta));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, size_t, T>),
-                                       gemvn_KARGS(alpha, beta));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, int64_t>),
+                                          gemvn_KARGS(alpha, beta));
             }
             else
             {
@@ -202,87 +246,90 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                     return rocblas_status_success;
 
                 if(!i64_indices)
-                    hipLaunchKernelGGL(
-                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int, T>),
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int>),
                         gemvn_KARGS(*alpha, *beta));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, size_t, T>),
-                                       gemvn_KARGS(*alpha, *beta));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, int64_t>),
+                                          gemvn_KARGS(*alpha, *beta));
             }
         }
         //optimized gemvn kernel with double buffered loads for gfx90a.
         else if(is_atomics_allowed && is_gfx90a && (is_float || is_double) && (m == n)
                 && (m % rocblas_gemv_bx() == 0))
         {
-            // The following rocblas_gemv_scal_kernel does the `y = y*beta` computation
-            static constexpr int NB               = 256;
-            const int            gemv_scal_blocks = (m - 1) / NB + 1;
-            dim3                 grid(gemv_scal_blocks, batch_count);
-            dim3                 threads(NB);
-            if(handle->pointer_mode == rocblas_pointer_mode_device)
+            if constexpr(is_float || is_double)
             {
-                hipLaunchKernelGGL((rocblas_gemv_scal_kernel<NB, T>),
-                                   grid,
-                                   threads,
-                                   0,
-                                   rocblas_stream,
-                                   m,
-                                   beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey);
-            }
-            else
-            {
-                if(*beta != 1)
-                    hipLaunchKernelGGL((rocblas_gemv_scal_kernel<NB, T>),
-                                       grid,
-                                       threads,
-                                       0,
-                                       rocblas_stream,
-                                       m,
-                                       *beta,
-                                       stride_beta,
-                                       y,
-                                       shifty,
-                                       incy,
-                                       stridey);
-            }
+                // The following rocblas_gemv_scal_kernel does the `y = y*beta` computation
+                static constexpr int NB               = 256;
+                const int            gemv_scal_blocks = (m - 1) / NB + 1;
+                dim3                 grid(gemv_scal_blocks, batch_count);
+                dim3                 threads(NB);
+                if(handle->pointer_mode == rocblas_pointer_mode_device)
+                {
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemv_scal_kernel<NB>),
+                                          grid,
+                                          threads,
+                                          0,
+                                          rocblas_stream,
+                                          m,
+                                          beta,
+                                          stride_beta,
+                                          y,
+                                          shifty,
+                                          incy,
+                                          stridey);
+                }
+                else
+                {
+                    if(*beta != 1)
+                        ROCBLAS_LAUNCH_KERNEL((rocblas_gemv_scal_kernel<NB>),
+                                              grid,
+                                              threads,
+                                              0,
+                                              rocblas_stream,
+                                              m,
+                                              *beta,
+                                              stride_beta,
+                                              y,
+                                              shifty,
+                                              incy,
+                                              stridey);
+                }
 
 #define gemvn_double_buffered_KARGS(alpha_)                                                    \
     gemvn_grid, gemvn_threads, 0, rocblas_stream, m, n, alpha_, stride_alpha, A, offseta, lda, \
         strideA, x, shiftx, incx, stridex, y, shifty, incy, stridey
 
-            // The following kernel does the `y += A * x` computation
-            static constexpr int thread_x            = rocblas_gemv_bx();
-            static constexpr int block_y             = 8;
-            static constexpr int thread_y            = is_float ? 8 : 4;
-            static constexpr int elements_per_thread = thread_x / (2 * thread_y);
+                // The following kernel does the `y += A * x` computation
+                static constexpr int thread_x            = rocblas_gemv_bx();
+                static constexpr int block_y             = 8;
+                static constexpr int thread_y            = is_float ? 8 : 4;
+                static constexpr int elements_per_thread = thread_x / (2 * thread_y);
 
-            const int block_x = m / thread_x;
-            dim3      gemvn_threads(thread_x, thread_y);
-            dim3      gemvn_grid(block_x, block_y, batch_count);
+                const int block_x = m / thread_x;
+                dim3      gemvn_threads(thread_x, thread_y);
+                dim3      gemvn_grid(block_x, block_y, batch_count);
 
-            if(handle->pointer_mode == rocblas_pointer_mode_device)
-            {
-                hipLaunchKernelGGL((rocblas_gemvn_double_buffered_kernel<thread_x,
-                                                                         thread_y,
-                                                                         elements_per_thread,
-                                                                         T>),
-                                   gemvn_double_buffered_KARGS(alpha));
-            }
-            else
-            {
-                if(!*alpha)
-                    return rocblas_status_success;
+                if(handle->pointer_mode == rocblas_pointer_mode_device)
+                {
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_double_buffered_kernel<thread_x,
+                                                              thread_y,
+                                                              elements_per_thread>),
+                        gemvn_double_buffered_KARGS(alpha));
+                }
+                else
+                {
+                    if(!*alpha)
+                        return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvn_double_buffered_kernel<thread_x,
-                                                                         thread_y,
-                                                                         elements_per_thread,
-                                                                         T>),
-                                   gemvn_double_buffered_KARGS(*alpha));
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_double_buffered_kernel<thread_x,
+                                                              thread_y,
+                                                              elements_per_thread>),
+                        gemvn_double_buffered_KARGS(*alpha));
+                }
             }
 #undef gemvn_double_buffered_KARGS
         }
@@ -306,7 +353,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             static constexpr int GEMVN_DIM_X = 32;
             static constexpr int GEMVN_DIM_Y = 16;
             rocblas_int          blocks      = (m - 1) / (GEMVN_DIM_X * 4) + 1;
-            if(std::is_same<T, rocblas_double_complex>{})
+            if(std::is_same_v<Tex, rocblas_double_complex>)
                 blocks = (m - 1) / (GEMVN_DIM_X) + 1;
             dim3 gemvn_grid(blocks, batch_count);
             dim3 gemvn_threads(GEMVN_DIM_X, GEMVN_DIM_Y);
@@ -314,12 +361,12 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
                 if(!i64_indices)
-                    hipLaunchKernelGGL(
-                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int, T>),
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int>),
                         gemvn_KARGS(alpha, beta));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, size_t, T>),
-                                       gemvn_KARGS(alpha, beta));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, int64_t>),
+                                          gemvn_KARGS(alpha, beta));
             }
             else
             {
@@ -327,12 +374,12 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                     return rocblas_status_success;
 
                 if(!i64_indices)
-                    hipLaunchKernelGGL(
-                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int, T>),
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int>),
                         gemvn_KARGS(*alpha, *beta));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, size_t, T>),
-                                       gemvn_KARGS(*alpha, *beta));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, int64_t>),
+                                          gemvn_KARGS(*alpha, *beta));
             }
         }
         else // non-skinny
@@ -341,7 +388,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             static constexpr int GEMVN_DIM_X = 64;
             static constexpr int GEMVN_DIM_Y = 16;
             rocblas_int          blocks      = (m - 1) / (GEMVN_DIM_X * 4) + 1;
-            if(std::is_same<T, rocblas_double_complex>{})
+            if(std::is_same_v<Tex, rocblas_double_complex>)
                 blocks = (m - 1) / (GEMVN_DIM_X) + 1;
             dim3 gemvn_grid(blocks, batch_count);
             dim3 gemvn_threads(GEMVN_DIM_X, GEMVN_DIM_Y);
@@ -349,12 +396,12 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
                 if(!i64_indices)
-                    hipLaunchKernelGGL(
-                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int, T>),
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int>),
                         gemvn_KARGS(alpha, beta));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, size_t, T>),
-                                       gemvn_KARGS(alpha, beta));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, int64_t>),
+                                          gemvn_KARGS(alpha, beta));
             }
             else
             {
@@ -362,12 +409,12 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                     return rocblas_status_success;
 
                 if(!i64_indices)
-                    hipLaunchKernelGGL(
-                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int, T>),
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, rocblas_int>),
                         gemvn_KARGS(*alpha, *beta));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, size_t, T>),
-                                       gemvn_KARGS(*alpha, *beta));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvn_kernel<GEMVN_DIM_X, GEMVN_DIM_Y, int64_t>),
+                                          gemvn_KARGS(*alpha, *beta));
             }
         }
 #undef gemvn_KARGS
@@ -376,6 +423,7 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     {
         // transpose
         static constexpr bool CONJ = false;
+
         if(m <= 64 && batch_count > 8) // few rows, e.g. qmcpack
         {
             // number of columns on the y-dim of the grid
@@ -384,61 +432,61 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             dim3                 gemvtsm_threads(NB);
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
-                hipLaunchKernelGGL((rocblas_gemvtsm_kernel<CONJ, NB, T>),
-                                   gemvtsm_grid,
-                                   gemvtsm_threads,
-                                   0,
-                                   rocblas_stream,
-                                   m,
-                                   n,
-                                   alpha,
-                                   stride_alpha,
-                                   A,
-                                   offseta,
-                                   lda,
-                                   strideA,
-                                   x,
-                                   shiftx,
-                                   incx,
-                                   stridex,
-                                   beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvtsm_kernel<CONJ, NB>),
+                                      gemvtsm_grid,
+                                      gemvtsm_threads,
+                                      0,
+                                      rocblas_stream,
+                                      m,
+                                      n,
+                                      alpha,
+                                      stride_alpha,
+                                      A,
+                                      offseta,
+                                      lda,
+                                      strideA,
+                                      x,
+                                      shiftx,
+                                      incx,
+                                      stridex,
+                                      beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey);
             }
             else
             {
                 if(!*alpha && *beta == 1)
                     return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvtsm_kernel<CONJ, NB, T>),
-                                   gemvtsm_grid,
-                                   gemvtsm_threads,
-                                   0,
-                                   rocblas_stream,
-                                   m,
-                                   n,
-                                   *alpha,
-                                   stride_alpha,
-                                   A,
-                                   offseta,
-                                   lda,
-                                   strideA,
-                                   x,
-                                   shiftx,
-                                   incx,
-                                   stridex,
-                                   *beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvtsm_kernel<CONJ, NB>),
+                                      gemvtsm_grid,
+                                      gemvtsm_threads,
+                                      0,
+                                      rocblas_stream,
+                                      m,
+                                      n,
+                                      *alpha,
+                                      stride_alpha,
+                                      A,
+                                      offseta,
+                                      lda,
+                                      strideA,
+                                      x,
+                                      shiftx,
+                                      incx,
+                                      stridex,
+                                      *beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey);
             }
         }
-        else if(workspace && rocblas_gemvt_skinny_n<T>(transA, m, n))
+        else if(workspace && rocblas_gemvt_skinny_n<Ti>(transA, m, n))
         {
             static constexpr int NB     = rocblas_gemvt_sn_NB();
             static constexpr int WIN    = rocblas_gemvt_sn_WIN();
@@ -448,30 +496,30 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
 
 #define gemvt_sn_KARGS(alpha_)                                                                 \
     gemvt_grid, gemvt_threads, 0, rocblas_stream, m, n, alpha_, stride_alpha, A, offseta, lda, \
-        strideA, x, shiftx, incx, stridex, (T*)workspace
+        strideA, x, shiftx, incx, stridex, (Tex*)workspace
 
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
                 if(!i64_indices)
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int, T>),
-                                       gemvt_sn_KARGS(alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int>),
+                                          gemvt_sn_KARGS(alpha));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, size_t, T>),
-                                       gemvt_sn_KARGS(alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, int64_t>),
+                                          gemvt_sn_KARGS(alpha));
 
-                hipLaunchKernelGGL((rocblas_gemvt_sn_reduce<NB, 8>),
-                                   dim3(1, n, batch_count),
-                                   gemvt_threads,
-                                   0,
-                                   rocblas_stream,
-                                   blocks,
-                                   beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey,
-                                   (T*)workspace);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_reduce<NB, 8>),
+                                      dim3(1, n, batch_count),
+                                      gemvt_threads,
+                                      0,
+                                      rocblas_stream,
+                                      blocks,
+                                      beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey,
+                                      (Tex*)workspace);
             }
             else
             {
@@ -479,25 +527,25 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                     return rocblas_status_success;
 
                 if(!i64_indices)
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int, T>),
-                                       gemvt_sn_KARGS(*alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int>),
+                                          gemvt_sn_KARGS(*alpha));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, size_t, T>),
-                                       gemvt_sn_KARGS(*alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, int64_t>),
+                                          gemvt_sn_KARGS(*alpha));
 
-                hipLaunchKernelGGL((rocblas_gemvt_sn_reduce<NB, 8>),
-                                   dim3(1, n, batch_count),
-                                   gemvt_threads,
-                                   0,
-                                   rocblas_stream,
-                                   blocks,
-                                   *beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey,
-                                   workspace);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_reduce<NB, 8>),
+                                      dim3(1, n, batch_count),
+                                      gemvt_threads,
+                                      0,
+                                      rocblas_stream,
+                                      blocks,
+                                      *beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey,
+                                      workspace);
             }
 
 #undef gemvt_sn_KARGS
@@ -508,76 +556,79 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                     && ((is_float && m > sgemvt_gfx908_lower_threshold)
                         || (is_double && m > dgemvt_gfx908_lower_threshold))))
         {
-            // The following rocblas_gemv_scal_kernel does the `y = y*beta` computation
-            static constexpr int NB               = 256;
-            const int            gemv_scal_blocks = (n - 1) / NB + 1;
-            dim3                 grid(gemv_scal_blocks, batch_count);
-            dim3                 threads(NB);
-            if(handle->pointer_mode == rocblas_pointer_mode_device)
+            if constexpr(is_float || is_double)
             {
-                hipLaunchKernelGGL((rocblas_gemv_scal_kernel<NB, T>),
-                                   grid,
-                                   threads,
-                                   0,
-                                   rocblas_stream,
-                                   n,
-                                   beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey);
-            }
-            else
-            {
-                if(*beta != 1)
-                    hipLaunchKernelGGL((rocblas_gemv_scal_kernel<NB, T>),
-                                       grid,
-                                       threads,
-                                       0,
-                                       rocblas_stream,
-                                       n,
-                                       *beta,
-                                       stride_beta,
-                                       y,
-                                       shifty,
-                                       incy,
-                                       stridey);
-            }
-            // The following kernel does the `y += A * x` computation
-            static constexpr int thread_x            = rocblas_gemv_bx();
-            static constexpr int block_y             = is_float ? 8 : 16;
-            static constexpr int thread_y            = is_float ? 8 : 4;
-            static constexpr int elements_per_thread = thread_x / (2 * thread_y);
+                // The following rocblas_gemv_scal_kernel does the `y = y*beta` computation
+                static constexpr int NB               = 256;
+                const int            gemv_scal_blocks = (n - 1) / NB + 1;
+                dim3                 grid(gemv_scal_blocks, batch_count);
+                dim3                 threads(NB);
+                if(handle->pointer_mode == rocblas_pointer_mode_device)
+                {
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemv_scal_kernel<NB>),
+                                          grid,
+                                          threads,
+                                          0,
+                                          rocblas_stream,
+                                          n,
+                                          beta,
+                                          stride_beta,
+                                          y,
+                                          shifty,
+                                          incy,
+                                          stridey);
+                }
+                else
+                {
+                    if(*beta != 1)
+                        ROCBLAS_LAUNCH_KERNEL((rocblas_gemv_scal_kernel<NB>),
+                                              grid,
+                                              threads,
+                                              0,
+                                              rocblas_stream,
+                                              n,
+                                              *beta,
+                                              stride_beta,
+                                              y,
+                                              shifty,
+                                              incy,
+                                              stridey);
+                }
+                // The following kernel does the `y += A * x` computation
+                static constexpr int thread_x            = rocblas_gemv_bx();
+                static constexpr int block_y             = is_float ? 8 : 16;
+                static constexpr int thread_y            = is_float ? 8 : 4;
+                static constexpr int elements_per_thread = thread_x / (2 * thread_y);
 
-            const int block_x = n / thread_x;
-            dim3      gemvt_threads(thread_x, thread_y);
-            dim3      gemvt_grid(block_x, block_y, batch_count);
+                const int block_x = n / thread_x;
+                dim3      gemvt_threads(thread_x, thread_y);
+                dim3      gemvt_grid(block_x, block_y, batch_count);
 
 #define gemvt_double_buffered_KARGS(alpha_)                                                    \
     gemvt_grid, gemvt_threads, 0, rocblas_stream, m, n, alpha_, stride_alpha, A, offseta, lda, \
         strideA, x, shiftx, incx, stridex, y, shifty, incy, stridey
 
-            if(handle->pointer_mode == rocblas_pointer_mode_device)
-            {
-                hipLaunchKernelGGL((rocblas_gemvt_double_buffered_kernel<CONJ,
-                                                                         thread_x,
-                                                                         thread_y,
-                                                                         elements_per_thread,
-                                                                         T>),
-                                   gemvt_double_buffered_KARGS(alpha));
-            }
-            else
-            {
-                if(!*alpha)
-                    return rocblas_status_success;
+                if(handle->pointer_mode == rocblas_pointer_mode_device)
+                {
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvt_double_buffered_kernel<CONJ,
+                                                              thread_x,
+                                                              thread_y,
+                                                              elements_per_thread>),
+                        gemvt_double_buffered_KARGS(alpha));
+                }
+                else
+                {
+                    if(!*alpha)
+                        return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvt_double_buffered_kernel<CONJ,
-                                                                         thread_x,
-                                                                         thread_y,
-                                                                         elements_per_thread,
-                                                                         T>),
-                                   gemvt_double_buffered_KARGS(*alpha));
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvt_double_buffered_kernel<CONJ,
+                                                              thread_x,
+                                                              thread_y,
+                                                              elements_per_thread>),
+                        gemvt_double_buffered_KARGS(*alpha));
+                }
             }
 #undef gemvt_double_buffered_KARGS
         }
@@ -600,16 +651,16 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
 
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
-                hipLaunchKernelGGL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB, T>),
-                                   gemvt_KARGS(alpha, beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB>),
+                                      gemvt_KARGS(alpha, beta));
             }
             else
             {
                 if(!*alpha && *beta == 1)
                     return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB, T>),
-                                   gemvt_KARGS(*alpha, *beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB>),
+                                      gemvt_KARGS(*alpha, *beta));
             }
         }
         //Using kernel code with shared memory reduction for single precision as well as for other precisions when m or n is less than 6000 and for complex double in gfx1030.
@@ -623,14 +674,14 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
 
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
-                hipLaunchKernelGGL((rocblas_gemvt_kernel<CONJ, NB, T>), gemvt_KARGS(alpha, beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_kernel<CONJ, NB>), gemvt_KARGS(alpha, beta));
             }
             else
             {
                 if(!*alpha && *beta == 1)
                     return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvt_kernel<CONJ, NB, T>), gemvt_KARGS(*alpha, *beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_kernel<CONJ, NB>), gemvt_KARGS(*alpha, *beta));
             }
         }
 
@@ -645,16 +696,16 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
 
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
-                hipLaunchKernelGGL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB, T>),
-                                   gemvt_KARGS(alpha, beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB>),
+                                      gemvt_KARGS(alpha, beta));
             }
             else
             {
                 if(!*alpha && *beta == 1)
                     return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB, T>),
-                                   gemvt_KARGS(*alpha, *beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB>),
+                                      gemvt_KARGS(*alpha, *beta));
             }
         }
 #undef gemvt_KARGS
@@ -672,61 +723,61 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             dim3                 gemvtsm_threads(NB);
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
-                hipLaunchKernelGGL((rocblas_gemvtsm_kernel<CONJ, NB, T>),
-                                   gemvtsm_grid,
-                                   gemvtsm_threads,
-                                   0,
-                                   rocblas_stream,
-                                   m,
-                                   n,
-                                   alpha,
-                                   stride_alpha,
-                                   A,
-                                   offseta,
-                                   lda,
-                                   strideA,
-                                   x,
-                                   shiftx,
-                                   incx,
-                                   stridex,
-                                   beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvtsm_kernel<CONJ, NB>),
+                                      gemvtsm_grid,
+                                      gemvtsm_threads,
+                                      0,
+                                      rocblas_stream,
+                                      m,
+                                      n,
+                                      alpha,
+                                      stride_alpha,
+                                      A,
+                                      offseta,
+                                      lda,
+                                      strideA,
+                                      x,
+                                      shiftx,
+                                      incx,
+                                      stridex,
+                                      beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey);
             }
             else
             {
                 if(!*alpha && *beta == 1)
                     return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvtsm_kernel<CONJ, NB, T>),
-                                   gemvtsm_grid,
-                                   gemvtsm_threads,
-                                   0,
-                                   rocblas_stream,
-                                   m,
-                                   n,
-                                   *alpha,
-                                   stride_alpha,
-                                   A,
-                                   offseta,
-                                   lda,
-                                   strideA,
-                                   x,
-                                   shiftx,
-                                   incx,
-                                   stridex,
-                                   *beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvtsm_kernel<CONJ, NB>),
+                                      gemvtsm_grid,
+                                      gemvtsm_threads,
+                                      0,
+                                      rocblas_stream,
+                                      m,
+                                      n,
+                                      *alpha,
+                                      stride_alpha,
+                                      A,
+                                      offseta,
+                                      lda,
+                                      strideA,
+                                      x,
+                                      shiftx,
+                                      incx,
+                                      stridex,
+                                      *beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey);
             }
         }
-        else if(workspace && rocblas_gemvt_skinny_n<T>(transA, m, n))
+        else if(workspace && rocblas_gemvt_skinny_n<Ti>(transA, m, n))
         {
             static constexpr int NB     = rocblas_gemvt_sn_NB();
             static constexpr int WIN    = rocblas_gemvt_sn_WIN();
@@ -736,30 +787,30 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
 
 #define gemvt_sn_KARGS(alpha_)                                                                 \
     gemvt_grid, gemvt_threads, 0, rocblas_stream, m, n, alpha_, stride_alpha, A, offseta, lda, \
-        strideA, x, shiftx, incx, stridex, (T*)workspace
+        strideA, x, shiftx, incx, stridex, (Tex*)workspace
 
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
                 if(!i64_indices)
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int, T>),
-                                       gemvt_sn_KARGS(alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int>),
+                                          gemvt_sn_KARGS(alpha));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, size_t, T>),
-                                       gemvt_sn_KARGS(alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, int64_t>),
+                                          gemvt_sn_KARGS(alpha));
 
-                hipLaunchKernelGGL((rocblas_gemvt_sn_reduce<NB, 8>),
-                                   dim3(1, n, batch_count),
-                                   gemvt_threads,
-                                   0,
-                                   rocblas_stream,
-                                   blocks,
-                                   beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey,
-                                   (T*)workspace);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_reduce<NB, 8>),
+                                      dim3(1, n, batch_count),
+                                      gemvt_threads,
+                                      0,
+                                      rocblas_stream,
+                                      blocks,
+                                      beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey,
+                                      (Tex*)workspace);
             }
             else
             {
@@ -767,25 +818,25 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                     return rocblas_status_success;
 
                 if(!i64_indices)
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int, T>),
-                                       gemvt_sn_KARGS(*alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, rocblas_int>),
+                                          gemvt_sn_KARGS(*alpha));
                 else
-                    hipLaunchKernelGGL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, size_t, T>),
-                                       gemvt_sn_KARGS(*alpha));
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_kernel<CONJ, NB, WIN, int64_t>),
+                                          gemvt_sn_KARGS(*alpha));
 
-                hipLaunchKernelGGL((rocblas_gemvt_sn_reduce<NB, 8>),
-                                   dim3(1, n, batch_count),
-                                   gemvt_threads,
-                                   0,
-                                   rocblas_stream,
-                                   blocks,
-                                   *beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey,
-                                   workspace);
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_sn_reduce<NB, 8>),
+                                      dim3(1, n, batch_count),
+                                      gemvt_threads,
+                                      0,
+                                      rocblas_stream,
+                                      blocks,
+                                      *beta,
+                                      stride_beta,
+                                      y,
+                                      shifty,
+                                      incy,
+                                      stridey,
+                                      workspace);
             }
 
 #undef gemvt_sn_KARGS
@@ -796,76 +847,79 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
                     && ((is_float && m > sgemvt_gfx908_lower_threshold)
                         || (is_double && m > dgemvt_gfx908_lower_threshold))))
         {
-            // The following rocblas_gemv_scal_kernel does the `y = y*beta` computation
-            static constexpr int NB               = 256;
-            const int            gemv_scal_blocks = (n - 1) / NB + 1;
-            dim3                 grid(gemv_scal_blocks, batch_count);
-            dim3                 threads(NB);
-            if(handle->pointer_mode == rocblas_pointer_mode_device)
+            if constexpr(is_float || is_double)
             {
-                hipLaunchKernelGGL((rocblas_gemv_scal_kernel<NB, T>),
-                                   grid,
-                                   threads,
-                                   0,
-                                   rocblas_stream,
-                                   n,
-                                   beta,
-                                   stride_beta,
-                                   y,
-                                   shifty,
-                                   incy,
-                                   stridey);
-            }
-            else
-            {
-                if(*beta != 1)
-                    hipLaunchKernelGGL((rocblas_gemv_scal_kernel<NB, T>),
-                                       grid,
-                                       threads,
-                                       0,
-                                       rocblas_stream,
-                                       n,
-                                       *beta,
-                                       stride_beta,
-                                       y,
-                                       shifty,
-                                       incy,
-                                       stridey);
-            }
-            // The following kernel does the `y += A * x` computation
-            static constexpr int thread_x            = rocblas_gemv_bx();
-            static constexpr int block_y             = is_float ? 8 : 16;
-            static constexpr int thread_y            = is_float ? 8 : 4;
-            static constexpr int elements_per_thread = thread_x / (2 * thread_y);
+                // The following rocblas_gemv_scal_kernel does the `y = y*beta` computation
+                static constexpr int NB               = 256;
+                const int            gemv_scal_blocks = (n - 1) / NB + 1;
+                dim3                 grid(gemv_scal_blocks, batch_count);
+                dim3                 threads(NB);
+                if(handle->pointer_mode == rocblas_pointer_mode_device)
+                {
+                    ROCBLAS_LAUNCH_KERNEL((rocblas_gemv_scal_kernel<NB>),
+                                          grid,
+                                          threads,
+                                          0,
+                                          rocblas_stream,
+                                          n,
+                                          beta,
+                                          stride_beta,
+                                          y,
+                                          shifty,
+                                          incy,
+                                          stridey);
+                }
+                else
+                {
+                    if(*beta != 1)
+                        ROCBLAS_LAUNCH_KERNEL((rocblas_gemv_scal_kernel<NB>),
+                                              grid,
+                                              threads,
+                                              0,
+                                              rocblas_stream,
+                                              n,
+                                              *beta,
+                                              stride_beta,
+                                              y,
+                                              shifty,
+                                              incy,
+                                              stridey);
+                }
+                // The following kernel does the `y += A * x` computation
+                static constexpr int thread_x            = rocblas_gemv_bx();
+                static constexpr int block_y             = is_float ? 8 : 16;
+                static constexpr int thread_y            = is_float ? 8 : 4;
+                static constexpr int elements_per_thread = thread_x / (2 * thread_y);
 
-            const int block_x = n / thread_x;
-            dim3      gemvt_threads(thread_x, thread_y);
-            dim3      gemvt_grid(block_x, block_y, batch_count);
+                const int block_x = n / thread_x;
+                dim3      gemvt_threads(thread_x, thread_y);
+                dim3      gemvt_grid(block_x, block_y, batch_count);
 
 #define gemvt_double_buffered_KARGS(alpha_)                                                    \
     gemvt_grid, gemvt_threads, 0, rocblas_stream, m, n, alpha_, stride_alpha, A, offseta, lda, \
         strideA, x, shiftx, incx, stridex, y, shifty, incy, stridey
 
-            if(handle->pointer_mode == rocblas_pointer_mode_device)
-            {
-                hipLaunchKernelGGL((rocblas_gemvt_double_buffered_kernel<CONJ,
-                                                                         thread_x,
-                                                                         thread_y,
-                                                                         elements_per_thread,
-                                                                         T>),
-                                   gemvt_double_buffered_KARGS(alpha));
-            }
-            else
-            {
-                if(!*alpha)
-                    return rocblas_status_success;
+                if(handle->pointer_mode == rocblas_pointer_mode_device)
+                {
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvt_double_buffered_kernel<CONJ,
+                                                              thread_x,
+                                                              thread_y,
+                                                              elements_per_thread>),
+                        gemvt_double_buffered_KARGS(alpha));
+                }
+                else
+                {
+                    if(!*alpha)
+                        return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvt_double_buffered_kernel<CONJ,
-                                                                         thread_x,
-                                                                         thread_y,
-                                                                         elements_per_thread,
-                                                                         T>),
-                                   gemvt_double_buffered_KARGS(*alpha));
+                    ROCBLAS_LAUNCH_KERNEL(
+                        (rocblas_gemvt_double_buffered_kernel<CONJ,
+                                                              thread_x,
+                                                              thread_y,
+                                                              elements_per_thread>),
+                        gemvt_double_buffered_KARGS(*alpha));
+                }
             }
 #undef gemvt_double_buffered_KARGS
         }
@@ -882,14 +936,14 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             dim3                 gemvt_threads(NB);
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
-                hipLaunchKernelGGL((rocblas_gemvt_kernel<CONJ, NB, T>), gemvt_KARGS(alpha, beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_kernel<CONJ, NB>), gemvt_KARGS(alpha, beta));
             }
             else
             {
                 if(!*alpha && *beta == 1)
                     return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvt_kernel<CONJ, NB, T>), gemvt_KARGS(*alpha, *beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_kernel<CONJ, NB>), gemvt_KARGS(*alpha, *beta));
             }
         }
         //Using kernel code with warp reduction.
@@ -902,16 +956,16 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
             dim3                 gemvt_threads(NB);
             if(handle->pointer_mode == rocblas_pointer_mode_device)
             {
-                hipLaunchKernelGGL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB, T>),
-                                   gemvt_KARGS(alpha, beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB>),
+                                      gemvt_KARGS(alpha, beta));
             }
             else
             {
                 if(!*alpha && *beta == 1)
                     return rocblas_status_success;
 
-                hipLaunchKernelGGL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB, T>),
-                                   gemvt_KARGS(*alpha, *beta));
+                ROCBLAS_LAUNCH_KERNEL((rocblas_gemvt_warp_reduce_kernel<CONJ, NB>),
+                                      gemvt_KARGS(*alpha, *beta));
             }
         }
 #undef gemvt_KARGS
@@ -919,21 +973,119 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     return rocblas_status_success;
 }
 
-template <typename T, typename U>
+template <typename T>
+ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
+    rocblas_internal_gemv_template(rocblas_handle    handle,
+                                   rocblas_operation transA,
+                                   rocblas_int       m,
+                                   rocblas_int       n,
+                                   const T*          alpha,
+                                   rocblas_stride    stride_alpha,
+                                   const T*          A,
+                                   rocblas_stride    offseta,
+                                   rocblas_int       lda,
+                                   rocblas_stride    strideA,
+                                   const T*          x,
+                                   rocblas_stride    offsetx,
+                                   rocblas_int       incx,
+                                   rocblas_stride    stridex,
+                                   const T*          beta,
+                                   rocblas_stride    stride_beta,
+                                   T*                y,
+                                   rocblas_stride    offsety,
+                                   rocblas_int       incy,
+                                   rocblas_stride    stridey,
+                                   rocblas_int       batch_count,
+                                   T*                workspace)
+{
+    return rocblas_internal_gemv_template<T, T, T>(handle,
+                                                   transA,
+                                                   m,
+                                                   n,
+                                                   alpha,
+                                                   stride_alpha,
+                                                   A,
+                                                   offseta,
+                                                   lda,
+                                                   strideA,
+                                                   x,
+                                                   offsetx,
+                                                   incx,
+                                                   stridex,
+                                                   beta,
+                                                   stride_beta,
+                                                   y,
+                                                   offsety,
+                                                   incy,
+                                                   stridey,
+                                                   batch_count,
+                                                   workspace);
+}
+
+template <typename T>
+ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
+    rocblas_internal_gemv_batched_template(rocblas_handle    handle,
+                                           rocblas_operation transA,
+                                           rocblas_int       m,
+                                           rocblas_int       n,
+                                           const T*          alpha,
+                                           rocblas_stride    stride_alpha,
+                                           const T* const*   A,
+                                           rocblas_stride    offseta,
+                                           rocblas_int       lda,
+                                           rocblas_stride    strideA,
+                                           const T* const*   x,
+                                           rocblas_stride    offsetx,
+                                           rocblas_int       incx,
+                                           rocblas_stride    stridex,
+                                           const T*          beta,
+                                           rocblas_stride    stride_beta,
+                                           T* const*         y,
+                                           rocblas_stride    offsety,
+                                           rocblas_int       incy,
+                                           rocblas_stride    stridey,
+                                           rocblas_int       batch_count,
+                                           T*                workspace)
+{
+    return rocblas_internal_gemv_template(handle,
+                                          transA,
+                                          m,
+                                          n,
+                                          alpha,
+                                          stride_alpha,
+                                          A,
+                                          offseta,
+                                          lda,
+                                          strideA,
+                                          x,
+                                          offsetx,
+                                          incx,
+                                          stridex,
+                                          beta,
+                                          stride_beta,
+                                          y,
+                                          offsety,
+                                          incy,
+                                          stridey,
+                                          batch_count,
+                                          workspace);
+}
+
+template <typename Ti, typename To>
 rocblas_status rocblas_gemv_check_numerics(const char*       function_name,
                                            rocblas_handle    handle,
                                            rocblas_operation trans_a,
                                            rocblas_int       m,
                                            rocblas_int       n,
-                                           T                 A,
+                                           Ti                A,
                                            rocblas_stride    offset_a,
                                            rocblas_int       lda,
                                            rocblas_stride    stride_a,
-                                           T                 x,
+                                           Ti                x,
                                            rocblas_stride    offset_x,
                                            rocblas_int       inc_x,
                                            rocblas_stride    stride_x,
-                                           U                 y,
+                                           To                y,
                                            rocblas_stride    offset_y,
                                            rocblas_int       inc_y,
                                            rocblas_stride    stride_y,
@@ -1012,70 +1164,144 @@ INSTANTIATE_GEMV_WORKSPACE(float)
 INSTANTIATE_GEMV_WORKSPACE(double)
 INSTANTIATE_GEMV_WORKSPACE(rocblas_float_complex )
 INSTANTIATE_GEMV_WORKSPACE(rocblas_double_complex )
-
+INSTANTIATE_GEMV_WORKSPACE(rocblas_half)
+INSTANTIATE_GEMV_WORKSPACE(rocblas_bfloat16)
 #undef INSTANTIATE_GEMV_WORKSPACE
 
 #ifdef INSTANTIATE_GEMV_TEMPLATE
 #error INSTANTIATE_GEMV_TEMPLATE already defined
 #endif
 
-#define INSTANTIATE_GEMV_TEMPLATE(T_, U_, V_, W_)                                       \
+#define INSTANTIATE_GEMV_TEMPLATE(T_)                                                        \
+template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_gemv_template<T_>  \
+                                        (rocblas_handle    handle,                           \
+                                        rocblas_operation transA,                            \
+                                        rocblas_int       m,                                 \
+                                        rocblas_int       n,                                 \
+                                        T_ const*         alpha,                             \
+                                        rocblas_stride    stride_alpha,                      \
+                                        T_ const*          A,                                \
+                                        rocblas_stride    offseta,                           \
+                                        rocblas_int       lda,                               \
+                                        rocblas_stride    strideA,                           \
+                                        T_ const*          x,                                \
+                                        rocblas_stride    offsetx,                           \
+                                        rocblas_int       incx,                              \
+                                        rocblas_stride    stridex,                           \
+                                        T_ const*         beta,                              \
+                                        rocblas_stride    stride_beta,                       \
+                                        T_*               y,                                 \
+                                        rocblas_stride    offsety,                           \
+                                        rocblas_int       incy,                              \
+                                        rocblas_stride    stridey,                           \
+                                        rocblas_int       batch_count,                       \
+                                        T_*               workspace);
+
+INSTANTIATE_GEMV_TEMPLATE(float)
+INSTANTIATE_GEMV_TEMPLATE(double)
+INSTANTIATE_GEMV_TEMPLATE(rocblas_float_complex)
+INSTANTIATE_GEMV_TEMPLATE(rocblas_double_complex)
+
+#undef INSTANTIATE_GEMV_TEMPLATE
+
+#ifdef INSTANTIATE_GEMV_BATCHED_TEMPLATE
+#error INSTANTIATE_GEMV_BATCHED_TEMPLATE already defined
+#endif
+
+#define INSTANTIATE_GEMV_BATCHED_TEMPLATE(T_)                                                       \
+template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_gemv_batched_template<T_> \
+                                               (rocblas_handle    handle,                           \
+                                               rocblas_operation transA,                            \
+                                               rocblas_int       m,                                 \
+                                               rocblas_int       n,                                 \
+                                               T_ const*         alpha,                             \
+                                               rocblas_stride    stride_alpha,                      \
+                                               T_ const* const*  A,                                 \
+                                               rocblas_stride    offseta,                           \
+                                               rocblas_int       lda,                               \
+                                               rocblas_stride    strideA,                           \
+                                               T_ const* const*  x,                                 \
+                                               rocblas_stride    offsetx,                           \
+                                               rocblas_int       incx,                              \
+                                               rocblas_stride    stridex,                           \
+                                               T_ const*         beta,                              \
+                                               rocblas_stride    stride_beta,                       \
+                                               T_* const*        y,                                 \
+                                               rocblas_stride    offsety,                           \
+                                               rocblas_int       incy,                              \
+                                               rocblas_stride    stridey,                           \
+                                               rocblas_int       batch_count,                       \
+                                               T_*               workspace);
+
+INSTANTIATE_GEMV_BATCHED_TEMPLATE(float)
+INSTANTIATE_GEMV_BATCHED_TEMPLATE(double)
+INSTANTIATE_GEMV_BATCHED_TEMPLATE(rocblas_float_complex)
+INSTANTIATE_GEMV_BATCHED_TEMPLATE(rocblas_double_complex)
+
+#undef INSTANTIATE_GEMV_BATCHED_TEMPLATE
+
+// For mixed-precision gemv
+#ifdef INSTANTIATE_GEMV_MIXED_TEMPLATE
+#error INSTANTIATE_GEMV_MIXED_TEMPLATE already defined
+#endif
+
+#define INSTANTIATE_GEMV_MIXED_TEMPLATE(Ti_, Tex_, To_)                                 \
 template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status rocblas_internal_gemv_template \
-                                  <T_, U_, V_, W_>                                      \
+                                  <Ti_, Tex_, To_>                                      \
                                   (rocblas_handle    handle,                            \
                                    rocblas_operation transA,                            \
                                    rocblas_int       m,                                 \
                                    rocblas_int       n,                                 \
-                                   U_ const *         alpha,                            \
+                                   Tex_ const*       alpha,                             \
                                    rocblas_stride    stride_alpha,                      \
-                                   V_ const *         A,                                \
+                                   Ti_ const*        A,                                 \
                                    rocblas_stride    offseta,                           \
                                    rocblas_int       lda,                               \
                                    rocblas_stride    strideA,                           \
-                                   V_ const *         x,                                \
+                                   Ti_ const*        x,                                 \
                                    rocblas_stride    offsetx,                           \
                                    rocblas_int       incx,                              \
                                    rocblas_stride    stridex,                           \
-                                   U_ const *         beta,                             \
+                                   Tex_ const*       beta,                              \
                                    rocblas_stride    stride_beta,                       \
-                                   W_*               y,                                 \
+                                   To_*              y,                                 \
                                    rocblas_stride    offsety,                           \
                                    rocblas_int       incy,                              \
                                    rocblas_stride    stridey,                           \
                                    rocblas_int       batch_count,                       \
-                                   T_*               workspace);
+                                   Tex_*             workspace);
 
-INSTANTIATE_GEMV_TEMPLATE(float, float, float, float)
-INSTANTIATE_GEMV_TEMPLATE(double, double, double, double)
-INSTANTIATE_GEMV_TEMPLATE(rocblas_float_complex, rocblas_float_complex, rocblas_float_complex, rocblas_float_complex)
-INSTANTIATE_GEMV_TEMPLATE(rocblas_double_complex, rocblas_double_complex, rocblas_double_complex, rocblas_double_complex)
-INSTANTIATE_GEMV_TEMPLATE(float, float, float const*, float* const)
-INSTANTIATE_GEMV_TEMPLATE(double, double, double const*, double* const)
-INSTANTIATE_GEMV_TEMPLATE(rocblas_float_complex, rocblas_float_complex, rocblas_float_complex const*, rocblas_float_complex* const)
-INSTANTIATE_GEMV_TEMPLATE(rocblas_double_complex, rocblas_double_complex, rocblas_double_complex const*, rocblas_double_complex* const)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_half, float, rocblas_half)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_half const *, float, rocblas_half* const)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_half, float, float)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_half const *, float, float* const)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_bfloat16, float, rocblas_bfloat16)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_bfloat16 const *, float, rocblas_bfloat16* const)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_bfloat16, float, float)
+INSTANTIATE_GEMV_MIXED_TEMPLATE(rocblas_bfloat16 const *, float, float* const)
 
-#undef INSTANTIATE_GEMV_TEMPLATE
+#undef INSTANTIATE_GEMV_MIXED_TEMPLATE
 
 #ifdef INSTANTIATE_GEMV_NUMERICS
 #error INSTANTIATE_GEMV_NUMERICS already defined
 #endif
 
-#define INSTANTIATE_GEMV_NUMERICS(T_, U_)                                    \
-template rocblas_status rocblas_gemv_check_numerics<T_, U_>                  \
+#define INSTANTIATE_GEMV_NUMERICS(Ti_, To_)                                    \
+template rocblas_status rocblas_gemv_check_numerics<Ti_, To_>                  \
                                           (const char*       function_name,  \
                                            rocblas_handle    handle,         \
                                            rocblas_operation trans_a,        \
                                            rocblas_int       m,              \
                                            rocblas_int       n,              \
-                                           T_                A,              \
+                                           Ti_                A,              \
                                            rocblas_stride    offset_a,       \
                                            rocblas_int       lda,            \
                                            rocblas_stride    stride_a,       \
-                                           T_                x,              \
+                                           Ti_                x,              \
                                            rocblas_stride    offset_x,       \
                                            rocblas_int       inc_x,          \
                                            rocblas_stride    stride_x,       \
-                                           U_                y,              \
+                                           To_                y,              \
                                            rocblas_stride    offset_y,       \
                                            rocblas_int       inc_y,          \
                                            rocblas_stride    stride_y,       \
@@ -1091,6 +1317,14 @@ INSTANTIATE_GEMV_NUMERICS(float const* const*, float* const*)
 INSTANTIATE_GEMV_NUMERICS(double const* const*, double* const*)
 INSTANTIATE_GEMV_NUMERICS(rocblas_float_complex const* const*, rocblas_float_complex* const*)
 INSTANTIATE_GEMV_NUMERICS(rocblas_double_complex const* const*, rocblas_double_complex* const*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_half const*, rocblas_half*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_half const* const*, rocblas_half* const*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_half const*, float*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_half const* const*, float* const*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_bfloat16 const*, rocblas_bfloat16*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_bfloat16 const* const*, rocblas_bfloat16* const*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_bfloat16 const*, float*)
+INSTANTIATE_GEMV_NUMERICS(rocblas_bfloat16 const* const*, float* const*)
 
 #undef INSTANTIATE_GEMV_NUMERICS
 

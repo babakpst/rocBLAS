@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
 #include "handle.hpp"
 #include "logging.hpp"
 #include "rocblas.h"
-#include "rocblas_block_sizes.h"
 #include "rocblas_trsv.hpp"
 #include "utility.hpp"
 
@@ -41,12 +40,12 @@ namespace
     constexpr char rocblas_trsv_strided_batched_name<rocblas_double_complex>[]
         = "rocblas_ztrsv_strided_batched";
 
-    template <rocblas_int BLOCK, typename T>
+    template <typename T>
     rocblas_status rocblas_trsv_strided_batched_impl(rocblas_handle    handle,
                                                      rocblas_fill      uplo,
                                                      rocblas_operation transA,
                                                      rocblas_diagonal  diag,
-                                                     rocblas_int       m,
+                                                     rocblas_int       n,
                                                      const T*          A,
                                                      rocblas_int       lda,
                                                      rocblas_stride    stride_A,
@@ -70,7 +69,7 @@ namespace
                           uplo,
                           transA,
                           diag,
-                          m,
+                          n,
                           A,
                           lda,
                           stride_A,
@@ -97,8 +96,8 @@ namespace
                                   transA_letter,
                                   "--diag",
                                   diag_letter,
-                                  "-m",
-                                  m,
+                                  "-n",
+                                  n,
                                   "--lda",
                                   lda,
                                   "--stride_a",
@@ -120,8 +119,8 @@ namespace
                                 transA_letter,
                                 "diag",
                                 diag_letter,
-                                "M",
-                                m,
+                                "N",
+                                n,
                                 "lda",
                                 lda,
                                 "stride_a",
@@ -137,7 +136,7 @@ namespace
 
         size_t         dev_bytes;
         rocblas_status arg_status = rocblas_trsv_arg_check(
-            handle, uplo, transA, diag, m, A, lda, B, incx, batch_count, dev_bytes);
+            handle, uplo, transA, diag, n, A, lda, B, incx, batch_count, dev_bytes);
         if(arg_status != rocblas_status_continue)
             return arg_status;
 
@@ -156,7 +155,7 @@ namespace
                 = rocblas_internal_trsv_check_numerics(rocblas_trsv_strided_batched_name<T>,
                                                        handle,
                                                        uplo,
-                                                       m,
+                                                       n,
                                                        A,
                                                        0,
                                                        lda,
@@ -172,23 +171,21 @@ namespace
                 return trsv_check_numerics_status;
         }
 
-        rocblas_status status
-            = rocblas_internal_trsv_substitution_template<BLOCK, T>(handle,
-                                                                    uplo,
-                                                                    transA,
-                                                                    diag,
-                                                                    m,
-                                                                    A,
-                                                                    0,
-                                                                    lda,
-                                                                    stride_A,
-                                                                    nullptr,
-                                                                    B,
-                                                                    0,
-                                                                    incx,
-                                                                    stride_x,
-                                                                    batch_count,
-                                                                    (rocblas_int*)w_completed_sec);
+        rocblas_status status = rocblas_internal_trsv_template(handle,
+                                                               uplo,
+                                                               transA,
+                                                               diag,
+                                                               n,
+                                                               A,
+                                                               0,
+                                                               lda,
+                                                               stride_A,
+                                                               B,
+                                                               0,
+                                                               incx,
+                                                               stride_x,
+                                                               batch_count,
+                                                               (rocblas_int*)w_completed_sec);
 
         if(status != rocblas_status_success)
             return status;
@@ -200,7 +197,7 @@ namespace
                 = rocblas_internal_trsv_check_numerics(rocblas_trsv_strided_batched_name<T>,
                                                        handle,
                                                        uplo,
-                                                       m,
+                                                       n,
                                                        A,
                                                        0,
                                                        lda,
@@ -232,7 +229,7 @@ rocblas_status rocblas_strsv_strided_batched(rocblas_handle    handle,
                                              rocblas_fill      uplo,
                                              rocblas_operation transA,
                                              rocblas_diagonal  diag,
-                                             rocblas_int       m,
+                                             rocblas_int       n,
                                              const float*      A,
                                              rocblas_int       lda,
                                              rocblas_stride    stride_A,
@@ -242,8 +239,8 @@ rocblas_status rocblas_strsv_strided_batched(rocblas_handle    handle,
                                              rocblas_int       batch_count)
 try
 {
-    return rocblas_trsv_strided_batched_impl<ROCBLAS_SDCTRSV_NB>(
-        handle, uplo, transA, diag, m, A, lda, stride_A, x, incx, stride_x, batch_count);
+    return rocblas_trsv_strided_batched_impl(
+        handle, uplo, transA, diag, n, A, lda, stride_A, x, incx, stride_x, batch_count);
 }
 catch(...)
 {
@@ -254,7 +251,7 @@ rocblas_status rocblas_dtrsv_strided_batched(rocblas_handle    handle,
                                              rocblas_fill      uplo,
                                              rocblas_operation transA,
                                              rocblas_diagonal  diag,
-                                             rocblas_int       m,
+                                             rocblas_int       n,
                                              const double*     A,
                                              rocblas_int       lda,
                                              rocblas_stride    stride_A,
@@ -264,8 +261,8 @@ rocblas_status rocblas_dtrsv_strided_batched(rocblas_handle    handle,
                                              rocblas_int       batch_count)
 try
 {
-    return rocblas_trsv_strided_batched_impl<ROCBLAS_SDCTRSV_NB>(
-        handle, uplo, transA, diag, m, A, lda, stride_A, x, incx, stride_x, batch_count);
+    return rocblas_trsv_strided_batched_impl(
+        handle, uplo, transA, diag, n, A, lda, stride_A, x, incx, stride_x, batch_count);
 }
 catch(...)
 {
@@ -276,7 +273,7 @@ rocblas_status rocblas_ctrsv_strided_batched(rocblas_handle               handle
                                              rocblas_fill                 uplo,
                                              rocblas_operation            transA,
                                              rocblas_diagonal             diag,
-                                             rocblas_int                  m,
+                                             rocblas_int                  n,
                                              const rocblas_float_complex* A,
                                              rocblas_int                  lda,
                                              rocblas_stride               stride_A,
@@ -286,8 +283,8 @@ rocblas_status rocblas_ctrsv_strided_batched(rocblas_handle               handle
                                              rocblas_int                  batch_count)
 try
 {
-    return rocblas_trsv_strided_batched_impl<ROCBLAS_SDCTRSV_NB>(
-        handle, uplo, transA, diag, m, A, lda, stride_A, x, incx, stride_x, batch_count);
+    return rocblas_trsv_strided_batched_impl(
+        handle, uplo, transA, diag, n, A, lda, stride_A, x, incx, stride_x, batch_count);
 }
 catch(...)
 {
@@ -298,7 +295,7 @@ rocblas_status rocblas_ztrsv_strided_batched(rocblas_handle                handl
                                              rocblas_fill                  uplo,
                                              rocblas_operation             transA,
                                              rocblas_diagonal              diag,
-                                             rocblas_int                   m,
+                                             rocblas_int                   n,
                                              const rocblas_double_complex* A,
                                              rocblas_int                   lda,
                                              rocblas_stride                stride_A,
@@ -308,8 +305,8 @@ rocblas_status rocblas_ztrsv_strided_batched(rocblas_handle                handl
                                              rocblas_int                   batch_count)
 try
 {
-    return rocblas_trsv_strided_batched_impl<ROCBLAS_ZTRSV_NB>(
-        handle, uplo, transA, diag, m, A, lda, stride_A, x, incx, stride_x, batch_count);
+    return rocblas_trsv_strided_batched_impl(
+        handle, uplo, transA, diag, n, A, lda, stride_A, x, incx, stride_x, batch_count);
 }
 catch(...)
 {

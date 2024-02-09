@@ -35,6 +35,11 @@ Definitions:
     - { N:  1024, K: 1025, lda: 1026 }
     - { N:  2000, K:  256, lda: 1000 }
 
+  - &size_t_index
+    - { N:  3, K: 2, lda: *c_pos_x2_overflow_int32, incx: 1 }
+    - { N:  3, K: 2, lda: 3, incx: *c_pos_x2_overflow_int32 }
+    - { N:  3, K: 2, lda: 3, incx: *c_neg_x2_overflow_int32 }
+
   - &common_args
     precision: *single_double_precisions_complex_real
     uplo: [L, U]
@@ -53,6 +58,17 @@ Tests:
   diag: N
   matrix_size: *special_case_range
 
+- name: tbsv_size_t
+  category: stress
+  function: tbsv
+  precision: *single_precision
+  uplo: [U, L]
+  transA: [N, T]
+  diag: [N]
+  matrix_size: *size_t_index
+  os_flags: LINUX
+  gpu_arch: ['90a']
+
 # Regular tbsv
 - name: tbsv_bad_arg
   category: pre_checkin
@@ -61,7 +77,7 @@ Tests:
   uplo: [ L ]
   transA: [ N ]
   diag: [ N ]
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: tbsv_fortran
   category: quick
@@ -69,7 +85,7 @@ Tests:
   arguments: *common_args
   matrix_size: *small_matrix_size_range
   incx: [ 2 ]
-  fortran: true
+  api: FORTRAN
 
 - name: tbsv_small
   category: quick
@@ -100,7 +116,7 @@ Tests:
   uplo: [ L ]
   transA: [ N ]
   diag: [ N ]
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: tbsv_batched_fortran
   category: quick
@@ -109,7 +125,7 @@ Tests:
   matrix_size: *small_matrix_size_range
   incx: [ 2 ]
   batch_count: [ -1, 0, 3 ]
-  fortran: true
+  api: FORTRAN
 
 - name: tbsv_batched_small
   category: quick
@@ -143,7 +159,7 @@ Tests:
   uplo: [ L ]
   transA: [ N ]
   diag: [ N ]
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: tbsv_strided_batched_fortran
   category: quick
@@ -153,7 +169,7 @@ Tests:
   incx: [ 2 ]
   batch_count: [ -1, 0, 3 ]
   stride_scale: [ 2 ]
-  fortran: true
+  api: FORTRAN
 
 - name: tbsv_strided_batched_small
   category: quick

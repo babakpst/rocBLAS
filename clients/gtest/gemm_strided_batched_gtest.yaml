@@ -3,6 +3,11 @@ include: rocblas_common.yaml
 include: known_bugs.yaml
 
 Definitions:
+
+  # using stride_x,y,d to test out offsets of rocblas_internal_gemm_interface()
+  - &gemm_internal_matrix_size
+    - { M: 511, N: 511, K: 511, lda: 511, ldb: 511, ldc: 511, ldd: 511, stride_a: 0, stride_b: 261121, stride_c: 261121, stride_x: 4294967296, stride_y: 4294967297, stride_d: 4294967298 }
+
   - &small_matrix_size_range
     - { M:     0, N:     8, K:     8, lda:     8, ldb:     8, ldc:     8, ldd:     8, stride_a:       64, stride_b:       64, stride_c:       64, stride_d:       64 } # m==0
     - { M:     8, N:     0, K:     8, lda:     8, ldb:     8, ldc:     8, ldd:     8, stride_a:       64, stride_b:       64, stride_c:       64, stride_d:       64 } # n==0
@@ -240,9 +245,10 @@ Tests:
     - gemm_strided_batched_bad_arg: *half_single_double_complex_real_precisions
     - gemm_strided_batched_ex_bad_arg: *real_precisions
     - gemm_strided_batched_ex_bad_arg: *complex_precisions
+    - gemm_strided_batched_ex3_bad_arg: *float8_float8_float8
   transA: N
   transB: N
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 # Tests confirm no NaN propagation when alpha = 0, 2 and beta = 0. Value .NaN is converted into zero
 - {name: alpha_beta_zero_NaN, category: pre_checkin, precision: *single_precision, batch_count: 1,
@@ -267,7 +273,7 @@ Tests:
    a_type: f64_r, b_type: f64_r, c_type: f64_r, d_type: f64_r, compute_type: f64_r,
    transA: T, transB: T, M: 256, N: 128, K:  64, alpha: [ .NaN, 2 ], beta: [ .NaN, 2 ] }
 
-# Split *real_precisions into *int8 and *nonint8_real_precisions. Since int8 has flags 0,1
+# Split *real_precisions into *int8 and *nonint8_real_precisions. TODO: merge nonint8 and int8 test groups
 
 - name: gemm_strided_batched_fortran
   category: quick
@@ -277,21 +283,33 @@ Tests:
     - gemm_strided_batched_ex: *nonint8_real_precisions
     - gemm_strided_batched_ex: *single_double_precisions_complex
   matrix_size: *small_matrix_size_range
+  pointer_mode_host: false
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range_small
   batch_count: [ -1, 0, 3 ]
-  fortran: true
+  api: FORTRAN
 
 - name: gemm_strided_batched_int8_fortran
   category: quick
   function:
     - gemm_strided_batched_ex: *int8_precision
   matrix_size: *small_matrix_size_range
+  pointer_mode_device: false
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range_small
   batch_count: [ -1, 0, 3 ]
-  fortran: true
-  flags: [0,1]
+  api: FORTRAN
+
+- name: gemm_strided_batched_internal
+  category: quick
+  function:
+    - gemm_strided_batched: *single_precision
+  matrix_size: *gemm_internal_matrix_size
+  pointer_mode_host: false
+  transA_transB: *transA_transB_range
+  alpha_beta: *alpha_beta_range_small
+  batch_count: [ 3 ]
+  api: INTERNAL
 
 - name: gemm_strided_batched_small
   category: quick
@@ -299,6 +317,7 @@ Tests:
     gemm_strided_batched: *half_single_double_precisions
     gemm_strided_batched_ex: *nonint8_real_precisions
   matrix_size: *small_matrix_size_range
+  pointer_mode_device: false
   alpha_beta: *alpha_beta_range
   transA_transB: *transA_transB_range
   batch_count: [ -1, 0, 3 ]
@@ -308,10 +327,248 @@ Tests:
   function:
     gemm_strided_batched_ex: *int8_precision
   matrix_size: *small_matrix_size_range
+  pointer_mode_host: false
   alpha_beta: *alpha_beta_range
   transA_transB: *transA_transB_range
   batch_count: [ -1, 0, 3 ]
-  flags: [0,1]
+
+- name: F8SS_family_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *F8SS_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: F8HS_family_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *F8HS_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: F8F8S_family_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *F8F8S_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  # flags: [0 ,stochastic_rounding32]
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: stage1_unit_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage1_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 224, ldc: 320, ldd: 320 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+  api: [ C, FORTRAN ]
+
+- name: stage1_small_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage1_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  M: [ 1, 2, 3, 4]
+  N: [ 1, 2, 3, 4]
+  K: [ 1, 2, 3, 4, 16, 32]
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: stage1_unit_SR_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage1_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  flags: [stochastic_rounding]
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: stage1_small_SR_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage1_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  M: [ 1, 2, 3, 4]
+  N: [ 1, 2, 3, 4]
+  K: [ 1, 2, 3, 4, 16, 32]
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  flags: [stochastic_rounding]
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: stage1_res_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage1_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 0
+  res_check: 1
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: stage1_res_SR_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage1_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 0
+  res_check: 1
+  norm_check: 0
+  flags: [stochastic_rounding]
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: stage2_unit_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage2_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+  api: [ C, FORTRAN ]
+
+- name: stage2_small_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage2_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  M: [ 1, 2, 3, 4]
+  N: [ 1, 2, 3, 4]
+  K: [ 1, 2, 3, 4, 16, 32]
+  unit_check: 1
+  res_check: 0
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
+
+- name: stage2_res_strided_batched
+  category: quick
+  function: gemm_strided_batched_ex3
+  precision: *stage2_family
+  transA: [ N, T ]
+  transB: [ N, T ]
+  alpha_beta: *alpha_beta_range
+  matrix_size:
+    - { M:  32, N:  32, K:  32 }
+    - { M:  32, N:  64, K:  96 }
+    - { M:  32, N:  64, K:  96, lda: 128, ldb: 128, ldc: 128, ldd: 128 }
+    - { M:  111, N:  777, K:  111 }
+    - { M:  555, N:  777, K:  111 }
+  unit_check: 0
+  res_check: 1
+  norm_check: 0
+  initialization: rand_int_zero_one
+  batch_count: [ -1, 0, 1, 3 ]
+  gpu_arch: '94?'
 
 - name: gemm_strided_batched_small_complex
   category: quick
@@ -319,6 +576,7 @@ Tests:
     gemm_strided_batched: *single_double_precisions_complex
     gemm_strided_batched_ex: *single_double_precisions_complex
   matrix_size: *small_matrix_size_range
+  pointer_mode_device: false
   alpha_beta: *complex_alpha_beta_range
   transA_transB: *transA_transB_range
   batch_count: [ -1, 0, 3 ]
@@ -329,6 +587,7 @@ Tests:
     gemm_strided_batched: *half_single_double_precisions
     gemm_strided_batched_ex: *nonint8_real_precisions
   matrix_size: *small_matrix_size_stride_a_range
+  pointer_mode_host: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -342,6 +601,7 @@ Tests:
   function:
     gemm_strided_batched_ex: *int8_precision
   matrix_size: *small_matrix_size_stride_a_range
+  pointer_mode_device: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -349,7 +609,6 @@ Tests:
   transA: N
   transB: N
   batch_count: [ 1, 3 ]
-  flags: [0,1]
 
 - name: gemm_strided_batched_small_stride_zero_complex
   category: quick
@@ -357,6 +616,7 @@ Tests:
     gemm_strided_batched: *single_double_precisions_complex
     gemm_strided_batched_ex: *single_double_precisions_complex
   matrix_size: *small_matrix_size_stride_a_range
+  pointer_mode_host: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -371,6 +631,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *medium_matrix_size_range
+  pointer_mode_device: false
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
   batch_count: [ -1, 0, 3 ]
@@ -380,11 +641,12 @@ Tests:
   function:
     gemm_strided_batched_ex: *hpa_half_precision
   matrix_size: *medium_matrix_size_range
+  pointer_mode_host: false
   transA_transB: *transA_transB_range
   alpha: 1
   beta: 0
-  flags: 4
-  initialization: special
+  flags: [4, 20]
+  initialization: [ denorm, denorm2 ]
   batch_count: [ -1, 0, 3 ]
 
 - name: gemm_strided_batched_medium_complex
@@ -393,6 +655,7 @@ Tests:
     gemm_strided_batched: *single_double_precisions_complex
     gemm_strided_batched_ex: *single_double_precisions_complex
   matrix_size: *medium_matrix_size_range
+  pointer_mode_device: false
   transA_transB: *transA_transB_range
   alpha_beta: *complex_alpha_beta_range
   batch_count: [ -1, 0, 3 ]
@@ -403,6 +666,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *medium_matrix_size_stride_a_range
+  pointer_mode_host: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -416,10 +680,11 @@ Tests:
   function:
     gemm_strided_batched_ex: *hpa_half_precision
   matrix_size: *medium_matrix_size_stride_a_range
+  pointer_mode_device: false
   alpha: 1
   beta: 0
-  flags: 4
-  initialization: special
+  flags: [4, 20]
+  initialization: [ denorm, denorm2 ]
   transA: N
   transB: N
   batch_count: 3
@@ -430,6 +695,7 @@ Tests:
     gemm_strided_batched: *single_double_precisions_complex
     gemm_strided_batched_ex: *single_double_precisions_complex
   matrix_size: *medium_matrix_size_stride_a_range
+  pointer_mode_host: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -444,6 +710,7 @@ Tests:
     gemm_strided_batched: *half_single_double_precisions
     gemm_strided_batched_ex: *nonint8_real_precisions
   matrix_size: *large_matrix_size_range
+  pointer_mode_device: false
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
   batch_count: [ -1, 0, 3 ]
@@ -453,10 +720,10 @@ Tests:
   function:
     gemm_strided_batched_ex: *int8_precision
   matrix_size: *large_matrix_size_range
+  pointer_mode_host: false
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
   batch_count: [ -1, 0, 3 ]
-  flags: [0,1]
 
 - name: gemm_strided_batched_large_complex
   category: pre_checkin
@@ -464,6 +731,7 @@ Tests:
     gemm_strided_batched: *single_double_precisions_complex
     gemm_strided_batched_ex: *single_double_precisions_complex
   matrix_size: *large_matrix_size_range
+  pointer_mode_device: false
   transA_transB: *transA_transB_range
   alpha_beta: *alpha_beta_range
   batch_count: [ -1, 0, 1, 3 ]
@@ -474,6 +742,7 @@ Tests:
     gemm_strided_batched: *half_single_double_precisions
     gemm_strided_batched_ex: *nonint8_real_precisions
   matrix_size: *large_matrix_size_stride_a_range
+  pointer_mode_host: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -487,6 +756,7 @@ Tests:
   function:
     gemm_strided_batched_ex: *int8_precision
   matrix_size: *large_matrix_size_stride_a_range
+  pointer_mode_device: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -494,7 +764,6 @@ Tests:
   transA: N
   transB: N
   batch_count: [ -1, 0, 3 ]
-  flags: [0,1]
 
 - name: gemm_strided_batched_large_stride_zero_complex
   category: pre_checkin
@@ -502,6 +771,7 @@ Tests:
     gemm_strided_batched: *single_double_precisions_complex
     gemm_strided_batched_ex: *single_double_precisions_complex
   matrix_size: *large_matrix_size_stride_a_range
+  pointer_mode_host: false
   alpha: 2.0
   alphai: 1.0
   beta: 3.0
@@ -516,6 +786,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *deepbench_vec
+  pointer_mode_device: false
   alpha: 1.0
   beta: 0.0
   transA: N
@@ -527,10 +798,11 @@ Tests:
   function:
     gemm_strided_batched_ex: *hpa_half_precision
   matrix_size: *deepbench_vec
+  pointer_mode_host: false
   alpha: 1.0
   beta: 0.0
-  flags: 4
-  initialization: special
+  flags: [4, 20]
+  initialization: [ denorm, denorm2 ]
   transA: N
   transB: T
   batch_count: [ 2 ]
@@ -541,6 +813,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *conv_resnet50_fwd
+  pointer_mode_device: false
   alpha: 1.0
   beta: 0.0
   transA: N
@@ -553,6 +826,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *conv_resnet50_bwddata
+  pointer_mode_host: false
   alpha: 1.0
   beta: 0.0
   transA: N
@@ -565,6 +839,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *conv_inception4_fwd
+  pointer_mode_device: false
   alpha: 1.0
   beta: 0.0
   transA: N
@@ -577,6 +852,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *conv_inception4_bwddata
+  pointer_mode_host: false
   alpha: 1.0
   beta: 0.0
   transA: N
@@ -589,6 +865,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *conv_ctest_bwddata
+  pointer_mode_host: false
   alpha: 1.0
   beta: 0.0
   transA: N
@@ -601,6 +878,7 @@ Tests:
     gemm_strided_batched: *half_single_precisions
     gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size: *conv_ctest_fwd
+  pointer_mode_device: false
   alpha: 1.0
   beta: 0.0
   transA: N
@@ -614,6 +892,7 @@ Tests:
   M: 128
   N: 128
   K: 1000
+  pointer_mode_host: false
   transA: N
   transB: N
   alpha: 0.001
@@ -642,6 +921,7 @@ Tests:
     - { M:  3,   N:  5 }
     - { M:  512, N:  100 }
     - { M:  63,  N:  512 }
+  pointer_mode_host: false
   batch_count: 1
 
 - name: gemm_strided_batched_graph_test
@@ -651,9 +931,25 @@ Tests:
     - gemm_strided_batched_ex: *hpa_half_single_precisions
   matrix_size:
       - { M:  512, N:  100 }
+  pointer_mode_device: false
   transA: N
   transB: N
   alpha_beta: *alpha_beta_range
   batch_count: [ 3 ]
   graph_test: true
+
+- name: gemm_strided_batched_repeatability_check
+  category: pre_checkin
+  function:
+    - gemm_strided_batched: *half_single_double_precisions_complex_real
+  matrix_size: *gemm_internal_matrix_size
+  initialization: hpl
+  transA: [N , T]
+  transB: [N, T]
+  alpha_beta: *alpha_beta_range
+  atomics_mode: 0
+  batch_count: [ 3 ]
+  iters: 5
+  pointer_mode_host: false
+  repeatability_check: true
 ...

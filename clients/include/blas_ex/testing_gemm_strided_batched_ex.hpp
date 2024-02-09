@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -46,7 +46,7 @@ void testing_gemm_strided_batched_ex_bad_arg(const Arguments& arg)
 {
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
-        auto rocblas_gemm_strided_batched_ex_fn = arg.fortran
+        auto rocblas_gemm_strided_batched_ex_fn = arg.api == FORTRAN
                                                       ? rocblas_gemm_strided_batched_ex_fortran
                                                       : rocblas_gemm_strided_batched_ex;
 
@@ -245,8 +245,9 @@ dD, d_type, ldd, stride_d, batch_count, compute_type, algo, solution_index, flag
 template <typename Ti, typename To, typename Tc>
 void testing_gemm_strided_batched_ex(const Arguments& arg)
 {
-    auto rocblas_gemm_strided_batched_ex_fn
-        = arg.fortran ? rocblas_gemm_strided_batched_ex_fortran : rocblas_gemm_strided_batched_ex;
+    auto rocblas_gemm_strided_batched_ex_fn = arg.api == FORTRAN
+                                                  ? rocblas_gemm_strided_batched_ex_fortran
+                                                  : rocblas_gemm_strided_batched_ex;
 
     rocblas_gemm_algo algo = rocblas_gemm_algo(arg.algo);
     int32_t           solution_index(arg.solution_index);
@@ -254,9 +255,9 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
 
     bool alpha_isnan = arg.alpha_isnan<Tc>();
     bool beta_isnan  = arg.beta_isnan<Tc>();
-    if(!std::is_same<To, float>{} && !std::is_same<To, double>{}
-       && !std::is_same<To, rocblas_half>{}
-       && !rocblas_is_complex<To> && (alpha_isnan || beta_isnan))
+    if(!std::is_same_v<
+           To,
+           float> && !std::is_same_v<To, double> && !std::is_same_v<To, rocblas_half> && !rocblas_is_complex<To> && (alpha_isnan || beta_isnan))
         return; // Exclude integers or other types which don't support NaN
 
     Tc h_alpha_Tc = arg.get_alpha<Tc>();
@@ -268,8 +269,8 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
     rocblas_local_handle handle{arg};
     auto                 transA = char2rocblas_operation(arg.transA);
     auto                 transB = char2rocblas_operation(arg.transB);
-    auto                 M = arg.M, N = arg.N, K = arg.K;
-    auto                 lda = arg.lda, ldb = arg.ldb, ldc = arg.ldc, ldd = arg.ldd;
+    int                  M = arg.M, N = arg.N, K = arg.K;
+    int                  lda = arg.lda, ldb = arg.ldb, ldc = arg.ldc, ldd = arg.ldd;
     // dropping sign bit as test strides are positive, and no int64 host_strided_batch_matrix operator[]
     size_t stride_a = arg.stride_a, stride_b = arg.stride_b;
     size_t stride_c = arg.stride_c, stride_d = arg.stride_d;
@@ -277,20 +278,16 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
     auto   A_col       = transA == rocblas_operation_none ? std::max(K, 1) : M;
     auto   B_row       = transB == rocblas_operation_none ? std::max(K, 1) : N;
     auto   B_col       = transB == rocblas_operation_none ? N : std::max(K, 1);
-    auto   batch_count = arg.batch_count;
+    int    batch_count = arg.batch_count;
     auto   d_type      = arg.d_type;
+
+    rocblas_math_mode math_mode = rocblas_math_mode(arg.math_mode);
+    CHECK_ROCBLAS_ERROR(rocblas_set_math_mode(handle, math_mode));
+    CHECK_ROCBLAS_ERROR(rocblas_get_math_mode(handle, &math_mode));
 
     // check for invalid sizes
     bool invalid_size = M < 0 || N < 0 || K < 0 || lda < A_row || ldb < B_row || ldc < M || ldd < M
                         || batch_count < 0;
-
-    // size checking is only needed for int8x4
-    bool pack_to_int8x4 = arg.flags & rocblas_gemm_flags_pack_int8x4;
-    bool int8_invalid   = (pack_to_int8x4 && std::is_same<Ti, int8_t>{}
-                         && (K % 4 != 0 || (transA != rocblas_operation_none && lda % 4 != 0)
-                             || (transB == rocblas_operation_none && ldb % 4 != 0)
-                             || stride_a % 4 != 0 || stride_b % 4 != 0));
-
     if(invalid_size || !M || !N || !batch_count)
     {
         EXPECT_ROCBLAS_STATUS(rocblas_gemm_strided_batched_ex_fn(handle,
@@ -323,51 +320,6 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
                                                                  solution_index,
                                                                  flags),
                               invalid_size ? rocblas_status_invalid_size : rocblas_status_success);
-        return;
-    }
-    if(int8_invalid)
-    {
-        // Allocate host memory
-        device_strided_batch_matrix<Ti> dA(A_row, A_col, lda, stride_a, batch_count);
-        device_strided_batch_matrix<Ti> dB(B_row, B_col, ldb, stride_b, batch_count);
-        device_strided_batch_matrix<To> dC(M, N, ldc, stride_c, batch_count);
-        device_strided_batch_matrix<To> dD(M, N, ldd, stride_d, batch_count);
-
-        // Check device memory allocation
-        CHECK_DEVICE_ALLOCATION(dA.memcheck());
-        CHECK_DEVICE_ALLOCATION(dB.memcheck());
-        CHECK_DEVICE_ALLOCATION(dC.memcheck());
-        CHECK_DEVICE_ALLOCATION(dD.memcheck());
-        EXPECT_ROCBLAS_STATUS(rocblas_gemm_strided_batched_ex_fn(handle,
-                                                                 transA,
-                                                                 transB,
-                                                                 M,
-                                                                 N,
-                                                                 K,
-                                                                 &h_alpha_Tc,
-                                                                 dA,
-                                                                 arg.a_type,
-                                                                 lda,
-                                                                 stride_a,
-                                                                 dB,
-                                                                 arg.b_type,
-                                                                 ldb,
-                                                                 stride_b,
-                                                                 &h_beta_Tc,
-                                                                 dC,
-                                                                 arg.c_type,
-                                                                 ldc,
-                                                                 stride_c,
-                                                                 dD,
-                                                                 arg.d_type,
-                                                                 ldd,
-                                                                 stride_d,
-                                                                 batch_count,
-                                                                 arg.compute_type,
-                                                                 algo,
-                                                                 solution_index,
-                                                                 flags),
-                              rocblas_status_invalid_size);
         return;
     }
 
@@ -411,21 +363,16 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
     }
 #endif
     // update after invalid checks
-    if(!arg.c_noalias_d)
+    if(!arg.outofplace)
     {
         ldd      = ldc;
         stride_d = stride_c;
         d_type   = arg.c_type;
     }
 
-    const size_t size_a = A_col * size_t(lda) + size_t(batch_count - 1) * stride_a;
-    const size_t size_b = B_col * size_t(ldb) + size_t(batch_count - 1) * stride_b;
-    const size_t size_c = N * size_t(ldc) + size_t(batch_count - 1) * stride_c;
-    const size_t size_d = N * size_t(ldd) + size_t(batch_count - 1) * stride_d;
-
     // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
     // Allocate host memory
-    using To_hpa = std::conditional_t<std::is_same<To, rocblas_bfloat16>{}, float, To>;
+    using To_hpa = std::conditional_t<std::is_same_v<To, rocblas_bfloat16>, float, To>;
     host_strided_batch_matrix<Ti>     hA(A_row, A_col, lda, stride_a, batch_count);
     host_strided_batch_matrix<Ti>     hB(B_row, B_col, ldb, stride_b, batch_count);
     host_strided_batch_matrix<To>     hC(M, N, ldc, stride_c, batch_count);
@@ -448,9 +395,9 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
     // if C==D, allocate C big enough for the larger of C and D; D points to C
     device_strided_batch_matrix<To> dC(M, N, ldc, stride_c, batch_count);
     device_strided_batch_matrix<To> dD
-        = (arg.c_noalias_d) ? device_strided_batch_matrix<To>(M, N, ldd, stride_d, batch_count)
-                            : device_strided_batch_matrix<To>(0, 1, 1, 1, 1);
-    device_strided_batch_matrix<To>& dDref = (arg.c_noalias_d) ? dD : dC;
+        = (arg.outofplace) ? device_strided_batch_matrix<To>(M, N, ldd, stride_d, batch_count)
+                           : device_strided_batch_matrix<To>(0, 1, 1, 1, 1);
+    device_strided_batch_matrix<To>& dDref = (arg.outofplace) ? dD : dC;
     device_vector<Tc>                d_alpha_Tc(1);
     device_vector<Tc>                d_beta_Tc(1);
 
@@ -462,14 +409,16 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
     CHECK_DEVICE_ALLOCATION(d_alpha_Tc.memcheck());
     CHECK_DEVICE_ALLOCATION(d_beta_Tc.memcheck());
 
-    bool alt = (rocblas_gemm_flags_fp16_alt_impl & flags);
+    bool alt       = (rocblas_gemm_flags_fp16_alt_impl & flags);
+    bool alt_round = (rocblas_gemm_flags_fp16_alt_impl_rnz & flags);
 
     // Initialize data on host memory
     rocblas_init_matrix<Ti>(
         hA, arg, rocblas_client_alpha_sets_nan, rocblas_client_general_matrix, true);
-    rocblas_init_matrix<Ti>(
+    rocblas_init_matrix<Ti, true>(
         hB, arg, rocblas_client_alpha_sets_nan, rocblas_client_general_matrix, false, true);
-    rocblas_init_matrix<To>(hC, arg, rocblas_client_beta_sets_nan, rocblas_client_general_matrix);
+    rocblas_init_matrix<To, true>(
+        hC, arg, rocblas_client_beta_sets_nan, rocblas_client_general_matrix);
 
     rocblas_init_nan<To>(hD_1, M, N, ldd, stride_d, batch_count);
     rocblas_init_nan<To_hpa>(hD_gold, M, N, ldd, stride_d, batch_count);
@@ -477,7 +426,7 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
     hD_2.copy_from(hD_1);
 
 #if 0 // Copied from testing_gemm_ex.hpp
-    if(std::is_same<To, rocblas_half>{} && std::is_same<Tc, float>{})
+    if(std::is_same_v<To, rocblas_half> && std::is_same_v<Tc, float>)
     {
         // half precision IEEE has max and lowest values 65504 and -65504,
         // foat precision IEEE has max and lowest values 3.403e+38 and -3.403e+38
@@ -510,36 +459,8 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
 #endif
 
     // copy data from CPU to device
-    if(std::is_same<Ti, int8_t>{} && transA == rocblas_operation_none && pack_to_int8x4)
-    {
-        host_strided_batch_matrix<Ti> hA_packed(A_row, A_col, lda, stride_a, batch_count);
-        hA_packed.copy_from(hA);
-
-        for(int b = 0; b < batch_count; b++)
-            rocblas_packInt8(hA_packed[b], hA[b], M, K, lda);
-
-        CHECK_HIP_ERROR(dA.transfer_from(hA_packed));
-    }
-    else
-    {
-        CHECK_HIP_ERROR(dA.transfer_from(hA));
-    }
-
-    // if int8 and B transposed and valid case, pack B
-    if(std::is_same<Ti, int8_t>{} && transB != rocblas_operation_none && pack_to_int8x4)
-    {
-        host_strided_batch_matrix<Ti> hB_packed(B_row, B_col, ldb, stride_b, batch_count);
-        hB_packed.copy_from(hB);
-        for(int b = 0; b < batch_count; b++)
-            rocblas_packInt8(hB_packed[b], hB[b], N, K, ldb);
-
-        CHECK_HIP_ERROR(dB.transfer_from(hB_packed));
-    }
-    else
-    {
-        CHECK_HIP_ERROR(dB.transfer_from(hB));
-    }
-
+    CHECK_HIP_ERROR(dA.transfer_from(hA));
+    CHECK_HIP_ERROR(dB.transfer_from(hB));
     CHECK_HIP_ERROR(dC.transfer_from(hC));
 
     if(arg.unit_check || arg.norm_check)
@@ -619,25 +540,36 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
 
         // copy C matrix into D matrix
         copy_matrix_with_different_leading_dimensions(hC, hD_gold);
+
+        // For the xf32 xdl math op, cast type of A/B from float to xfloat32 .
+        if(std::is_same<Ti, float>{} && math_mode == rocblas_xf32_xdl_math_op)
+        {
+            type_to_xdl_math_op_type<rocblas_xfloat32, float>(hA.data(), hA.nmemb());
+            type_to_xdl_math_op_type<rocblas_xfloat32, float>(hB.data(), hB.nmemb());
+        }
+
         cpu_time_used = get_time_us_no_sync();
 
         // CPU BLAS
         for(rocblas_int b = 0; b < batch_count; b++)
         {
-            cblas_gemm<Ti, To_hpa>(transA,
-                                   transB,
-                                   M,
-                                   N,
-                                   K,
-                                   h_alpha_Tc,
-                                   hA[b],
-                                   lda,
-                                   hB[b],
-                                   ldb,
-                                   h_beta_Tc,
-                                   hD_gold[b],
-                                   ldd,
-                                   alt);
+            ref_gemm<Ti, To_hpa>(
+                transA,
+                transB,
+                M,
+                N,
+                K,
+                h_alpha_Tc,
+                hA[b],
+                lda,
+                hB[b],
+                ldb,
+                h_beta_Tc,
+                hD_gold[b],
+                ldd,
+                alt ? (alt_round ? rocblas_bfloat16::rocblas_truncate_t::rocblas_round_near_zero
+                                 : rocblas_bfloat16::rocblas_truncate_t::rocblas_truncate)
+                    : rocblas_bfloat16::rocblas_truncate_t::rocblas_round_near_even);
         }
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
@@ -652,7 +584,7 @@ void testing_gemm_strided_batched_ex(const Arguments& arg)
                 near_check_general<To, To_hpa>(
                     M, N, ldd, stride_d, hD_gold, hD_2, batch_count, tol);
             }
-            else if(std::is_same<Tc, rocblas_half>{} && K > 10000)
+            else if(std::is_same_v<Tc, rocblas_half> && K > 10000)
             {
                 // For large K, rocblas_half tends to diverge proportional to K
                 // Tolerance is slightly greater than 1 / 1024.0

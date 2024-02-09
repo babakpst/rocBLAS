@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -50,6 +50,7 @@ extern "C" void rocblas_shutdown();
 #include <iomanip>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -69,8 +70,6 @@ extern "C" void rocblas_shutdown();
 #define ROCBLAS_LIB_PATH "/opt/rocm/lib/rocblas"
 #endif
 
-#ifdef WIN32
-
 #if __has_include(<filesystem>)
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -81,8 +80,6 @@ namespace fs = std::experimental::filesystem;
 #else
 #error no filesystem found
 #endif
-
-#endif // WIN32
 
 namespace
 {
@@ -134,7 +131,6 @@ namespace
         using tensile_type = Tensile::BFloat16;
     };
 
-    // int8_t -> int8_t (supported for MI-kernel) / rocblas_int8x4 -> PackedInt8x4
     template <>
     struct rocblas_to_tensile_type<int8_t>
     {
@@ -142,9 +138,15 @@ namespace
     };
 
     template <>
-    struct rocblas_to_tensile_type<rocblas_int8x4>
+    struct rocblas_to_tensile_type<rocblas_f8>
     {
-        using tensile_type = Tensile::Int8x4;
+        using tensile_type = Tensile::Float8;
+    };
+
+    template <>
+    struct rocblas_to_tensile_type<rocblas_bf8>
+    {
+        using tensile_type = Tensile::BFloat8;
     };
 
     /********************************************************************
@@ -153,15 +155,17 @@ namespace
     template <typename>
     constexpr auto tensile_datatype = nullptr;
 
-    // int8_t -> int8_t (supported for MI-kernel) / rocblas_int8x4 -> PackedInt8x4
     template <>
     constexpr auto tensile_datatype<int8_t> = Tensile::DataType::Int8;
 
     template <>
-    constexpr auto tensile_datatype<rocblas_int8x4> = Tensile::DataType::Int8x4;
+    constexpr auto tensile_datatype<int32_t> = Tensile::DataType::Int32;
 
     template <>
-    constexpr auto tensile_datatype<int32_t> = Tensile::DataType::Int32;
+    constexpr auto tensile_datatype<rocblas_f8> = Tensile::DataType::Float8;
+
+    template <>
+    constexpr auto tensile_datatype<rocblas_bf8> = Tensile::DataType::BFloat8;
 
     template <>
     constexpr auto tensile_datatype<rocblas_half> = Tensile::DataType::Half;
@@ -197,6 +201,77 @@ namespace
         }
     }
 
+    Tensile::LazyLoadingInit getLazyLoadingArch(int deviceID)
+    {
+        hipDeviceProp_t deviceProperties;
+        hipGetDeviceProperties(&deviceProperties, deviceID);
+        // strip out xnack/ecc from name
+        std::string deviceFullString(deviceProperties.gcnArchName);
+        std::string deviceString = deviceFullString.substr(0, deviceFullString.find(":"));
+
+        if(deviceString.find("gfx803") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx803;
+        }
+        else if(deviceString.find("gfx900") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx900;
+        }
+        else if(deviceString.find("gfx906") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx906;
+        }
+        else if(deviceString.find("gfx908") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx908;
+        }
+        else if(deviceString.find("gfx90a") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx90a;
+        }
+        else if(deviceString.find("gfx940") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx940;
+        }
+        else if(deviceString.find("gfx941") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx941;
+        }
+        else if(deviceString.find("gfx942") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx942;
+        }
+        else if(deviceString.find("gfx1010") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx1010;
+        }
+        else if(deviceString.find("gfx1011") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx1011;
+        }
+        else if(deviceString.find("gfx1012") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx1012;
+        }
+        else if(deviceString.find("gfx1030") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx1030;
+        }
+        else if(deviceString.find("gfx1100") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx1100;
+        }
+        else if(deviceString.find("gfx1101") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx1101;
+        }
+        else if(deviceString.find("gfx1102") != std::string::npos)
+        {
+            return Tensile::LazyLoadingInit::gfx1102;
+        }
+        return Tensile::LazyLoadingInit::None;
+    }
+
     /*************************************************************************
      * Class for converting alpha and beta between rocBLAS and Tensile types *
      * By default, alpha and beta are the same type as Tc compute_type       *
@@ -218,13 +293,19 @@ namespace
     /****************************************************************
      * Construct a Tensile Problem from a RocblasContractionProblem *
      ****************************************************************/
-    template <typename Ti, typename To, typename Tc>
-    auto ConstructTensileProblem(const RocblasContractionProblem<Ti, To, Tc>& prob)
+    template <typename TiA,
+              typename To,
+              typename Tc,
+              typename TiB = TiA,
+              typename TcA = TiA,
+              typename TcB = TiA>
+    auto ConstructTensileProblem(const RocblasContractionProblem<TiA, To, Tc, TiB, TcA, TcB>& prob)
     {
         // Tensile DataTypes corresponding to rocBLAS data types
-        static constexpr Tensile::DataType Tensile_Ti = tensile_datatype<Ti>;
-        static constexpr Tensile::DataType Tensile_To = tensile_datatype<To>;
-        static constexpr Tensile::DataType Tensile_Tc = tensile_datatype<Tc>;
+        static constexpr Tensile::DataType Tensile_TiA = tensile_datatype<TiA>;
+        static constexpr Tensile::DataType Tensile_TiB = tensile_datatype<TiB>;
+        static constexpr Tensile::DataType Tensile_To  = tensile_datatype<To>;
+        static constexpr Tensile::DataType Tensile_Tc  = tensile_datatype<Tc>;
 
         // Tensor descriptors for a, b
         Tensile::TensorDescriptor a, b;
@@ -254,7 +335,7 @@ namespace
         if(prob.trans_a != rocblas_operation_none)
         {
             a = {
-                    Tensile_Ti,
+                    Tensile_TiA,
                     {k, prob.m, prob.batch_count},
                     {prob.row_stride_a, prob.col_stride_a, prob.batch_stride_a},
                     prob.buffer_offset_a
@@ -265,7 +346,7 @@ namespace
         else
         {
             a = {
-                    Tensile_Ti,
+                    Tensile_TiA,
                     {prob.m, k, prob.batch_count},
                     {prob.row_stride_a, prob.col_stride_a, prob.batch_stride_a},
                     prob.buffer_offset_a
@@ -275,14 +356,14 @@ namespace
         }
 
         // If A is complex and conjugated, add a ComplexConjugate op to aops
-        if(rocblas_is_complex<Ti> && prob.trans_a == rocblas_operation_conjugate_transpose)
+        if(rocblas_is_complex<TiA> && prob.trans_a == rocblas_operation_conjugate_transpose)
             aops.push_back(Tensile::TensorOp::Type::ComplexConjugate);
 
         // If B is transposed, swap the free and bound dimensions and their ranks
         if(prob.trans_b != rocblas_operation_none)
         {
             b = {
-                    Tensile_Ti,
+                    Tensile_TiB,
                     {prob.n, k, prob.batch_count},
                     {prob.row_stride_b, prob.col_stride_b, prob.batch_stride_b},
                     prob.buffer_offset_b
@@ -293,7 +374,7 @@ namespace
         else
         {
             b = {
-                    Tensile_Ti,
+                    Tensile_TiB,
                     {k, prob.n, prob.batch_count},
                     {prob.row_stride_b, prob.col_stride_b, prob.batch_stride_b},
                     prob.buffer_offset_b
@@ -305,7 +386,7 @@ namespace
         // clang-format on
 
         // If B is complex and conjugated, add a ComplexConjugate op to bops
-        if(rocblas_is_complex<Ti> && prob.trans_b == rocblas_operation_conjugate_transpose)
+        if(rocblas_is_complex<TiB> && prob.trans_b == rocblas_operation_conjugate_transpose)
             bops.push_back(Tensile::TensorOp::Type::ComplexConjugate);
 
         // Descriptor for input matrix C
@@ -345,14 +426,19 @@ namespace
         tensileProblem.setAlphaType(Tensile_Tc);
         tensileProblem.setBetaType(Tensile_Tc);
 
+        if(std::is_same<To, rocblas_f8>{} || std::is_same<To, rocblas_bf8>{})
+        {
+            bool stochastic_rounding = prob.flags & rocblas_gemm_flags_stochastic_rounding;
+            tensileProblem.setStochasticRounding(stochastic_rounding);
+        }
+
         // HPA is active iff sizeof(compute type) > sizeof(input type)
-        // but when Ti=int8x4 (32-byte), we still need to use HPA since the primitive data is int8
-        tensileProblem.setHighPrecisionAccumulate(sizeof(Tc) > sizeof(Ti)
-                                                  || std::is_same<Ti, rocblas_int8x4>{});
+        tensileProblem.setHighPrecisionAccumulate(sizeof(Tc) > sizeof(TiA)
+                                                  || sizeof(Tc) > sizeof(TiB));
 
         // Environment variable to force use of VALU for double precision gemm
         static bool force_valu_for_dgemm = std::getenv("ROCBLAS_INTERNAL_FORCE_VALU_FOR_DGEMM");
-        if(std::is_same<Ti, double>::value && std::is_same<To, double>::value
+        if(std::is_same<TiA, double>::value && std::is_same<To, double>::value
            && std::is_same<Tc, double>::value && force_valu_for_dgemm)
         {
             tensileProblem.setArithmeticUnit(Tensile::ArithmeticUnit::VALU);
@@ -374,13 +460,17 @@ namespace
         else if(metric != rocblas_default_performance_metric)
             tensileProblem.setPerformanceMetric(performanceMetricMap(metric));
 
+        if(std::is_same<TiA, float>() && prob.handle->math_mode == rocblas_xf32_xdl_math_op)
+            tensileProblem.setF32XdlMathOp(Tensile::DataType::XFloat32);
+
         // alpha and beta are stored by value in Tensile::TypedContractionInputs
         // alpha and beta are copied from host to Tensile::TypedContractionInputs
         // If k==0, we do not need to dereference prob.alpha and can set tensileAlpha=0
         // Not positive if this is necessary here as well
-        typename AlphaBeta<Ti, To, Tc>::tensile_type tensileAlpha;
+        //TODO will this change with hybrid cases in f8
+        typename AlphaBeta<TiA, To, Tc>::tensile_type tensileAlpha;
         if(prob.k)
-            AlphaBeta<Ti, To, Tc>::copy(&tensileAlpha, prob.alpha);
+            AlphaBeta<TiA, To, Tc>::copy(&tensileAlpha, prob.alpha);
         else
             memset(&tensileAlpha, 0, sizeof(tensileAlpha));
         tensileProblem.setAlphaRestriction(Tensile::toScalarValueEnum(tensileAlpha));
@@ -394,7 +484,19 @@ namespace
         if(fp16AltImplEnv != -1)
             tensileProblem.setFp16AltImpl(fp16AltImplEnv);
         else
-            tensileProblem.setFp16AltImpl(prob.flags & rocblas_gemm_flags_fp16_alt_impl);
+            tensileProblem.setFp16AltImpl((prob.flags & rocblas_gemm_flags_fp16_alt_impl) == 0 ? 0
+                                                                                               : 1);
+
+        static const char* fp16AltImplRoundEnvStr
+            = std::getenv("ROCBLAS_INTERNAL_FP16_ALT_IMPL_RNZ");
+        static const int fp16AltImplRoundEnv
+            = (fp16AltImplRoundEnvStr == NULL ? -1
+                                              : (std::atoi(fp16AltImplRoundEnvStr) == 0 ? 0 : 1));
+        if(fp16AltImplRoundEnv != -1)
+            tensileProblem.setFp16AltImplRound(fp16AltImplRoundEnv);
+        else
+            tensileProblem.setFp16AltImplRound(
+                (prob.flags & rocblas_gemm_flags_fp16_alt_impl_rnz) == 0 ? 0 : 1);
 
         return tensileProblem;
     }
@@ -402,26 +504,36 @@ namespace
     /***************************************************************
      * Construct the inputs to a Tensile ContractionProblem        *
      ***************************************************************/
-    template <typename Ti, typename To, typename Tc>
-    auto GetTensileInputs(const RocblasContractionProblem<Ti, To, Tc>& prob)
+    template <typename TiA,
+              typename To  = TiA,
+              typename Tc  = To,
+              typename TiB = TiA,
+              typename TcA = TiA,
+              typename TcB = TiA>
+    // <typename Ti, typename To, typename Tc>
+    auto GetTensileInputs(const RocblasContractionProblem<TiA, To, Tc, TiB, TcA, TcB>& prob)
     {
         // Tensile types corresponding to Ti, To, Tc
-        using Tensile_Ti          = typename rocblas_to_tensile_type<Ti>::tensile_type;
-        using Tensile_To          = typename rocblas_to_tensile_type<To>::tensile_type;
-        using Tensile_Talpha_beta = typename AlphaBeta<Ti, To, Tc>::tensile_type;
+        using Tensile_TiA = typename rocblas_to_tensile_type<TiA>::tensile_type;
+        using Tensile_TiB = typename rocblas_to_tensile_type<TiB>::tensile_type;
+        using Tensile_To  = typename rocblas_to_tensile_type<To>::tensile_type;
+        //TODO verify this
+        using Tensile_Talpha_beta = typename AlphaBeta<TiA, To, Tc>::tensile_type;
 
         // Make sure rocBLAS and Tensile types are compatible
-        // (Even if Ti=rocblas_int8x4, Tensile_Ti=Int8x4, they are both 32-byte)
-        static_assert(sizeof(Tensile_Ti) == sizeof(Ti) && sizeof(Tensile_To) == sizeof(To),
+        static_assert(sizeof(Tensile_TiA) == sizeof(TiA) && sizeof(Tensile_TiB) == sizeof(TiB)
+                          && sizeof(Tensile_To) == sizeof(To),
                       "Tensile and rocBLAS types are not the same size");
 
-        static_assert(std::is_standard_layout<Ti>{} && std::is_standard_layout<Tensile_Ti>{}
-                          && std::is_standard_layout<To>{} && std::is_standard_layout<Tensile_To>{},
+        static_assert(std::is_standard_layout<TiA>{} && std::is_standard_layout<Tensile_TiA>{}
+                          && std::is_standard_layout<TiB>{}
+                          && std::is_standard_layout<Tensile_TiB>{} && std::is_standard_layout<To>{}
+                          && std::is_standard_layout<Tensile_To>{},
                       "Tensile or rocBLAS types are not standard layout types");
 
         // Structure describing the inputs (A, B, C, D, alpha, beta)
-        Tensile::TypedContractionInputs<Tensile_Ti,
-                                        Tensile_Ti,
+        Tensile::TypedContractionInputs<Tensile_TiA,
+                                        Tensile_TiB,
                                         Tensile_To,
                                         Tensile_To,
                                         Tensile_Talpha_beta,
@@ -429,13 +541,13 @@ namespace
             inputs;
 
         // Set the A, B, C, D matrices pointers in Tensile
-        inputs.a = reinterpret_cast<const Tensile_Ti*>(prob.A);
-        inputs.b = reinterpret_cast<const Tensile_Ti*>(prob.B);
+        inputs.a = reinterpret_cast<const Tensile_TiA*>(prob.A);
+        inputs.b = reinterpret_cast<const Tensile_TiB*>(prob.B);
         inputs.c = reinterpret_cast<const Tensile_To*>(prob.C);
         inputs.d = reinterpret_cast<Tensile_To*>(prob.D);
 
-        inputs.batchA = reinterpret_cast<Tensile_Ti const* const*>(prob.batch_A);
-        inputs.batchB = reinterpret_cast<Tensile_Ti const* const*>(prob.batch_B);
+        inputs.batchA = reinterpret_cast<Tensile_TiA const* const*>(prob.batch_A);
+        inputs.batchB = reinterpret_cast<Tensile_TiB const* const*>(prob.batch_B);
         inputs.batchC = reinterpret_cast<Tensile_To const* const*>(prob.batch_C);
         inputs.batchD = reinterpret_cast<Tensile_To* const*>(prob.batch_D);
 
@@ -446,10 +558,10 @@ namespace
         // alpha and beta are copied from host to Tensile::TypedContractionInputs
         // If k==0, we do not need to dereference prob.alpha and can set inputs.alpha=0
         if(prob.k)
-            AlphaBeta<Ti, To, Tc>::copy(&inputs.alpha, prob.alpha);
+            AlphaBeta<TiA, To, Tc>::copy(&inputs.alpha, prob.alpha);
         else
             memset(&inputs.alpha, 0, sizeof(inputs.alpha));
-        AlphaBeta<Ti, To, Tc>::copy(&inputs.beta, prob.beta);
+        AlphaBeta<TiA, To, Tc>::copy(&inputs.beta, prob.beta);
 
         return inputs;
     }
@@ -461,7 +573,7 @@ namespace
     {
         // The library object
         std::shared_ptr<Tensile::MasterSolutionLibrary<Tensile::ContractionProblem>> m_library;
-        std::shared_ptr<hipDeviceProp_t>                                             m_deviceProp;
+        std::unordered_map<std::string, std::shared_ptr<hipDeviceProp_t>> m_devicePropMap;
 
         // The adapter object. mutable is used to allow adapters to be modified
         // even when they are stored in a const vector which is immutable in size
@@ -485,6 +597,7 @@ namespace
 
         // TensileHost is not copyable or assignable
         TensileHost(const TensileHost&) = delete;
+
         TensileHost& operator=(const TensileHost&) = delete;
 
         // Get the number of devices
@@ -512,9 +625,9 @@ namespace
             return m_library;
         }
 
-        auto& get_device_property() const
+        auto& get_device_property(const std::string& deviceName) const
         {
-            return m_deviceProp;
+            return m_devicePropMap.at(deviceName);
         }
 
         auto& get_adapters() const
@@ -543,9 +656,12 @@ namespace
             std::string path;
             std::string tensileLibraryPath;
             bool        tensile_lazy_load_enabled = false;
+            //Function local static-variables are used to gaurantee thread-safe initialization,
+            //avoids static initialization order fiasco
             static std::future<
                 std::shared_ptr<Tensile::SolutionLibrary<Tensile::ContractionProblem>>>
-                ftr_lib;
+                                                                ftr_lib;
+            static std::unordered_set<Tensile::LazyLoadingInit> tensileDeviceSet;
 
 #ifndef WIN32
             path.reserve(PATH_MAX);
@@ -553,56 +669,74 @@ namespace
 
             // The name of the current GPU platform
             std::string processor = rocblas_internal_get_arch_name();
+            // Get current xnack mode
+            std::string xnack = rocblas_internal_get_xnack_mode();
 
-            const char* env = getenv("ROCBLAS_TENSILE_LIBPATH");
-            if(env)
-            {
-                path = env;
-            }
-            else
-            {
-                path = ROCBLAS_LIB_PATH;
+            // If xnack mode is set, skip loading kernels for the opposite mode
+            std::string skip_xnack;
+            if(xnack == "xnack+")
+                skip_xnack = "xnack-";
+            else if(xnack == "xnack-")
+                skip_xnack = "xnack+";
 
-                // Find the location of librocblas.dll/.so
-                // Fall back on hard-coded path if static library or not found
+            static std::string base_path;
+            static int         determine_tensile_base_path = [&] {
+                const char* env = getenv("ROCBLAS_TENSILE_LIBPATH");
+                if(env)
+                {
+                    base_path = env;
+                }
+                else
+                {
+                    base_path = ROCBLAS_LIB_PATH;
+
+                    // Find the location of librocblas.dll/.so
+                    // Fall back on hard-coded path if static library or not found
 
 #ifndef ROCBLAS_STATIC_LIB
 #ifdef WIN32
-                // wchar_t wpath[MAX_PATH + 1] = {0};
-                // if(GetModuleFileNameW(GetModuleHandle("rocblas.dll"), wpath, MAX_PATH + 1))
-                // {
-                //     std::wstring          wspath(wpath);
-                //     std::string           tmp(wspath.begin(), wspath.end());
+                    // wchar_t wpath[MAX_PATH + 1] = {0};
+                    // if(GetModuleFileNameW(GetModuleHandle("rocblas.dll"), wpath, MAX_PATH + 1))
+                    // {
+                    //     std::wstring          wspath(wpath);
+                    //     std::string           tmp(wspath.begin(), wspath.end());
 
-                std::vector<TCHAR> dll_path(MAX_PATH + 1);
-                if(GetModuleFileNameA(
-                       GetModuleHandleA("rocblas.dll"), dll_path.data(), MAX_PATH + 1))
-                {
-                    std::string           tmp(dll_path.begin(), dll_path.end());
-                    std::filesystem::path exepath = tmp;
-                    if(exepath.has_filename())
+                    std::vector<TCHAR> dll_path(MAX_PATH + 1);
+                    if(GetModuleFileNameA(
+                           GetModuleHandleA("rocblas.dll"), dll_path.data(), MAX_PATH + 1))
                     {
-                        path = exepath.remove_filename().string();
+                        std::string           tmp(dll_path.begin(), dll_path.end());
+                        std::filesystem::path exepath = tmp;
+                        if(exepath.has_filename())
+                        {
+                            base_path = exepath.remove_filename().string();
+                        }
                     }
-                }
 #else
-                dl_iterate_phdr(rocblas_dl_iterate_phdr_callback, NULL);
-                if(rocblas_so_path.size())
-                    path = std::string{dirname(&rocblas_so_path[0])};
+                    dl_iterate_phdr(rocblas_dl_iterate_phdr_callback, NULL);
+                    if(rocblas_so_path.size())
+                        base_path = std::string{dirname(&rocblas_so_path[0])};
 #endif
 #endif // ifndef ROCBLAS_STATIC_LIB
 
-                // Find the location of the libraries
-                if(TestPath(path + "/../../Tensile/library"))
-                    path += "/../../Tensile/library";
-                else if(TestPath(path + "library"))
-                    path += "/library";
-                else
-                    path += "/rocblas/library";
+                    // Find the location of the libraries
+                    if(TestPath(base_path + "/../../Tensile/library"))
+                        base_path += "/../../Tensile/library";
+                    else if(TestPath(base_path + "/library"))
+                        base_path += "/library";
+                    else if(TestPath(base_path + "/../rocblas/library"))
+                        // For ASAN packaging, library file directory will be lib/asan
+                        // so need to prefix ../ to set search base_path to lib/rocblas/library
+                        base_path += "/../rocblas/library";
+                    else
+                        base_path += "/rocblas/library";
+                }
+                return 0;
+            }();
 
-                if(TestPath(path + "/" + processor))
-                    path += "/" + processor;
-            }
+            path = base_path;
+            if(TestPath(path + "/" + processor))
+                path += "/" + processor;
 
 #ifdef TENSILE_YAML
             tensileLibraryPath = path + "/TensileLibrary_lazy_" + processor + ".yaml";
@@ -624,17 +758,60 @@ namespace
 #else
                     tensileLibraryPath = path + "/TensileLibrary.dat";
 #endif
-
                     if(!TestPath(tensileLibraryPath))
                     {
+#if ROCBLAS_TENSILE_SEPARATE_ARCH
+                        rocblas_cerr << "\nrocBLAS error: Cannot read " << tensileLibraryPath
+                                     << ": " << strerror(errno) << " for GPU arch : " << processor
+                                     << std::endl;
+#if ROCBLAS_TENSILE_LAZY_LOAD
+                        std::regex fileMatcher(path + "/TensileLibrary_lazy.*");
+#else
+                        std::regex fileMatcher(path + "/TensileLibrary_gfx\\d+.dat");
+#endif
+                        rocblas_cerr << " List of available TensileLibrary Files : " << std::endl;
+                        for(auto& file_name : fs::directory_iterator(path))
+                        {
+                            if(std::regex_match(file_name.path().string(), fileMatcher))
+                            {
+                                rocblas_cerr << file_name << std::endl;
+                            }
+                        }
+#else
                         rocblas_cerr << "\nrocBLAS error: Cannot read " << tensileLibraryPath
                                      << ": " << strerror(errno) << std::endl;
+#endif
                         rocblas_abort();
                     }
                 }
             }
             else
                 tensile_lazy_load_enabled = true;
+
+            //Supports multi architecture configuration in lazy library loading mode
+            static int initialize_once = [&] {
+                hipDeviceProp_t prop;
+                int             count;
+                HIP_CHECK_EXC(hipGetDeviceCount(&count));
+
+                for(int devId = 0; devId < count; devId++)
+                {
+                    auto deviceArch = getLazyLoadingArch(devId);
+                    if(tensileDeviceSet.find(deviceArch) == tensileDeviceSet.end())
+                    {
+                        //populate the arch list for lazy loading
+                        tensileDeviceSet.insert(deviceArch);
+                        //populate device property map, used in finding solutions based on arch
+                        HIP_CHECK_EXC(hipGetDeviceProperties(&prop, devId));
+                        // strip out xnack/ecc from name
+                        std::string deviceFullString(prop.gcnArchName);
+                        std::string deviceString
+                            = deviceFullString.substr(0, deviceFullString.find(":"));
+                        m_devicePropMap[deviceString] = std::make_shared<hipDeviceProp_t>(prop);
+                    }
+                }
+                return 0;
+            }();
 
             if(!tensile_lazy_load_enabled || rocblas_initialize_called())
             {
@@ -661,6 +838,12 @@ namespace
                     do
                     {
                         std::string codeObjectFile = path + "\\" + finddata.cFileName;
+                        if(!skip_xnack.empty()
+                           && codeObjectFile.find(skip_xnack) != std::string::npos)
+                            continue;
+                        // Skip experimental libraries
+                        if(codeObjectFile.find("Experimental") != std::string::npos)
+                            continue;
                         adapter.loadCodeObjectFile(codeObjectFile.c_str());
                     } while(FindNextFileA(hfine, &finddata));
                 }
@@ -675,7 +858,14 @@ namespace
                 if(!g)
                 {
                     for(size_t i = 0; i < glob_result.gl_pathc; ++i)
-                        adapter.loadCodeObjectFile(glob_result.gl_pathv[i]);
+                    {
+                        std::string cofile = glob_result.gl_pathv[i];
+                        if(!skip_xnack.empty() && cofile.find(skip_xnack) != std::string::npos)
+                            continue;
+                        if(cofile.find("Experimental") != std::string::npos)
+                            continue;
+                        adapter.loadCodeObjectFile(cofile);
+                    }
                 }
                 else if(g == GLOB_NOMATCH)
                 {
@@ -710,15 +900,16 @@ namespace
                         = std::async(std::launch::async,
                                      Tensile::LoadLibraryFilePreload<Tensile::ContractionProblem>,
                                      tensileLibraryPath,
-                                     std::vector<Tensile::LazyLoadingInit>{});
-
+                                     std::vector<Tensile::LazyLoadingInit>{tensileDeviceSet.begin(),
+                                                                           tensileDeviceSet.end()});
                     return 0;
                 }();
-
-                adapter.initializeLazyLoading(processor, path);
             }
 
             {
+                // initialize adapter for lazy loading or experimental code objects
+                adapter.initializeLazyLoading(processor, path);
+
                 static int once = [&] {
                     auto lib = ftr_lib.get();
                     if(!lib)
@@ -739,10 +930,22 @@ namespace
                 rocblas_abort();
             }
 
-            hipDeviceProp_t prop;
-            HIP_CHECK_EXC(hipGetDeviceProperties(&prop, deviceId));
+            // Preload problem/solution mappings
+            const char* overrideEnv = getenv("ROCBLAS_TENSILE_GEMM_OVERRIDE_PATH");
+            if(overrideEnv)
+            {
+                std::string                        overridePath = overrideEnv;
+                std::shared_ptr<Tensile::Hardware> hardware     = Tensile::hip::GetDevice(
+                    *(get_device_property(rocblas_internal_get_arch_name())));
+                bool success = m_library->setOverridesFromFile(*hardware, overridePath);
 
-            m_deviceProp = std::make_shared<hipDeviceProp_t>(prop);
+                if(!success)
+                {
+                    rocblas_cerr
+                        << "\nrocBLAS warning: One or more problem overrides failed to load from: "
+                        << overridePath << std::endl;
+                }
+            }
         }
     };
 
@@ -788,7 +991,7 @@ namespace
         if(library)
             *library = host.get_library();
         if(deviceProp)
-            *deviceProp = host.get_device_property();
+            *deviceProp = host.get_device_property(rocblas_internal_get_arch_name());
 
         return *adapter;
     }
@@ -828,14 +1031,29 @@ namespace
 
 } // namespace
 
+inline bool fallbackTensileProblem(Tensile::ContractionProblem& tensile_prob)
+{
+    //fall back to use fp32 kernel when using xf32 xdl math op but no Tensile sulution found.
+    if(tensile_prob.f32XdlMathOp() != Tensile::DataType::Float)
+    {
+        rocblas_internal_ostream msg;
+        print_once(
+            msg << "\nrocBLAS warning: No Tensile solution found for XF32, fall back to FP32");
+        tensile_prob.setF32XdlMathOp(Tensile::DataType::Float);
+        return true;
+    }
+    return false;
+}
+
 /******************************************************************************
  * runContractionProblem calls Tensile to run a contraction problem described *
  * by RocblasContractionProblem                                               *
  ******************************************************************************/
-template <typename Ti, typename To, typename Tc>
-rocblas_status runContractionProblem(const RocblasContractionProblem<Ti, To, Tc>& prob,
-                                     rocblas_gemm_algo                            algo,
-                                     int32_t                                      solution_index)
+template <typename TiA, typename To, typename Tc, typename TiB, typename TcA, typename TcB>
+rocblas_status
+    runContractionProblem(const RocblasContractionProblem<TiA, To, Tc, TiB, TcA, TcB>& prob,
+                          rocblas_gemm_algo                                            algo,
+                          int32_t solution_index)
 {
     rocblas_status                                status = rocblas_status_internal_error;
     std::shared_ptr<Tensile::ContractionSolution> solution;
@@ -869,6 +1087,9 @@ rocblas_status runContractionProblem(const RocblasContractionProblem<Ti, To, Tc>
             solution = library->findBestSolution(tensile_prob, *hardware, fitness_query);
         }
 
+        if(!solution && fallbackTensileProblem(tensile_prob))
+            solution = library->findBestSolution(tensile_prob, *hardware, fitness_query);
+
         if(!solution)
         {
             if(solution_index > 0)
@@ -885,11 +1106,13 @@ rocblas_status runContractionProblem(const RocblasContractionProblem<Ti, To, Tc>
         else
         {
             if(fitness_query)
+            {
                 status = rocblas_status_success;
+            }
             else if(handle->is_device_memory_size_query())
             {
                 status = handle->set_optimal_device_memory_size(
-                    ((solution->requiredWorkspaceSize(tensile_prob)
+                    ((solution->requiredWorkspaceSize(tensile_prob, *hardware)
                       + HPA_GSU_WORKSPACE_SIZE_GRANULARITY - 1)
                      / HPA_GSU_WORKSPACE_SIZE_GRANULARITY)
                     * HPA_GSU_WORKSPACE_SIZE_GRANULARITY);
@@ -897,7 +1120,7 @@ rocblas_status runContractionProblem(const RocblasContractionProblem<Ti, To, Tc>
             else
             {
                 // check if the solution requires workspace for GSU and allocate it.
-                size_t WorkspaceSize = solution->requiredWorkspaceSize(tensile_prob);
+                size_t WorkspaceSize = solution->requiredWorkspaceSize(tensile_prob, *hardware);
                 auto   gsu_malloc    = prob.handle->gsu_malloc_by_size(WorkspaceSize);
 
                 if(solution->canSolve(tensile_prob, *hardware))
@@ -933,10 +1156,11 @@ rocblas_status runContractionProblem(const RocblasContractionProblem<Ti, To, Tc>
     return status;
 }
 
-template <typename Ti, typename To, typename Tc>
-rocblas_status getAllSolutions(const RocblasContractionProblem<Ti, To, Tc>& prob,
-                               rocblas_int*                                 list_array,
-                               rocblas_int*                                 list_size)
+template <typename TiA, typename To, typename Tc, typename TiB, typename TcA, typename TcB>
+rocblas_status getAllSolutions(const RocblasContractionProblem<TiA, To, Tc, TiB, TcA, TcB>& prob,
+                               rocblas_tensile_get_solution_option                          option,
+                               rocblas_int* list_array,
+                               rocblas_int* list_size)
 {
     rocblas_status                                          status = rocblas_status_internal_error;
     std::set<std::shared_ptr<Tensile::ContractionSolution>> solutions;
@@ -950,7 +1174,18 @@ rocblas_status getAllSolutions(const RocblasContractionProblem<Ti, To, Tc>& prob
         hardware      = Tensile::hip::GetDevice(*deviceProp);
         auto tensile_prob = ConstructTensileProblem(prob);
 
-        solutions = library->findAllSolutions(tensile_prob, *hardware);
+        if(option == CAN_SOLVE)
+        {
+            solutions = library->findAllSolutions(tensile_prob, *hardware);
+        }
+        else if(option == MATCHES_TYPE)
+        {
+            solutions = library->findAllSolutionsMatchingType(tensile_prob, *hardware);
+        }
+        else
+        {
+            return rocblas_status_invalid_value;
+        }
 
         if(list_size == nullptr)
         {
@@ -1003,7 +1238,7 @@ extern "C" void rocblas_initialize()
  * header file, in order to keep Tensile and rocBLAS separate.                *
  ******************************************************************************/
 
-// Non-EX types
+// Non-HPA/GEMM types
 template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_half>&,
                                               rocblas_gemm_algo algo,
                                               int32_t           solution_index);
@@ -1027,6 +1262,112 @@ template rocblas_status
                           int32_t           solution_index);
 
 // EX types
+
+// f8 case0: Ti=f8 Tc=To=f32
+template rocblas_status
+    runContractionProblem(const RocblasContractionProblem<rocblas_f8, float, float>&,
+                          rocblas_gemm_algo algo,
+                          int32_t           solution_index);
+
+template rocblas_status
+    runContractionProblem(const RocblasContractionProblem<rocblas_f8, rocblas_half, float>&,
+                          rocblas_gemm_algo algo,
+                          int32_t           solution_index);
+
+template rocblas_status
+    runContractionProblem(const RocblasContractionProblem<rocblas_f8, rocblas_f8, float>&,
+                          rocblas_gemm_algo algo,
+                          int32_t           solution_index);
+
+template rocblas_status
+    runContractionProblem(const RocblasContractionProblem<rocblas_bf8, float, float>&,
+                          rocblas_gemm_algo algo,
+                          int32_t           solution_index);
+
+template rocblas_status
+    runContractionProblem(const RocblasContractionProblem<rocblas_bf8, rocblas_half, float>&,
+                          rocblas_gemm_algo algo,
+                          int32_t           solution_index);
+
+template rocblas_status
+    runContractionProblem(const RocblasContractionProblem<rocblas_bf8, rocblas_bf8, float>&,
+                          rocblas_gemm_algo algo,
+                          int32_t           solution_index);
+
+//hybrid // Change of f8 parameter convention in order to support existing usage
+template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_f8,
+                                                                              float,
+                                                                              float,
+                                                                              rocblas_bf8,
+                                                                              rocblas_f8,
+                                                                              rocblas_bf8>&,
+                                              rocblas_gemm_algo algo,
+                                              int32_t           solution_index);
+
+template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_f8,
+                                                                              rocblas_half,
+                                                                              float,
+                                                                              rocblas_bf8,
+                                                                              rocblas_f8,
+                                                                              rocblas_bf8>&,
+                                              rocblas_gemm_algo algo,
+                                              int32_t           solution_index);
+
+template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_bf8,
+                                                                              float,
+                                                                              float,
+                                                                              rocblas_f8,
+                                                                              rocblas_bf8,
+                                                                              rocblas_f8>&,
+                                              rocblas_gemm_algo algo,
+                                              int32_t           solution_index);
+
+template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_bf8,
+                                                                              rocblas_half,
+                                                                              float,
+                                                                              rocblas_f8,
+                                                                              rocblas_bf8,
+                                                                              rocblas_f8>&,
+                                              rocblas_gemm_algo algo,
+                                              int32_t           solution_index);
+
+// template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_f8,
+//                                                                               rocblas_f8,
+//                                                                               float,
+//                                                                               rocblas_bf8,
+//                                                                               rocblas_f8,
+//                                                                               rocblas_bf8>&,
+//                                               rocblas_gemm_algo algo,
+//                                               int32_t           solution_index);
+
+template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_f8,
+                                                                              rocblas_bf8,
+                                                                              float,
+                                                                              rocblas_bf8,
+                                                                              rocblas_f8,
+                                                                              rocblas_bf8>&,
+                                              rocblas_gemm_algo algo,
+                                              int32_t           solution_index);
+
+// template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_bf8,
+//                                                                               rocblas_f8,
+//                                                                               float,
+//                                                                               rocblas_f8,
+//                                                                               rocblas_bf8,
+//                                                                               rocblas_f8>&,
+//                                               rocblas_gemm_algo algo,
+//                                               int32_t           solution_index);
+
+template rocblas_status runContractionProblem(const RocblasContractionProblem<rocblas_bf8,
+                                                                              rocblas_bf8,
+                                                                              float,
+                                                                              rocblas_f8,
+                                                                              rocblas_bf8,
+                                                                              rocblas_f8>&,
+                                              rocblas_gemm_algo algo,
+                                              int32_t           solution_index);
+
+// HPA types
 template rocblas_status
     runContractionProblem(const RocblasContractionProblem<rocblas_half, rocblas_half, float>&,
                           rocblas_gemm_algo algo,
@@ -1052,62 +1393,62 @@ template rocblas_status
                           rocblas_gemm_algo algo,
                           int32_t           solution_index);
 
-template rocblas_status
-    runContractionProblem(const RocblasContractionProblem<rocblas_int8x4, int32_t, int32_t>&,
-                          rocblas_gemm_algo algo,
-                          int32_t           solution_index);
-
 // ********** get all solutions explicits ********
-// Non-EX types
+// Non-HPA/GEMM types
 template rocblas_status getAllSolutions(const RocblasContractionProblem<rocblas_half>&,
-                                        rocblas_int* list_array,
-                                        rocblas_int* list_size);
+                                        rocblas_tensile_get_solution_option option,
+                                        rocblas_int*                        list_array,
+                                        rocblas_int*                        list_size);
 
 template rocblas_status getAllSolutions(const RocblasContractionProblem<float>&,
-                                        rocblas_int* list_array,
-                                        rocblas_int* list_size);
+                                        rocblas_tensile_get_solution_option option,
+                                        rocblas_int*                        list_array,
+                                        rocblas_int*                        list_size);
 
 template rocblas_status getAllSolutions(const RocblasContractionProblem<double>&,
-                                        rocblas_int* list_array,
-                                        rocblas_int* list_size);
+                                        rocblas_tensile_get_solution_option option,
+                                        rocblas_int*                        list_array,
+                                        rocblas_int*                        list_size);
 
 template rocblas_status getAllSolutions(const RocblasContractionProblem<rocblas_float_complex>&,
-                                        rocblas_int* list_array,
-                                        rocblas_int* list_size);
+                                        rocblas_tensile_get_solution_option option,
+                                        rocblas_int*                        list_array,
+                                        rocblas_int*                        list_size);
 
 template rocblas_status getAllSolutions(const RocblasContractionProblem<rocblas_double_complex>&,
-                                        rocblas_int* list_array,
-                                        rocblas_int* list_size);
+                                        rocblas_tensile_get_solution_option option,
+                                        rocblas_int*                        list_array,
+                                        rocblas_int*                        list_size);
 
-// EX types
+// HPA types
 template rocblas_status
     getAllSolutions(const RocblasContractionProblem<rocblas_half, rocblas_half, float>&,
-                    rocblas_int* list_array,
-                    rocblas_int* list_size);
+                    rocblas_tensile_get_solution_option option,
+                    rocblas_int*                        list_array,
+                    rocblas_int*                        list_size);
 
 template rocblas_status
     getAllSolutions(const RocblasContractionProblem<rocblas_half, float, float>&,
-                    rocblas_int* list_array,
-                    rocblas_int* list_size);
+                    rocblas_tensile_get_solution_option option,
+                    rocblas_int*                        list_array,
+                    rocblas_int*                        list_size);
 
 template rocblas_status
     getAllSolutions(const RocblasContractionProblem<rocblas_bfloat16, rocblas_bfloat16, float>&,
-                    rocblas_int* list_array,
-                    rocblas_int* list_size);
+                    rocblas_tensile_get_solution_option option,
+                    rocblas_int*                        list_array,
+                    rocblas_int*                        list_size);
 
 template rocblas_status
     getAllSolutions(const RocblasContractionProblem<rocblas_bfloat16, float, float>&,
-                    rocblas_int* list_array,
-                    rocblas_int* list_size);
+                    rocblas_tensile_get_solution_option option,
+                    rocblas_int*                        list_array,
+                    rocblas_int*                        list_size);
 
 template rocblas_status getAllSolutions(const RocblasContractionProblem<int8_t, int32_t, int32_t>&,
-                                        rocblas_int* list_array,
-                                        rocblas_int* list_size);
-
-template rocblas_status
-    getAllSolutions(const RocblasContractionProblem<rocblas_int8x4, int32_t, int32_t>&,
-                    rocblas_int* list_array,
-                    rocblas_int* list_size);
+                                        rocblas_tensile_get_solution_option option,
+                                        rocblas_int*                        list_array,
+                                        rocblas_int*                        list_size);
 
 /***********************************************************************************
  * Whether Tensile has been initialized for at least one device (used for testing) *

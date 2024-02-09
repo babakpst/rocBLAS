@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -28,24 +28,24 @@
 #include "handle.hpp"
 #include "rocblas_level2_threshold.hpp"
 
-template <typename T, typename U, typename V, typename W>
+template <typename Ti, typename Tex, typename To>
 inline rocblas_status rocblas_internal_gemv_arg_check(rocblas_handle    handle,
                                                       rocblas_operation transA,
                                                       rocblas_int       m,
                                                       rocblas_int       n,
-                                                      const U*          alpha,
+                                                      const Tex*        alpha,
                                                       rocblas_stride    stride_alpha,
-                                                      const V*          A,
+                                                      const Ti*         A,
                                                       rocblas_stride    offseta,
                                                       rocblas_int       lda,
                                                       rocblas_stride    strideA,
-                                                      const V*          x,
+                                                      const Ti*         x,
                                                       rocblas_stride    offsetx,
                                                       rocblas_int       incx,
                                                       rocblas_stride    stridex,
-                                                      const U*          beta,
+                                                      const Tex*        beta,
                                                       rocblas_stride    stride_beta,
-                                                      W*                y,
+                                                      To*               y,
                                                       rocblas_stride    offsety,
                                                       rocblas_int       incy,
                                                       rocblas_stride    stridey,
@@ -80,46 +80,95 @@ template <typename To>
 ROCBLAS_INTERNAL_EXPORT_NOINLINE size_t rocblas_internal_gemv_kernel_workspace_size(
     rocblas_operation transA, rocblas_int m, rocblas_int n, rocblas_int batch_count = 1);
 
-template <typename T, typename U, typename V, typename W>
+template <typename Ti, typename Tex, typename To>
+rocblas_status rocblas_internal_gemv_template(rocblas_handle    handle,
+                                              rocblas_operation transA,
+                                              rocblas_int       m,
+                                              rocblas_int       n,
+                                              const Tex*        alpha,
+                                              rocblas_stride    stride_alpha,
+                                              const Ti*         A,
+                                              rocblas_stride    offseta,
+                                              rocblas_int       lda,
+                                              rocblas_stride    strideA,
+                                              const Ti*         x,
+                                              rocblas_stride    offsetx,
+                                              rocblas_int       incx,
+                                              rocblas_stride    stridex,
+                                              const Tex*        beta,
+                                              rocblas_stride    stride_beta,
+                                              To*               y,
+                                              rocblas_stride    offsety,
+                                              rocblas_int       incy,
+                                              rocblas_stride    stridey,
+                                              rocblas_int       batch_count,
+                                              Tex*              workspace = nullptr);
+
+template <typename T>
 ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     rocblas_internal_gemv_template(rocblas_handle    handle,
                                    rocblas_operation transA,
                                    rocblas_int       m,
                                    rocblas_int       n,
-                                   const U*          alpha,
+                                   const T*          alpha,
                                    rocblas_stride    stride_alpha,
-                                   const V*          A,
+                                   const T*          A,
                                    rocblas_stride    offseta,
                                    rocblas_int       lda,
                                    rocblas_stride    strideA,
-                                   const V*          x,
+                                   const T*          x,
                                    rocblas_stride    offsetx,
                                    rocblas_int       incx,
                                    rocblas_stride    stridex,
-                                   const U*          beta,
+                                   const T*          beta,
                                    rocblas_stride    stride_beta,
-                                   W*                y,
+                                   T*                y,
                                    rocblas_stride    offsety,
                                    rocblas_int       incy,
                                    rocblas_stride    stridey,
                                    rocblas_int       batch_count,
                                    T*                workspace = nullptr);
 
-template <typename T, typename U>
+template <typename T>
+ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
+    rocblas_internal_gemv_batched_template(rocblas_handle    handle,
+                                           rocblas_operation transA,
+                                           rocblas_int       m,
+                                           rocblas_int       n,
+                                           const T*          alpha,
+                                           rocblas_stride    stride_alpha,
+                                           const T* const*   A,
+                                           rocblas_stride    offseta,
+                                           rocblas_int       lda,
+                                           rocblas_stride    strideA,
+                                           const T* const*   x,
+                                           rocblas_stride    offsetx,
+                                           rocblas_int       incx,
+                                           rocblas_stride    stridex,
+                                           const T*          beta,
+                                           rocblas_stride    stride_beta,
+                                           T* const*         y,
+                                           rocblas_stride    offsety,
+                                           rocblas_int       incy,
+                                           rocblas_stride    stridey,
+                                           rocblas_int       batch_count,
+                                           T*                workspace = nullptr);
+
+template <typename Ti, typename To>
 rocblas_status rocblas_gemv_check_numerics(const char*       function_name,
                                            rocblas_handle    handle,
                                            rocblas_operation trans_a,
                                            rocblas_int       m,
                                            rocblas_int       n,
-                                           T                 A,
+                                           Ti                A,
                                            rocblas_stride    offset_a,
                                            rocblas_int       lda,
                                            rocblas_stride    stride_a,
-                                           T                 x,
+                                           Ti                x,
                                            rocblas_stride    offset_x,
                                            rocblas_int       inc_x,
                                            rocblas_stride    stride_x,
-                                           U                 y,
+                                           To                y,
                                            rocblas_stride    offset_y,
                                            rocblas_int       inc_y,
                                            rocblas_stride    stride_y,

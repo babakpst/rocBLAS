@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -73,26 +73,38 @@ namespace
         {
             RocBLAS_TestName<hpmv_template> name(arg.name);
 
-            name << rocblas_datatype2string(arg.a_type) << '_' << (char)std::toupper(arg.uplo)
-                 << '_' << arg.N << '_' << arg.alpha;
+            name << rocblas_datatype2string(arg.a_type);
 
-            if(HPMV_TYPE == HPMV_STRIDED_BATCHED)
-                name << '_' << arg.stride_a;
+            if(strstr(arg.function, "_bad_arg") != nullptr)
+            {
+                name << "_bad_arg";
+            }
+            else
+            {
+                name << '_' << (char)std::toupper(arg.uplo) << '_' << arg.N << '_' << arg.alpha;
 
-            name << '_' << arg.incx;
+                if(HPMV_TYPE == HPMV_STRIDED_BATCHED)
+                    name << '_' << arg.stride_a;
 
-            if(HPMV_TYPE == HPMV_STRIDED_BATCHED)
-                name << '_' << arg.stride_x;
+                name << '_' << arg.incx;
 
-            name << '_' << arg.beta << '_' << arg.incy;
+                if(HPMV_TYPE == HPMV_STRIDED_BATCHED)
+                    name << '_' << arg.stride_x;
 
-            if(HPMV_TYPE == HPMV_STRIDED_BATCHED)
-                name << '_' << arg.stride_y;
+                name << '_' << arg.beta << '_' << arg.incy;
 
-            if(HPMV_TYPE == HPMV_STRIDED_BATCHED || HPMV_TYPE == HPMV_BATCHED)
-                name << '_' << arg.batch_count;
+                if(HPMV_TYPE == HPMV_STRIDED_BATCHED)
+                    name << '_' << arg.stride_y;
 
-            if(arg.fortran)
+                if(HPMV_TYPE != HPMV)
+                    name << '_' << arg.batch_count;
+            }
+
+            if(arg.api & c_API_64)
+            {
+                name << "_I64";
+            }
+            if(arg.api & c_API_FORTRAN)
             {
                 name << "_F";
             }
@@ -111,9 +123,10 @@ namespace
     // When the condition in the second argument is satisfied, the type combination
     // is valid. When the condition is false, this specialization does not apply.
     template <typename T>
-    struct hpmv_testing<T,
-                        std::enable_if_t<std::is_same<T, rocblas_float_complex>{}
-                                         || std::is_same<T, rocblas_double_complex>{}>>
+    struct hpmv_testing<
+        T,
+        std::enable_if_t<
+            std::is_same_v<T, rocblas_float_complex> || std::is_same_v<T, rocblas_double_complex>>>
         : rocblas_test_valid
     {
         void operator()(const Arguments& arg)

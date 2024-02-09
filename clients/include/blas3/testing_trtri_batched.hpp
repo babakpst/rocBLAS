@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -36,11 +36,13 @@
 #include "unit.hpp"
 #include "utility.hpp"
 
+#include "blas3/rocblas_trtri.hpp"
+
 template <typename T>
 void testing_trtri_batched_bad_arg(const Arguments& arg)
 {
     auto rocblas_trtri_batched_fn
-        = arg.fortran ? rocblas_trtri_batched<T, true> : rocblas_trtri_batched<T, false>;
+        = arg.api == FORTRAN ? rocblas_trtri_batched<T, true> : rocblas_trtri_batched<T, false>;
 
     rocblas_local_handle handle{arg};
 
@@ -157,7 +159,7 @@ template <typename T>
 void testing_trtri_batched(const Arguments& arg)
 {
     auto rocblas_trtri_batched_fn
-        = arg.fortran ? rocblas_trtri_batched<T, true> : rocblas_trtri_batched<T, false>;
+        = arg.api == FORTRAN ? rocblas_trtri_batched<T, true> : rocblas_trtri_batched<T, false>;
 
     rocblas_int N           = arg.N;
     rocblas_int lda         = arg.lda;
@@ -169,6 +171,11 @@ void testing_trtri_batched(const Arguments& arg)
     // char_uplo = 'U';
     rocblas_fill     uplo = char2rocblas_fill(char_uplo);
     rocblas_diagonal diag = char2rocblas_diagonal(char_diag);
+
+    // for internal interface testing: using ldc/ldd as offsets
+    const bool     internal_api = arg.api == INTERNAL;
+    rocblas_stride offsetA      = internal_api ? arg.ldc : 0;
+    rocblas_stride offsetinvA   = internal_api ? arg.ldd : 0;
 
     rocblas_local_handle handle{arg};
 
@@ -191,11 +198,10 @@ void testing_trtri_batched(const Arguments& arg)
     // Check host memory allocation
     CHECK_HIP_ERROR(hA.memcheck());
     CHECK_HIP_ERROR(hB.memcheck());
-    CHECK_HIP_ERROR(hA_2.memcheck());
 
     // Allocate device memory
-    device_batch_matrix<T> dA(N, N, lda, batch_count);
-    device_batch_matrix<T> dinvA(N, N, lda, batch_count);
+    device_batch_matrix<T> dA(N, N, lda, batch_count, false, offsetA);
+    device_batch_matrix<T> dinvA(N, N, lda, batch_count, false, offsetinvA);
 
     // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dA.memcheck());
@@ -238,7 +244,7 @@ void testing_trtri_batched(const Arguments& arg)
 
     double gpu_time_used, cpu_time_used;
     gpu_time_used = cpu_time_used = 0.0;
-    double rocblas_error          = 0.0;
+    double rocblas_error_out, rocblas_error_in;
 
     if(!ROCBLAS_REALLOC_ON_DEMAND)
     {
@@ -269,80 +275,156 @@ void testing_trtri_batched(const Arguments& arg)
     /* =====================================================================
            ROCBLAS
     =================================================================== */
-    hipStream_t stream;
-    if(arg.timing)
-    {
-        CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
-        gpu_time_used = get_time_us_sync(stream); // in microseconds
-    }
-
-    handle.pre_test(arg);
-    CHECK_ROCBLAS_ERROR(rocblas_trtri_batched_fn(
-        handle, uplo, diag, N, dA.ptr_on_device(), lda, dinvA.ptr_on_device(), lda, batch_count));
-
-    // Test in place
-    CHECK_ROCBLAS_ERROR(rocblas_trtri_batched_fn(
-        handle, uplo, diag, N, dA.ptr_on_device(), lda, dA.ptr_on_device(), lda, batch_count));
-    handle.post_test(arg);
-
-    if(arg.timing)
-    {
-        gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
-    }
-
-    // copy output from device to CPU
-    CHECK_HIP_ERROR(hA.transfer_from(dinvA));
-    CHECK_HIP_ERROR(hA_2.transfer_from(dA));
-
     if(arg.unit_check || arg.norm_check)
     {
+        // Test out of place
+        handle.pre_test(arg);
+        if(arg.api != INTERNAL)
+        {
+            CHECK_ROCBLAS_ERROR(rocblas_trtri_batched_fn(handle,
+                                                         uplo,
+                                                         diag,
+                                                         N,
+                                                         dA.ptr_on_device(),
+                                                         lda,
+                                                         dinvA.ptr_on_device(),
+                                                         lda,
+                                                         batch_count));
+        }
+        else
+        {
+            rocblas_stride strideA         = arg.stride_a;
+            rocblas_stride strideinvA      = arg.stride_b;
+            rocblas_stride subStride       = 0;
+            rocblas_int    sub_batch_count = 1;
+
+            size_t                 work_el = rocblas_internal_trtri_temp_elements(N, batch_count);
+            device_batch_vector<T> workspace_arr(work_el, 1, batch_count);
+
+            CHECK_ROCBLAS_ERROR(
+                rocblas_internal_trtri_batched_template(handle,
+                                                        uplo,
+                                                        diag,
+                                                        N,
+                                                        (const T* const*)dA.ptr_on_device(),
+                                                        -offsetA,
+                                                        lda,
+                                                        strideA,
+                                                        subStride,
+                                                        (T* const*)dinvA.ptr_on_device(),
+                                                        -offsetinvA,
+                                                        lda,
+                                                        strideinvA,
+                                                        subStride,
+                                                        batch_count,
+                                                        sub_batch_count,
+                                                        (T* const*)workspace_arr.ptr_on_device()));
+        }
+        handle.post_test(arg);
+
+        // Test in place
+        handle.pre_test(arg);
+        if(arg.api != INTERNAL)
+        {
+            CHECK_ROCBLAS_ERROR(rocblas_trtri_batched_fn(handle,
+                                                         uplo,
+                                                         diag,
+                                                         N,
+                                                         dA.ptr_on_device(),
+                                                         lda,
+                                                         dA.ptr_on_device(),
+                                                         lda,
+                                                         batch_count));
+        }
+        else
+        {
+            rocblas_stride strideA         = arg.stride_a;
+            rocblas_stride subStride       = 0;
+            rocblas_int    sub_batch_count = 1;
+
+            size_t                 work_el = rocblas_internal_trtri_temp_elements(N, batch_count);
+            device_batch_vector<T> workspace_arr(work_el, 1, batch_count);
+
+            CHECK_ROCBLAS_ERROR(
+                rocblas_internal_trtri_batched_template(handle,
+                                                        uplo,
+                                                        diag,
+                                                        N,
+                                                        (const T* const*)dA.ptr_on_device(),
+                                                        -offsetA,
+                                                        lda,
+                                                        strideA,
+                                                        subStride,
+                                                        (T* const*)dA.ptr_on_device(),
+                                                        -offsetA,
+                                                        lda,
+                                                        strideA,
+                                                        subStride,
+                                                        batch_count,
+                                                        sub_batch_count,
+                                                        (T* const*)workspace_arr.ptr_on_device()));
+        }
+        handle.post_test(arg);
+
+        // copy output from device to CPU
+        CHECK_HIP_ERROR(hA.transfer_from(dinvA));
+
         /* =====================================================================
            CPU BLAS
         =================================================================== */
         if(arg.timing)
-        {
             cpu_time_used = get_time_us_no_sync();
-        }
 
+        // CBLAS doesn't have trtri implementation so using the LAPACK trtri
         for(size_t b = 0; b < batch_count; b++)
-        {
-            // CBLAS doesn't have trtri implementation so using the LAPACK trtri
             lapack_xtrtri<T>(char_uplo, char_diag, N, hB[b], lda);
-        }
+
         if(arg.timing)
-        {
             cpu_time_used = get_time_us_no_sync() - cpu_time_used;
-        }
 
-#if 0
-        rocblas_print_matrix(hB[b], hA[b], N, N, lda, 1);
-#endif
-
+        // test out-of-place
+        const double rel_error = trtri_tolerance<T>(N);
         if(arg.unit_check)
-        {
-            const double rel_error = trtri_tolerance<T>(N);
             near_check_general<T>(N, N, lda, hB, hA, batch_count, rel_error);
-            near_check_general<T>(N, N, lda, hB, hA_2, batch_count, rel_error);
-        }
 
         if(arg.norm_check)
-        {
-            for(size_t b = 0; b < batch_count; b++)
-            {
-                rocblas_error = fmax(rocblas_error,
-                                     norm_check_symmetric<T>('F', char_uplo, N, lda, hB[b], hA[b]));
-            }
-            rocblas_error = 0.0;
-            for(size_t b = 0; b < batch_count; b++)
-            {
-                rocblas_error = fmax(
-                    rocblas_error, norm_check_symmetric<T>('F', char_uplo, N, lda, hB[b], hA_2[b]));
-            }
-        }
-    } // end of norm_check
+            rocblas_error_out
+                = norm_check_symmetric<T>('F', char_uplo, N, lda, hB, hA, batch_count);
+
+        // test in-place
+        CHECK_HIP_ERROR(hA.transfer_from(dA));
+        if(arg.unit_check)
+            near_check_general<T>(N, N, lda, hB, hA, batch_count, rel_error);
+
+        if(arg.norm_check)
+            rocblas_error_in = norm_check_symmetric<T>('F', char_uplo, N, lda, hB, hA, batch_count);
+    }
 
     if(arg.timing)
     {
+        int number_cold_calls = arg.cold_iters;
+        int total_calls       = number_cold_calls + arg.iters;
+
+        hipStream_t stream;
+        CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
+        for(int i = 0; i < total_calls; i++)
+        {
+            if(i == number_cold_calls)
+                gpu_time_used = get_time_us_sync(stream);
+
+            rocblas_trtri_batched_fn(handle,
+                                     uplo,
+                                     diag,
+                                     N,
+                                     dA.ptr_on_device(),
+                                     lda,
+                                     dinvA.ptr_on_device(),
+                                     lda,
+                                     batch_count);
+        }
+
+        gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
+
         ArgumentModel<e_uplo, e_diag, e_N, e_lda, e_batch_count>{}.log_args<T>(
             rocblas_cout,
             arg,
@@ -350,6 +432,7 @@ void testing_trtri_batched(const Arguments& arg)
             trtri_gflop_count<T>(N),
             ArgumentLogging::NA_value,
             cpu_time_used,
-            rocblas_error);
+            rocblas_error_out,
+            rocblas_error_in);
     }
 }

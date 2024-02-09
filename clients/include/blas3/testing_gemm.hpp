@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,6 +24,7 @@
 
 #include "cblas_interface.hpp"
 #include "flops.hpp"
+#include "frequency_monitor.hpp"
 #include "near.hpp"
 #include "norm.hpp"
 #include "rocblas.hpp"
@@ -37,12 +38,14 @@
 #include "unit.hpp"
 #include "utility.hpp"
 
+#include "blas3/Tensile/gemm.hpp"
+
 template <typename T>
 void testing_gemm_bad_arg(const Arguments& arg)
 {
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
-        auto rocblas_gemm_fn = arg.fortran ? rocblas_gemm<T, true> : rocblas_gemm<T, false>;
+        auto rocblas_gemm_fn = arg.api == FORTRAN ? rocblas_gemm<T, true> : rocblas_gemm<T, false>;
 
         const rocblas_int M = 100;
         const rocblas_int N = 101;
@@ -177,7 +180,7 @@ nullptr, lda, nullptr, ldb, beta, dC, ldc), rocblas_status_success);
 template <typename T>
 void testing_gemm(const Arguments& arg)
 {
-    auto rocblas_gemm_fn = arg.fortran ? rocblas_gemm<T, true> : rocblas_gemm<T, false>;
+    auto rocblas_gemm_fn = arg.api == FORTRAN ? rocblas_gemm<T, true> : rocblas_gemm<T, false>;
 
     rocblas_operation transA = char2rocblas_operation(arg.transA);
     rocblas_operation transB = char2rocblas_operation(arg.transB);
@@ -198,6 +201,10 @@ void testing_gemm(const Arguments& arg)
     double               rocblas_error = 0.0;
     bool                 HMM           = arg.HMM;
     rocblas_local_handle handle{arg};
+
+    rocblas_math_mode math_mode = rocblas_math_mode(arg.math_mode);
+    CHECK_ROCBLAS_ERROR(rocblas_set_math_mode(handle, math_mode));
+    CHECK_ROCBLAS_ERROR(rocblas_get_math_mode(handle, &math_mode));
 
     rocblas_int A_row = transA == rocblas_operation_none ? M : std::max(K, 1);
     rocblas_int A_col = transA == rocblas_operation_none ? std::max(K, 1) : M;
@@ -278,23 +285,101 @@ void testing_gemm(const Arguments& arg)
         hC_gold = hC_1;
 
         // ROCBLAS rocblas_pointer_mode_host
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(rocblas_gemm_fn(
-            handle, transA, transB, M, N, K, &h_alpha, dA, lda, dB, ldb, &h_beta, dC, ldc));
-        handle.post_test(arg);
-        CHECK_HIP_ERROR(hC_1.transfer_from(dC));
+        if(arg.pointer_mode_host)
+        {
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
 
-        // gold has copy of hC1
-        CHECK_HIP_ERROR(dC.transfer_from(hC_gold));
-        CHECK_HIP_ERROR(hipMemcpy(d_alpha, &h_alpha, sizeof(T), hipMemcpyHostToDevice));
-        CHECK_HIP_ERROR(hipMemcpy(d_beta, &h_beta, sizeof(T), hipMemcpyHostToDevice));
+            handle.pre_test(arg);
+            if(arg.api != INTERNAL)
+            {
+                CHECK_ROCBLAS_ERROR(rocblas_gemm_fn(
+                    handle, transA, transB, M, N, K, &h_alpha, dA, lda, dB, ldb, &h_beta, dC, ldc));
+            }
+            else
+            {
+                // using arg.stride_x,y,d for offset testing
+                rocblas_stride           offsetA = arg.stride_x;
+                rocblas_stride           offsetB = arg.stride_y;
+                rocblas_stride           offsetC = arg.stride_d;
+                constexpr rocblas_stride strideA = 0, strideB = 0, strideC = 0;
+                constexpr rocblas_int    batch_count = 1;
 
-        // ROCBLAS rocblas_pointer_mode_device
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+                CHECK_ROCBLAS_ERROR(rocblas_internal_gemm_template<T>(handle,
+                                                                      transA,
+                                                                      transB,
+                                                                      M,
+                                                                      N,
+                                                                      K,
+                                                                      &h_alpha,
+                                                                      (const T*)dA + offsetA,
+                                                                      -offsetA,
+                                                                      lda,
+                                                                      strideA,
+                                                                      (const T*)dB + offsetB,
+                                                                      -offsetB,
+                                                                      ldb,
+                                                                      strideB,
+                                                                      &h_beta,
+                                                                      (T*)dC + offsetC,
+                                                                      -offsetC,
+                                                                      ldc,
+                                                                      strideC,
+                                                                      batch_count));
+            }
+            handle.post_test(arg);
+            CHECK_HIP_ERROR(hC_1.transfer_from(dC));
+        }
 
-        CHECK_ROCBLAS_ERROR(rocblas_gemm_fn(
-            handle, transA, transB, M, N, K, d_alpha, dA, lda, dB, ldb, d_beta, dC, ldc));
+        if(arg.pointer_mode_device)
+        {
+            // gold has copy of hC1
+            CHECK_HIP_ERROR(dC.transfer_from(hC_gold));
+            CHECK_HIP_ERROR(hipMemcpy(d_alpha, &h_alpha, sizeof(T), hipMemcpyHostToDevice));
+            CHECK_HIP_ERROR(hipMemcpy(d_beta, &h_beta, sizeof(T), hipMemcpyHostToDevice));
+
+            // ROCBLAS rocblas_pointer_mode_device
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
+
+            CHECK_ROCBLAS_ERROR(rocblas_gemm_fn(
+                handle, transA, transB, M, N, K, d_alpha, dA, lda, dB, ldb, d_beta, dC, ldc));
+
+            if(arg.repeatability_check)
+            {
+                host_matrix<T> hC_1_copy(M, N, ldc);
+                CHECK_HIP_ERROR(hC_1.transfer_from(dC));
+                for(int i = 0; i < arg.iters; i++)
+                {
+                    CHECK_HIP_ERROR(dC.transfer_from(hC_gold));
+
+                    CHECK_ROCBLAS_ERROR(rocblas_gemm_fn(handle,
+                                                        transA,
+                                                        transB,
+                                                        M,
+                                                        N,
+                                                        K,
+                                                        d_alpha,
+                                                        dA,
+                                                        lda,
+                                                        dB,
+                                                        ldb,
+                                                        d_beta,
+                                                        dC,
+                                                        ldc));
+
+                    CHECK_HIP_ERROR(hC_1_copy.transfer_from(dC));
+
+                    unit_check_general<T>(M, N, ldc, hC_1, hC_1_copy);
+                }
+                return;
+            }
+        }
+
+        // For the xf32 xdl math op, cast type of A/B from float to xfloat32 .
+        if(std::is_same<T, float>{} && math_mode == rocblas_xf32_xdl_math_op)
+        {
+            type_to_xdl_math_op_type<rocblas_xfloat32, float>(hA.data(), hA.size());
+            type_to_xdl_math_op_type<rocblas_xfloat32, float>(hB.data(), hB.size());
+        }
 
         // now we can recycle gold matrix for reference purposes
         if(arg.timing)
@@ -302,7 +387,7 @@ void testing_gemm(const Arguments& arg)
             cpu_time_used = get_time_us_no_sync();
         }
 
-        cblas_gemm<T>(transA, transB, M, N, K, h_alpha, hA, lda, hB, ldb, h_beta, hC_gold, ldc);
+        ref_gemm<T>(transA, transB, M, N, K, h_alpha, hA, lda, hB, ldb, h_beta, (T*)hC_gold, ldc);
 
         if(arg.timing)
         {
@@ -314,59 +399,67 @@ void testing_gemm(const Arguments& arg)
         hB = host_matrix<T>();
 
         // check host error and norm
-        if(arg.unit_check)
+        if(arg.pointer_mode_host)
         {
-            if(std::is_same<T, rocblas_half>{} && (rocblas_handle(handle)->getArchMajor() == 11))
+            if(arg.unit_check)
             {
-                const double tol = K * sum_error_tolerance_for_gfx11<T, T, T>;
-                near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+                if(std::is_same_v<T,
+                                  rocblas_half> && (rocblas_handle(handle)->getArchMajor() == 11))
+                {
+                    const double tol = K * sum_error_tolerance_for_gfx11<T, T, T>;
+                    near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+                }
+                else if(std::is_same_v<T, rocblas_half> && K > 10000)
+                {
+                    // For large K, rocblas_half tends to diverge proportional to K
+                    // Tolerance is slightly greater than 1 / 1024.0
+                    const double tol = K * sum_error_tolerance<T>;
+                    near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+                }
+                else
+                {
+                    unit_check_general<T>(M, N, ldc, hC_gold, hC_1);
+                }
             }
-            else if(std::is_same<T, rocblas_half>{} && K > 10000)
+
+            if(arg.norm_check)
             {
-                // For large K, rocblas_half tends to diverge proportional to K
-                // Tolerance is slightly greater than 1 / 1024.0
-                const double tol = K * sum_error_tolerance<T>;
-                near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
-            }
-            else
-            {
-                unit_check_general<T>(M, N, ldc, hC_gold, hC_1);
+                auto err1 = std::abs(norm_check_general<T>('F', M, N, ldc, (T*)hC_gold, (T*)hC_1));
+                rocblas_error = err1 > rocblas_error ? err1 : rocblas_error;
             }
         }
 
-        if(arg.norm_check)
+        if(arg.pointer_mode_device)
         {
-            auto err1     = std::abs(norm_check_general<T>('F', M, N, ldc, (T*)hC_gold, (T*)hC_1));
-            rocblas_error = err1 > rocblas_error ? err1 : rocblas_error;
-        }
+            // fetch device mode GPU results
+            CHECK_HIP_ERROR(hC_1.transfer_from(dC));
 
-        // fetch device mode GPU results
-        CHECK_HIP_ERROR(hC_1.transfer_from(dC));
+            if(arg.unit_check)
+            {
+                if(std::is_same_v<T,
+                                  rocblas_half> && (rocblas_handle(handle)->getArchMajor() == 11))
+                {
+                    const double tol = K * sum_error_tolerance_for_gfx11<T, T, T>;
+                    near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+                }
+                else if(std::is_same_v<T, rocblas_half> && K > 10000)
+                {
+                    // For large K, rocblas_half tends to diverge proportional to K
+                    // Tolerance is slightly greater than 1 / 1024.0
+                    const double tol = K * sum_error_tolerance<T>;
+                    near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+                }
+                else
+                {
+                    unit_check_general<T>(M, N, ldc, hC_gold, hC_1);
+                }
+            }
 
-        if(arg.unit_check)
-        {
-            if(std::is_same<T, rocblas_half>{} && (rocblas_handle(handle)->getArchMajor() == 11))
+            if(arg.norm_check)
             {
-                const double tol = K * sum_error_tolerance_for_gfx11<T, T, T>;
-                near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
+                auto err1 = std::abs(norm_check_general<T>('F', M, N, ldc, (T*)hC_gold, (T*)hC_1));
+                rocblas_error = err1 > rocblas_error ? err1 : rocblas_error;
             }
-            else if(std::is_same<T, rocblas_half>{} && K > 10000)
-            {
-                // For large K, rocblas_half tends to diverge proportional to K
-                // Tolerance is slightly greater than 1 / 1024.0
-                const double tol = K * sum_error_tolerance<T>;
-                near_check_general<T>(M, N, ldc, hC_gold, hC_1, tol);
-            }
-            else
-            {
-                unit_check_general<T>(M, N, ldc, hC_gold, hC_1);
-            }
-        }
-
-        if(arg.norm_check)
-        {
-            auto err1     = std::abs(norm_check_general<T>('F', M, N, ldc, (T*)hC_gold, (T*)hC_1));
-            rocblas_error = err1 > rocblas_error ? err1 : rocblas_error;
         }
     }
 
@@ -385,6 +478,9 @@ void testing_gemm(const Arguments& arg)
 
         hipStream_t stream;
         CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
+
+        FrequencyMonitor& freq_monitor = getFrequencyMonitor();
+        freq_monitor.start();
         gpu_time_used = get_time_us_sync(stream); // in microseconds
         for(int i = 0; i < number_hot_calls; i++)
         {
@@ -392,6 +488,7 @@ void testing_gemm(const Arguments& arg)
                 handle, transA, transB, M, N, K, &h_alpha, dA, lda, dB, ldb, &h_beta, dC, ldc);
         }
         gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
+        freq_monitor.stop();
 
         ArgumentModel<e_transA, e_transB, e_M, e_N, e_K, e_alpha, e_lda, e_beta, e_ldb, e_ldc>{}
             .log_args<T>(rocblas_cout,
@@ -400,6 +497,9 @@ void testing_gemm(const Arguments& arg)
                          gemm_gflop_count<T>(M, N, K),
                          ArgumentLogging::NA_value,
                          cpu_time_used,
-                         rocblas_error);
+                         rocblas_error,
+                         ArgumentLogging::NA_value,
+                         ArgumentLogging::NA_value,
+                         ArgumentLogging::NA_value);
     }
 }

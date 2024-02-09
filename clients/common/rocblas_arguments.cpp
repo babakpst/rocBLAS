@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -29,6 +29,26 @@
 #include <ostream>
 #include <utility>
 
+/*! \brief device matches pattern */
+bool gpu_arch_match(const std::string& gpu_arch, const char pattern[4])
+{
+    int         gpu_len = gpu_arch.length();
+    const char* gpu     = gpu_arch.c_str();
+
+    // gpu is currently "gfx" followed by 3 or 4 characters, followed by optional ":" sections
+    int prefix_len = 3;
+    for(int i = 0; i < 4; i++)
+    {
+        if(!pattern[i])
+            break;
+        else if(pattern[i] == '?')
+            continue;
+        else if(prefix_len + i >= gpu_len || pattern[i] != gpu[prefix_len + i])
+            return false;
+    }
+    return true;
+};
+
 void Arguments::init()
 {
     // match python in rocblas_common.py
@@ -54,7 +74,7 @@ void Arguments::init()
 
     user_allocated_workspace = 0;
 
-    // 32bit
+    // 64bit
 
     M = 128;
     N = 128;
@@ -70,16 +90,20 @@ void Arguments::init()
 
     incx = 0;
     incy = 0;
-    incd = 0;
-    incb = 0;
 
     batch_count = 1;
+
+    scan = c_scan_value; // default value disables scanning
+
+    // 32bit
 
     iters      = 10;
     cold_iters = 2;
 
     algo           = 0;
     solution_index = 0;
+
+    geam_ex_op = rocblas_geam_ex_operation_min_plus;
 
     flags = rocblas_gemm_flags_none;
 
@@ -91,9 +115,15 @@ void Arguments::init()
 
     initialization = rocblas_initialization::hpl;
 
-    arithmetic_check = rocblas_arithmetic_check::no_check;
-
     atomics_mode = rocblas_atomics_allowed;
+
+    math_mode = rocblas_default_math;
+
+    os_flags = rocblas_client_os::ALL;
+
+    gpu_arch[0] = 0; // 4 chars so 32bit
+
+    api = rocblas_client_api::C;
 
     // memory padding for testing write out of bounds
     pad = 4096;
@@ -115,10 +145,54 @@ void Arguments::init()
     uplo   = '*';
     diag   = '*';
 
-    c_noalias_d = false;
-    HMM         = false;
-    fortran     = false;
-    graph_test  = false;
+    pointer_mode_host   = true;
+    pointer_mode_device = true;
+    outofplace          = false;
+    HMM                 = false;
+    graph_test          = false;
+    repeatability_check = false;
+}
+
+bool Arguments::validate()
+{
+// c_scan_value must matching value in rocblas_common.yaml definition
+#define SCAN_VALUE_CHECK(arg_) \
+    if(arg_ == c_scan_value)   \
+    arg_ = scan
+
+    if(scan != c_scan_value)
+    {
+        // int64_t variables all same as scan
+
+        SCAN_VALUE_CHECK(stride_a);
+        SCAN_VALUE_CHECK(stride_b);
+        SCAN_VALUE_CHECK(stride_c);
+        SCAN_VALUE_CHECK(stride_d);
+        SCAN_VALUE_CHECK(stride_x);
+        SCAN_VALUE_CHECK(stride_y);
+
+        SCAN_VALUE_CHECK(M);
+        SCAN_VALUE_CHECK(N);
+        SCAN_VALUE_CHECK(K);
+
+        SCAN_VALUE_CHECK(KL);
+        SCAN_VALUE_CHECK(KU);
+
+        SCAN_VALUE_CHECK(lda);
+        SCAN_VALUE_CHECK(ldb);
+        SCAN_VALUE_CHECK(ldc);
+        SCAN_VALUE_CHECK(ldd);
+
+        SCAN_VALUE_CHECK(incx);
+        SCAN_VALUE_CHECK(incy);
+
+        SCAN_VALUE_CHECK(batch_count);
+    }
+
+#undef SCAN_VALUE_CHECK
+
+    // future use, for now everything is valid after rules appled
+    return true;
 }
 
 static Arguments& getDefaultArgs()

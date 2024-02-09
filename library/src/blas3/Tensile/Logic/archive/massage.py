@@ -1,4 +1,4 @@
-"""Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+"""Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -42,7 +42,7 @@ def printExit(message):
 try:
   import yaml
 except ImportError:
-  printExit("You must install PyYAML to use Tensile (to parse config files). See http://pyyaml.org/wiki/PyYAML for installation instructions.")
+  printExit("You must install PyYAML to use Tensile (to parse config files). See https://pyyaml.org/wiki/PyYAML for installation instructions.")
 
 def ensurePath( path ):
   if not os.path.exists(path):

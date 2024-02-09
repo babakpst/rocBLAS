@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -64,16 +64,16 @@ namespace
             }
             else
             {
-                bool is_rot   = (BLAS1 == blas1::rot || BLAS1 == blas1::rot_batched
-                               || BLAS1 == blas1::rot_strided_batched);
-                bool is_rotg  = (BLAS1 == blas1::rotg || BLAS1 == blas1::rotg_batched
-                                || BLAS1 == blas1::rotg_strided_batched);
-                bool is_rotmg = (BLAS1 == blas1::rotmg || BLAS1 == blas1::rotmg_batched
-                                 || BLAS1 == blas1::rotmg_strided_batched);
-                bool is_batched
+                constexpr bool is_rot   = (BLAS1 == blas1::rot || BLAS1 == blas1::rot_batched
+                                         || BLAS1 == blas1::rot_strided_batched);
+                constexpr bool is_rotg  = (BLAS1 == blas1::rotg || BLAS1 == blas1::rotg_batched
+                                          || BLAS1 == blas1::rotg_strided_batched);
+                constexpr bool is_rotmg = (BLAS1 == blas1::rotmg || BLAS1 == blas1::rotmg_batched
+                                           || BLAS1 == blas1::rotmg_strided_batched);
+                constexpr bool is_batched
                     = (BLAS1 == blas1::rot_batched || BLAS1 == blas1::rotm_batched
                        || BLAS1 == blas1::rotg_batched || BLAS1 == blas1::rotmg_batched);
-                bool is_strided
+                constexpr bool is_strided
                     = (BLAS1 == blas1::rot_strided_batched || BLAS1 == blas1::rotm_strided_batched
                        || BLAS1 == blas1::rotg_strided_batched
                        || BLAS1 == blas1::rotmg_strided_batched);
@@ -123,7 +123,11 @@ namespace
                 }
             }
 
-            if(arg.fortran)
+            if(arg.api & c_API_64)
+            {
+                name << "_I64";
+            }
+            if(arg.api & c_API_FORTRAN)
             {
                 name << "_F";
             }
@@ -137,34 +141,36 @@ namespace
     using rot_enabled = std::integral_constant<
         bool,
         ((BLAS1 == blas1::rot || BLAS1 == blas1::rot_batched || BLAS1 == blas1::rot_strided_batched)
-         && ((std::is_same<Ti, float>{} && std::is_same<Ti, To>{} && std::is_same<To, Tc>{})
-             || (std::is_same<Ti, double>{} && std::is_same<Ti, To>{} && std::is_same<To, Tc>{})
-             || (std::is_same<Ti, rocblas_float_complex>{} && std::is_same<To, float>{}
-                 && std::is_same<Tc, rocblas_float_complex>{})
-             || (std::is_same<Ti, rocblas_float_complex>{} && std::is_same<To, float>{}
-                 && std::is_same<Tc, float>{})
-             || (std::is_same<Ti, rocblas_double_complex>{} && std::is_same<To, double>{}
-                 && std::is_same<Tc, rocblas_double_complex>{})
-             || (std::is_same<Ti, rocblas_double_complex>{} && std::is_same<To, double>{}
-                 && std::is_same<Tc, double>{})))
+         && ((std::is_same_v<Ti, float> && std::is_same_v<Ti, To> && std::is_same_v<To, Tc>)
+             || (std::is_same_v<Ti, double> && std::is_same_v<Ti, To> && std::is_same_v<To, Tc>)
+             || (std::is_same_v<
+                     Ti,
+                     rocblas_float_complex> && std::is_same_v<To, float> && std::is_same_v<Tc, rocblas_float_complex>)
+             || (std::is_same_v<
+                     Ti,
+                     rocblas_float_complex> && std::is_same_v<To, float> && std::is_same_v<Tc, float>)
+             || (std::is_same_v<
+                     Ti,
+                     rocblas_double_complex> && std::is_same_v<To, double> && std::is_same_v<Tc, rocblas_double_complex>)
+             || (std::is_same_v<
+                     Ti,
+                     rocblas_double_complex> && std::is_same_v<To, double> && std::is_same_v<Tc, double>)))
 
             || ((BLAS1 == blas1::rotg || BLAS1 == blas1::rotg_batched
                  || BLAS1 == blas1::rotg_strided_batched)
-                && std::is_same<To, Tc>{}
-                && ((std::is_same<Ti, float>{} && std::is_same<Ti, To>{})
-                    || (std::is_same<Ti, double>{} && std::is_same<Ti, To>{})
-                    || (std::is_same<Ti, rocblas_float_complex>{} && std::is_same<To, float>{})
-                    || (std::is_same<Ti, rocblas_double_complex>{} && std::is_same<To, double>{})))
+                && std::is_same_v<To, Tc> && ((std::is_same_v<Ti, float> && std::is_same_v<Ti, To>) || (std::is_same_v<Ti, double> && std::is_same_v<Ti, To>) || (std::is_same_v<Ti, rocblas_float_complex> && std::is_same_v<To, float>) || (std::is_same_v<Ti, rocblas_double_complex> && std::is_same_v<To, double>)))
 
             || ((BLAS1 == blas1::rotm || BLAS1 == blas1::rotm_batched
                  || BLAS1 == blas1::rotm_strided_batched)
-                && std::is_same<To, Ti>{} && std::is_same<To, Tc>{}
-                && (std::is_same<Ti, float>{} || std::is_same<Ti, double>{}))
+                && std::is_same_v<
+                    To,
+                    Ti> && std::is_same_v<To, Tc> && (std::is_same_v<Ti, float> || std::is_same_v<Ti, double>))
 
             || ((BLAS1 == blas1::rotmg || BLAS1 == blas1::rotmg_batched
                  || BLAS1 == blas1::rotmg_strided_batched)
-                && std::is_same<To, Ti>{} && std::is_same<To, Tc>{}
-                && (std::is_same<Ti, float>{} || std::is_same<Ti, double>{}))>;
+                && std::is_same_v<
+                    To,
+                    Ti> && std::is_same_v<To, Tc> && (std::is_same_v<Ti, float> || std::is_same_v<Ti, double>))>;
 
 // Creates tests for one of the BLAS 1 functions
 // ARG passes 1-3 template arguments to the testing_* function

@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2019-2023 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -27,18 +27,18 @@
 /**
   *  A combined kernel to handle all hpmv cases.
   */
-template <rocblas_int DIM_X, rocblas_int DIM_Y, typename T>
-__device__ void rocblas_hpmv_kernel_calc(bool        upper,
-                                         rocblas_int n,
-                                         T           alpha,
-                                         const T*    AP,
-                                         const T*    x,
-                                         ptrdiff_t   incx,
-                                         T           beta,
-                                         T*          y,
-                                         ptrdiff_t   incy)
+template <int DIM_X, int DIM_Y, typename T>
+__forceinline__ __device__ void rocblas_hpmv_kernel_calc(bool        is_upper,
+                                                         rocblas_int n,
+                                                         T           alpha,
+                                                         const T*    AP,
+                                                         const T*    x,
+                                                         int64_t     incx,
+                                                         T           beta,
+                                                         T*          y,
+                                                         int64_t     incy)
 {
-    rocblas_int thread_id = threadIdx.x + threadIdx.y * blockDim.x;
+    rocblas_int thread_id = threadIdx.x + threadIdx.y * DIM_X;
 
     // threads are all configurated locally
     rocblas_int tx = thread_id % DIM_X;
@@ -52,7 +52,7 @@ __device__ void rocblas_hpmv_kernel_calc(bool        upper,
         {
             rocblas_int idx = blockIdx.x * DIM_X + thread_id;
             if(idx < n)
-                y[idx * incy] = beta ? beta * y[idx * incy] : 0;
+                y[idx * int64_t(incy)] = beta ? beta * y[idx * int64_t(incy)] : 0;
         }
         return;
     }
@@ -69,7 +69,7 @@ __device__ void rocblas_hpmv_kernel_calc(bool        upper,
             int  ind_y = col;
             bool CONJ  = false;
 
-            if((ind > col && upper) || (ind < col && !upper))
+            if((ind > col && is_upper) || (ind < col && !is_upper))
             {
                 // in the opposite triangle, get conjugate of value at transposed position
                 ind_x = col;
@@ -86,12 +86,15 @@ __device__ void rocblas_hpmv_kernel_calc(bool        upper,
             //                              col-1
             // For lower matrices, index = sigma(n-i) + row
             //                              i=0
-            int index = upper ? ((ind_y * (ind_y + 1)) / 2) + ind_x
-                              : ((ind_y * (2 * n - ind_y + 1)) / 2) + (ind_x - ind_y);
-            // clang-format off
-            res_A += (ind_x == ind_y ? std::real(AP[index]) : CONJ ? conj(AP[index]) : (AP[index]))
-                     * x[col * incx];
-            // clang-format on
+
+            int64_t index = is_upper
+                                ? ((int64_t(ind_y) * (ind_y + 1)) / 2) + ind_x
+                                : ((int64_t(ind_y) * (2 * n - ind_y + 1)) / 2) + (ind_x - ind_y);
+
+            res_A += (ind_x == ind_y ? std::real(AP[index])
+                      : CONJ         ? conj(AP[index])
+                                     : (AP[index]))
+                     * x[col * int64_t(incx)];
         }
     }
 
@@ -105,20 +108,20 @@ __device__ void rocblas_hpmv_kernel_calc(bool        upper,
         for(rocblas_int i = 1; i < DIM_Y; i++)
             sdata[thread_id] += sdata[thread_id + DIM_X * i];
 
-        rocblas_int idx = blockIdx.x * DIM_X + thread_id;
+        int64_t idx = blockIdx.x * DIM_X + thread_id;
         // Update y.
         if(idx < n)
-            y[idx * incy]
-                = beta ? alpha * sdata[thread_id] + beta * y[idx * incy] : alpha * sdata[thread_id];
+            y[idx * int64_t(incy)] = beta ? alpha * sdata[thread_id] + beta * y[idx * int64_t(incy)]
+                                          : alpha * sdata[thread_id];
     }
 }
 
 /**
   *  Loads pointers and launches the actual calculation kernel.
   */
-template <rocblas_int DIM_X, rocblas_int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
+template <int DIM_X, int DIM_Y, typename TScal, typename TConstPtr, typename TPtr>
 ROCBLAS_KERNEL(DIM_X* DIM_Y)
-rocblas_hpmv_kernel(bool           upper,
+rocblas_hpmv_kernel(bool           is_upper,
                     rocblas_int    n,
                     TScal          alphaa,
                     TConstPtr      APa,
@@ -126,18 +129,14 @@ rocblas_hpmv_kernel(bool           upper,
                     rocblas_stride strideA,
                     TConstPtr      xa,
                     rocblas_stride shiftx,
-                    rocblas_int    incx,
+                    int64_t        incx,
                     rocblas_stride stridex,
                     TScal          betaa,
                     TPtr           ya,
                     rocblas_stride shifty,
-                    rocblas_int    incy,
+                    int64_t        incy,
                     rocblas_stride stridey)
 {
-    rocblas_int num_threads = blockDim.x * blockDim.y * blockDim.z;
-    if(DIM_X * DIM_Y != num_threads)
-        return; // need to launch exactly the same number of threads as template parameters indicate
-
     auto alpha = load_scalar(alphaa);
     auto beta  = load_scalar(betaa);
 
@@ -149,7 +148,7 @@ rocblas_hpmv_kernel(bool           upper,
 
     auto y = load_ptr_batch(ya, blockIdx.y, shifty, stridey);
 
-    rocblas_hpmv_kernel_calc<DIM_X, DIM_Y>(upper, n, alpha, AP, x, incx, beta, y, incy);
+    rocblas_hpmv_kernel_calc<DIM_X, DIM_Y>(is_upper, n, alpha, AP, x, incx, beta, y, incy);
 }
 
 /**
@@ -157,24 +156,24 @@ rocblas_hpmv_kernel(bool           upper,
   *  TConstPtr is either: const T* OR const T* const*
   *  TPtr      is either:       T* OR       T* const*
   */
-template <typename TScal, typename TConstPtr, typename TPtr>
-rocblas_status rocblas_hpmv_template(rocblas_handle handle,
+template <typename API_INT, typename TScal, typename TConstPtr, typename TPtr>
+rocblas_status rocblas_hpmv_launcher(rocblas_handle handle,
                                      rocblas_fill   uplo,
-                                     rocblas_int    n,
+                                     API_INT        n,
                                      TScal          alpha,
                                      TConstPtr      AP,
                                      rocblas_stride offseta,
                                      rocblas_stride strideA,
                                      TConstPtr      x,
                                      rocblas_stride offsetx,
-                                     rocblas_int    incx,
+                                     int64_t        incx,
                                      rocblas_stride stridex,
                                      TScal          beta,
                                      TPtr           y,
                                      rocblas_stride offsety,
-                                     rocblas_int    incy,
+                                     int64_t        incy,
                                      rocblas_stride stridey,
-                                     rocblas_int    batch_count)
+                                     API_INT        batch_count)
 {
     // quick return
     if(!n || !batch_count)
@@ -186,81 +185,82 @@ rocblas_status rocblas_hpmv_template(rocblas_handle handle,
 
     static constexpr int HPMV_DIM_X = 64;
     static constexpr int HPMV_DIM_Y = 16;
-    rocblas_int          blocks     = (n - 1) / (HPMV_DIM_X) + 1;
-    dim3                 hpmv_grid(blocks, batch_count);
-    dim3                 hpmv_threads(HPMV_DIM_X, HPMV_DIM_Y);
+
+    rocblas_int blocks = (n - 1) / (HPMV_DIM_X) + 1;
+    dim3        hpmv_grid(blocks, batch_count);
+    dim3        hpmv_threads(HPMV_DIM_X, HPMV_DIM_Y);
 
     // Launch a modified gemv kernel for hpmv.
     if(handle->pointer_mode == rocblas_pointer_mode_device)
     {
-        hipLaunchKernelGGL((rocblas_hpmv_kernel<HPMV_DIM_X, HPMV_DIM_Y>),
-                           hpmv_grid,
-                           hpmv_threads,
-                           0,
-                           handle->get_stream(),
-                           uplo == rocblas_fill_upper,
-                           n,
-                           alpha,
-                           AP,
-                           offseta,
-                           strideA,
-                           x,
-                           offsetx,
-                           incx,
-                           stridex,
-                           beta,
-                           y,
-                           offsety,
-                           incy,
-                           stridey);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_hpmv_kernel<HPMV_DIM_X, HPMV_DIM_Y>),
+                              hpmv_grid,
+                              hpmv_threads,
+                              0,
+                              handle->get_stream(),
+                              uplo == rocblas_fill_upper,
+                              n,
+                              alpha,
+                              AP,
+                              offseta,
+                              strideA,
+                              x,
+                              offsetx,
+                              incx,
+                              stridex,
+                              beta,
+                              y,
+                              offsety,
+                              incy,
+                              stridey);
     }
     else
     {
         if(!*alpha && *beta == 1)
             return rocblas_status_success;
 
-        hipLaunchKernelGGL((rocblas_hpmv_kernel<HPMV_DIM_X, HPMV_DIM_Y>),
-                           hpmv_grid,
-                           hpmv_threads,
-                           0,
-                           handle->get_stream(),
-                           uplo == rocblas_fill_upper,
-                           n,
-                           *alpha,
-                           AP,
-                           offseta,
-                           strideA,
-                           x,
-                           offsetx,
-                           incx,
-                           stridex,
-                           *beta,
-                           y,
-                           offsety,
-                           incy,
-                           stridey);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_hpmv_kernel<HPMV_DIM_X, HPMV_DIM_Y>),
+                              hpmv_grid,
+                              hpmv_threads,
+                              0,
+                              handle->get_stream(),
+                              uplo == rocblas_fill_upper,
+                              n,
+                              *alpha,
+                              AP,
+                              offseta,
+                              strideA,
+                              x,
+                              offsetx,
+                              incx,
+                              stridex,
+                              *beta,
+                              y,
+                              offsety,
+                              incy,
+                              stridey);
     }
 
     return rocblas_status_success;
 }
 
-//TODO :-Add rocblas_check_numerics_hp_matrix_template for checking Matrix `AP` which is a Hermitian Packed matrix
+//TODO :-Add rocblas_check_numerics_hp_matrix_launcher for checking Matrix `AP` which is a Hermitian Packed matrix
 template <typename T, typename U>
 rocblas_status rocblas_hpmv_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
-                                           rocblas_int    n,
+                                           int64_t        n,
                                            T              AP,
                                            rocblas_stride offset_a,
                                            rocblas_stride stride_a,
                                            T              x,
                                            rocblas_stride offset_x,
-                                           rocblas_int    inc_x,
+                                           int64_t        inc_x,
                                            rocblas_stride stride_x,
                                            U              y,
                                            rocblas_stride offset_y,
-                                           rocblas_int    inc_y,
+                                           int64_t        inc_y,
                                            rocblas_stride stride_y,
-                                           rocblas_int    batch_count,
+                                           int64_t        batch_count,
                                            const int      check_numerics,
                                            bool           is_input)
 {
@@ -296,67 +296,76 @@ rocblas_status rocblas_hpmv_check_numerics(const char*    function_name,
 // Instantiations below will need to be manually updated to match any change in
 // template parameters in the files *hpmv*.cpp
 
-// clang-format off
-
-#ifdef INSTANTIATE_HPMV_TEMPLATE
-#error INSTANTIATE_HPMV_TEMPLATE already defined
+#ifdef INST_HPMV_LAUNCHER
+#error INST_HPMV_LAUNCHER already defined
 #endif
 
-#define INSTANTIATE_HPMV_TEMPLATE(TScal_, TConstPtr_, TPtr_)             \
-template rocblas_status rocblas_hpmv_template<TScal_, TConstPtr_, TPtr_> \
-                                    (rocblas_handle handle,              \
-                                     rocblas_fill   uplo,                \
-                                     rocblas_int    n,                   \
-                                     TScal_         alpha,               \
-                                     TConstPtr_     AP,                  \
-                                     rocblas_stride offseta,             \
-                                     rocblas_stride strideA,             \
-                                     TConstPtr_     x,                   \
-                                     rocblas_stride offsetx,             \
-                                     rocblas_int    incx,                \
-                                     rocblas_stride stridex,             \
-                                     TScal_         beta,                \
-                                     TPtr_          y,                   \
-                                     rocblas_stride offsety,             \
-                                     rocblas_int    incy,                \
-                                     rocblas_stride stridey,             \
-                                     rocblas_int    batch_count);
+#define INST_HPMV_LAUNCHER(TI_, TScal_, TConstPtr_, TPtr_)                         \
+    template rocblas_status rocblas_hpmv_launcher<TI_, TScal_, TConstPtr_, TPtr_>( \
+        rocblas_handle handle,                                                     \
+        rocblas_fill   uplo,                                                       \
+        TI_            n,                                                          \
+        TScal_         alpha,                                                      \
+        TConstPtr_     AP,                                                         \
+        rocblas_stride offseta,                                                    \
+        rocblas_stride strideA,                                                    \
+        TConstPtr_     x,                                                          \
+        rocblas_stride offsetx,                                                    \
+        int64_t        incx,                                                       \
+        rocblas_stride stridex,                                                    \
+        TScal_         beta,                                                       \
+        TPtr_          y,                                                          \
+        rocblas_stride offsety,                                                    \
+        int64_t        incy,                                                       \
+        rocblas_stride stridey,                                                    \
+        TI_            batch_count);
 
-INSTANTIATE_HPMV_TEMPLATE(rocblas_float_complex const*, rocblas_float_complex const*, rocblas_float_complex*)
-INSTANTIATE_HPMV_TEMPLATE(rocblas_double_complex const*, rocblas_double_complex const*, rocblas_double_complex*)
-INSTANTIATE_HPMV_TEMPLATE(rocblas_float_complex const*, rocblas_float_complex const* const*, rocblas_float_complex* const*)
-INSTANTIATE_HPMV_TEMPLATE(rocblas_double_complex const*, rocblas_double_complex const* const*, rocblas_double_complex* const*)
+INST_HPMV_LAUNCHER(rocblas_int,
+                   rocblas_float_complex const*,
+                   rocblas_float_complex const*,
+                   rocblas_float_complex*)
+INST_HPMV_LAUNCHER(rocblas_int,
+                   rocblas_double_complex const*,
+                   rocblas_double_complex const*,
+                   rocblas_double_complex*)
 
-#undef INSTANTIATE_HPMV_TEMPLATE
+INST_HPMV_LAUNCHER(rocblas_int,
+                   rocblas_float_complex const*,
+                   rocblas_float_complex const* const*,
+                   rocblas_float_complex* const*)
+INST_HPMV_LAUNCHER(rocblas_int,
+                   rocblas_double_complex const*,
+                   rocblas_double_complex const* const*,
+                   rocblas_double_complex* const*)
 
-#ifdef INSTANTIATE_HPMV_NUMERICS
-#error INSTANTIATE_HPMV_NUMERICS already defined
+#undef INST_HPMV_LAUNCHER
+
+#ifdef INST_HPMV_NUMERICS
+#error INST_HPMV_NUMERICS already defined
 #endif
 
-#define INSTANTIATE_HPMV_NUMERICS(T_, U_)                                 \
-template rocblas_status rocblas_hpmv_check_numerics<T_, U_>               \
-                                          (const char*    function_name,  \
-                                           rocblas_handle handle,         \
-                                           rocblas_int    n,              \
-                                           T_             AP,             \
-                                           rocblas_stride    offset_a,       \
-                                           rocblas_stride stride_a,       \
-                                           T_             x,              \
-                                           rocblas_stride    offset_x,       \
-                                           rocblas_int    inc_x,          \
-                                           rocblas_stride stride_x,       \
-                                           U_             y,              \
-                                           rocblas_stride    offset_y,       \
-                                           rocblas_int    inc_y,          \
-                                           rocblas_stride stride_y,       \
-                                           rocblas_int    batch_count,    \
-                                           const int      check_numerics, \
-                                           bool           is_input);
+#define INST_HPMV_NUMERICS(T_, U_)                                                             \
+    template rocblas_status rocblas_hpmv_check_numerics<T_, U_>(const char*    function_name,  \
+                                                                rocblas_handle handle,         \
+                                                                int64_t        n,              \
+                                                                T_             AP,             \
+                                                                rocblas_stride offset_a,       \
+                                                                rocblas_stride stride_a,       \
+                                                                T_             x,              \
+                                                                rocblas_stride offset_x,       \
+                                                                int64_t        inc_x,          \
+                                                                rocblas_stride stride_x,       \
+                                                                U_             y,              \
+                                                                rocblas_stride offset_y,       \
+                                                                int64_t        inc_y,          \
+                                                                rocblas_stride stride_y,       \
+                                                                int64_t        batch_count,    \
+                                                                const int      check_numerics, \
+                                                                bool           is_input);
 
-INSTANTIATE_HPMV_NUMERICS(rocblas_float_complex const*, rocblas_float_complex*)
-INSTANTIATE_HPMV_NUMERICS(rocblas_double_complex const*, rocblas_double_complex*)
-INSTANTIATE_HPMV_NUMERICS(rocblas_float_complex const* const*, rocblas_float_complex* const*)
-INSTANTIATE_HPMV_NUMERICS(rocblas_double_complex const* const*, rocblas_double_complex* const*)
+INST_HPMV_NUMERICS(rocblas_float_complex const*, rocblas_float_complex*)
+INST_HPMV_NUMERICS(rocblas_double_complex const*, rocblas_double_complex*)
+INST_HPMV_NUMERICS(rocblas_float_complex const* const*, rocblas_float_complex* const*)
+INST_HPMV_NUMERICS(rocblas_double_complex const* const*, rocblas_double_complex* const*)
 
-#undef INSTANTIATE_HPMV_NUMERICS
-// clang-format on
+#undef INST_HPMV_NUMERICS

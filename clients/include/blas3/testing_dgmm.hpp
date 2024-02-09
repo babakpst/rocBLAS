@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -41,7 +41,7 @@
 template <typename T>
 void testing_dgmm_bad_arg(const Arguments& arg)
 {
-    auto rocblas_dgmm_fn = arg.fortran ? rocblas_dgmm<T, true> : rocblas_dgmm<T, false>;
+    auto rocblas_dgmm_fn = arg.api == FORTRAN ? rocblas_dgmm<T, true> : rocblas_dgmm<T, false>;
 
     const rocblas_int M = 100;
     const rocblas_int N = 101;
@@ -89,7 +89,7 @@ void testing_dgmm_bad_arg(const Arguments& arg)
 template <typename T>
 void testing_dgmm(const Arguments& arg)
 {
-    auto rocblas_dgmm_fn = arg.fortran ? rocblas_dgmm<T, true> : rocblas_dgmm<T, false>;
+    auto rocblas_dgmm_fn = arg.api == FORTRAN ? rocblas_dgmm<T, true> : rocblas_dgmm<T, false>;
 
     rocblas_side side = char2rocblas_side(arg.side);
 
@@ -97,10 +97,9 @@ void testing_dgmm(const Arguments& arg)
     rocblas_int N = arg.N;
     rocblas_int K = rocblas_side_right == side ? size_t(N) : size_t(M);
 
-    rocblas_int lda      = arg.lda;
-    rocblas_int incx     = arg.incx;
-    rocblas_int ldc      = arg.ldc;
-    rocblas_int abs_incx = incx > 0 ? incx : -incx;
+    rocblas_int lda  = arg.lda;
+    rocblas_int incx = arg.incx;
+    rocblas_int ldc  = arg.ldc;
 
     double gpu_time_used, cpu_time_used;
 
@@ -121,14 +120,13 @@ void testing_dgmm(const Arguments& arg)
     // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
     // Allocate host memory
     host_matrix<T> hA(M, N, lda);
-    host_vector<T> hx(K, incx ? incx : 1);
-    host_matrix<T> hC_1(M, N, ldc);
-    host_matrix<T> hC_2(M, N, ldc);
+    host_vector<T> hx(K, incx);
+    host_matrix<T> hC(M, N, ldc);
     host_matrix<T> hC_gold(M, N, ldc);
 
     // Allocate device memory
     device_matrix<T> dA(M, N, lda);
-    device_vector<T> dx(K, incx ? incx : 1);
+    device_vector<T> dx(K, incx);
     device_matrix<T> dC(M, N, ldc);
 
     // Check device memory allocation
@@ -139,12 +137,12 @@ void testing_dgmm(const Arguments& arg)
     // Initialize data on host memory
     rocblas_init_matrix(hA, arg, rocblas_client_never_set_nan, rocblas_client_general_matrix, true);
     rocblas_init_vector(hx, arg, rocblas_client_never_set_nan, false, true);
-    rocblas_init_matrix(hC_1, arg, rocblas_client_never_set_nan, rocblas_client_general_matrix);
+    rocblas_init_matrix(hC, arg, rocblas_client_never_set_nan, rocblas_client_general_matrix);
 
     // copy data from CPU to device
     CHECK_HIP_ERROR(dA.transfer_from(hA));
     CHECK_HIP_ERROR(dx.transfer_from(hx));
-    CHECK_HIP_ERROR(dC.transfer_from(hC_1));
+    CHECK_HIP_ERROR(dC.transfer_from(hC));
 
     if(arg.unit_check || arg.norm_check)
     {
@@ -155,20 +153,20 @@ void testing_dgmm(const Arguments& arg)
 
         // reference calculation for golden result
         cpu_time_used = get_time_us_no_sync();
-        cblas_dgmm<T>(side, M, N, hA, lda, hx, incx, hC_gold, ldc);
+        ref_dgmm<T>(side, M, N, hA, lda, hx, incx, hC_gold, ldc);
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
         // fecth from GPU
-        CHECK_HIP_ERROR(hC_2.transfer_from(dC));
+        CHECK_HIP_ERROR(hC.transfer_from(dC));
 
         if(arg.unit_check)
         {
-            unit_check_general<T>(M, N, ldc, hC_gold, hC_2);
+            unit_check_general<T>(M, N, ldc, hC_gold, hC);
         }
 
         if(arg.norm_check)
         {
-            rocblas_error = norm_check_general<T>('F', M, N, ldc, hC_gold, hC_2);
+            rocblas_error = norm_check_general<T>('F', M, N, ldc, hC_gold, hC);
         }
 
     } // end of if unit/norm check

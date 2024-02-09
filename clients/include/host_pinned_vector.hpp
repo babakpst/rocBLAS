@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -40,10 +40,11 @@ struct host_pinned_vector : std::vector<T, pinned_memory_allocator<T>>
     //! @brief Constructor.
     //!
 
-    host_pinned_vector(size_t n, rocblas_int inc)
-        : std::vector<T, pinned_memory_allocator<T>>(n * inc, pinned_memory_allocator<T>())
+    host_pinned_vector(size_t n, int64_t inc)
+        : std::vector<T, pinned_memory_allocator<T>>(n * (inc ? inc : 1),
+                                                     pinned_memory_allocator<T>())
         , m_n(n)
-        , m_inc(inc)
+        , m_inc(inc ? inc : 1)
     {
     }
 
@@ -79,15 +80,15 @@ struct host_pinned_vector : std::vector<T, pinned_memory_allocator<T>>
     //!
     size_t n() const
     {
-        return this->m_n;
+        return m_n;
     }
 
     //!
     //! @brief Returns the increment of the vector.
     //!
-    rocblas_int inc() const
+    int64_t inc() const
     {
-        return this->m_inc;
+        return m_inc;
     }
 
     //!
@@ -100,6 +101,6 @@ struct host_pinned_vector : std::vector<T, pinned_memory_allocator<T>>
     }
 
 private:
-    size_t      m_n{};
-    rocblas_int m_inc{};
+    size_t  m_n{};
+    int64_t m_inc{};
 };

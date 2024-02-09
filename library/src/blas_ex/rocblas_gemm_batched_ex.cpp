@@ -21,11 +21,16 @@
  * ************************************************************************ */
 
 #include "handle.hpp"
-#include "logging.hpp"
 #include "rocblas.h"
+
+#ifdef BUILD_WITH_TENSILE
+
+#include "logging.hpp"
 #include "rocblas_gemm_ex.hpp"
 #include "rocblas_gemm_ex_get_solutions.hpp"
 #include "utility.hpp"
+
+#endif
 
 extern "C" rocblas_status rocblas_gemm_batched_ex(rocblas_handle    handle,
                                                   rocblas_operation trans_a,
@@ -54,6 +59,7 @@ extern "C" rocblas_status rocblas_gemm_batched_ex(rocblas_handle    handle,
                                                   uint32_t          flags)
 try
 {
+#ifdef BUILD_WITH_TENSILE
     if(!handle)
         return rocblas_status_invalid_handle;
 
@@ -133,7 +139,7 @@ try
                    == rocblas_status_success)
                 {
                     log_bench(handle,
-                              "./rocblas-bench -f gemm_batched_ex",
+                              "./rocblas-bench -f gemm_batched_ex3",
                               "--transposeA",
                               trans_a_letter,
                               "--transposeB",
@@ -157,6 +163,7 @@ try
                               "--c_type",
                               c_type_string,
                               "--ldc",
+                              ldc,
                               "--d_type",
                               d_type_string,
                               "--ldd",
@@ -288,6 +295,9 @@ try
                                           algo,
                                           solution_index,
                                           flags);
+#else
+    return rocblas_status_excluded_from_build;
+#endif
 }
 catch(...)
 {
@@ -323,6 +333,7 @@ extern "C" rocblas_status rocblas_gemm_batched_ex_get_solutions(rocblas_handle  
 {
     try
     {
+#ifdef BUILD_WITH_TENSILE
         if(!handle)
             return rocblas_status_invalid_handle;
 
@@ -396,11 +407,69 @@ extern "C" rocblas_status rocblas_gemm_batched_ex_get_solutions(rocblas_handle  
                                                             batch_count,
                                                             compute_type,
                                                             flags,
+                                                            CAN_SOLVE,
                                                             list_array,
                                                             list_size);
+#else
+        return rocblas_status_excluded_from_build;
+#endif
     }
     catch(...)
     {
         return exception_to_rocblas_status();
     }
+}
+
+ROCBLAS_EXPORT rocblas_status
+    rocblas_gemm_batched_ex_get_solutions_by_type(rocblas_handle   handle,
+                                                  rocblas_datatype input_type,
+                                                  rocblas_datatype output_type,
+                                                  rocblas_datatype compute_type,
+                                                  uint32_t         flags,
+                                                  rocblas_int*     list_array,
+                                                  rocblas_int*     list_size)
+{
+#ifdef BUILD_WITH_TENSILE
+    // Create dummy GEMM problem to take advantage of problem templating
+    // Most parameters are ignored, just needs to be valid for all types
+    float          alpha = 0.0f;
+    float          beta  = 0.0f;
+    rocblas_stride stride{1};
+    return rocblas_gemm_ex_get_solutions_template<true>(handle,
+                                                        rocblas_operation_none,
+                                                        rocblas_operation_none,
+                                                        4,
+                                                        4,
+                                                        4,
+                                                        &alpha,
+                                                        NULL,
+                                                        input_type,
+                                                        0,
+                                                        4,
+                                                        stride,
+                                                        NULL,
+                                                        input_type,
+                                                        0,
+                                                        4,
+                                                        stride,
+                                                        &beta,
+                                                        NULL,
+                                                        output_type,
+                                                        0,
+                                                        4,
+                                                        stride,
+                                                        NULL,
+                                                        output_type,
+                                                        0,
+                                                        4,
+                                                        stride,
+                                                        2,
+                                                        compute_type,
+                                                        flags,
+                                                        MATCHES_TYPE,
+                                                        list_array,
+                                                        list_size);
+#else
+    return rocblas_status_excluded_from_build;
+#endif
 }

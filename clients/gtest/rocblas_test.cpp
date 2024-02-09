@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2020-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -36,6 +36,15 @@
 #include <pthread.h>
 #include <unistd.h>
 #endif
+
+testing::AssertionResult status_match(rocblas_status expected, rocblas_status status)
+{
+    if(expected == status)
+        return testing::AssertionSuccess();
+    else
+        return testing::AssertionFailure() << "got " << rocblas_status_to_string(status)
+                                           << " instead of " << rocblas_status_to_string(expected);
+}
 
 /*********************************************
  * thread pool functions
@@ -157,6 +166,9 @@ extern "C" void rocblas_test_signal_handler(int sig)
         return;
     }
 
+    rocblas_cerr << "SIGNAL raised in: "
+                 << ::testing::UnitTest::GetInstance()->current_test_info()->name() << std::endl;
+
 #ifndef WIN32
     // If this is an alarm timeout, we abort
     if(sig == SIGALRM)
@@ -267,6 +279,15 @@ void catch_signals_and_exceptions_as_failures(std::function<void()> test, bool s
 #endif
     // Restore the previous handler
     t_handler = old_handler;
+
+    if(hipPeekAtLastError() != hipSuccess)
+    {
+        rocblas_cerr << "hipGetLastError at end of test: "
+                     << ::testing::UnitTest::GetInstance()->current_test_info()->name()
+                     << std::endl;
+        (void)rocblas_internal_convert_hip_to_rocblas_status_and_log(
+            hipGetLastError()); // clear last error
+    }
 }
 
 void launch_test_on_streams(std::function<void()> test, size_t numStreams, size_t numDevices)
@@ -364,6 +385,24 @@ static bool valid_category(const char* category)
             return true;
     }
     return false;
+}
+
+bool rocblas_client_global_filters(const Arguments& args)
+{
+    static std::string gpu_arch = rocblas_internal_get_arch_name();
+
+#ifdef WIN32
+    static constexpr rocblas_client_os os = rocblas_client_os::WINDOWS;
+#else
+    static constexpr rocblas_client_os os = rocblas_client_os::LINUX;
+#endif
+    if(!(args.os_flags & os))
+        return false;
+
+    if(args.gpu_arch[0] && !gpu_arch_match(gpu_arch, args.gpu_arch))
+        return false;
+
+    return true;
 }
 
 /********************************************************************************************

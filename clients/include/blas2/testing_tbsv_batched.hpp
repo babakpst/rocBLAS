@@ -40,7 +40,7 @@ template <typename T>
 void testing_tbsv_batched_bad_arg(const Arguments& arg)
 {
     auto rocblas_tbsv_batched_fn
-        = arg.fortran ? rocblas_tbsv_batched<T, true> : rocblas_tbsv_batched<T, false>;
+        = arg.api == FORTRAN ? rocblas_tbsv_batched<T, true> : rocblas_tbsv_batched<T, false>;
 
     const rocblas_int       N                 = 100;
     const rocblas_int       K                 = 5;
@@ -104,7 +104,7 @@ template <typename T>
 void testing_tbsv_batched(const Arguments& arg)
 {
     auto rocblas_tbsv_batched_fn
-        = arg.fortran ? rocblas_tbsv_batched<T, true> : rocblas_tbsv_batched<T, false>;
+        = arg.api == FORTRAN ? rocblas_tbsv_batched<T, true> : rocblas_tbsv_batched<T, false>;
 
     rocblas_int       N                 = arg.N;
     rocblas_int       K                 = arg.K;
@@ -134,27 +134,21 @@ void testing_tbsv_batched(const Arguments& arg)
         return;
     }
 
-    size_t abs_incx = size_t(incx >= 0 ? incx : -incx);
-
     // Naming: `h` is in CPU (host) memory(eg hAb), `d` is in GPU (device) memory (eg dAb).
     // Allocate host memory
     host_batch_matrix<T> hA(N, N, N, batch_count);
-    host_batch_matrix<T> AAT(N, N, N, batch_count);
     host_batch_matrix<T> hAb(banded_matrix_row, N, lda, batch_count);
     host_batch_vector<T> hb(N, incx, batch_count);
     host_batch_vector<T> hx(N, incx, batch_count);
-    host_batch_vector<T> hx_or_b_1(N, incx, batch_count);
-    host_batch_vector<T> hx_or_b_2(N, incx, batch_count);
+    host_batch_vector<T> hx_or_b(N, incx, batch_count);
     host_batch_vector<T> cpu_x_or_b(N, incx, batch_count);
 
     // Check host memory allocation
     CHECK_HIP_ERROR(hA.memcheck());
-    CHECK_HIP_ERROR(AAT.memcheck());
     CHECK_HIP_ERROR(hAb.memcheck());
     CHECK_HIP_ERROR(hb.memcheck());
     CHECK_HIP_ERROR(hx.memcheck());
-    CHECK_HIP_ERROR(hx_or_b_1.memcheck());
-    CHECK_HIP_ERROR(hx_or_b_2.memcheck());
+    CHECK_HIP_ERROR(hx_or_b.memcheck());
     CHECK_HIP_ERROR(cpu_x_or_b.memcheck());
 
     // Allocate device memory
@@ -191,15 +185,14 @@ void testing_tbsv_batched(const Arguments& arg)
     // Calculate hb = hA*hx;
     for(int b = 0; b < batch_count; b++)
     {
-        cblas_tbmv<T>(uplo, transA, diag, N, K, hAb[b], lda, hb[b], incx);
+        ref_tbmv<T>(uplo, transA, diag, N, K, hAb[b], lda, hb[b], incx);
     }
 
     cpu_x_or_b.copy_from(hb);
-    hx_or_b_1.copy_from(hb);
-    hx_or_b_2.copy_from(hb);
+    hx_or_b.copy_from(hb);
 
-    double max_err_1 = 0.0;
-    double max_err_2 = 0.0;
+    double max_err     = 0.0;
+    double max_err_res = 0.0;
 
     double gpu_time_used, cpu_time_used;
     double error_eps_multiplier    = 40.0;
@@ -208,9 +201,8 @@ void testing_tbsv_batched(const Arguments& arg)
 
     if(arg.unit_check || arg.norm_check)
     {
-        // calculate dxorb <- A^(-1) b   rocblas_device_pointer_host
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_1));
+        // calculate dxorb <- A^(-1) b
+        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b));
 
         handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR(rocblas_tbsv_batched_fn(handle,
@@ -226,65 +218,30 @@ void testing_tbsv_batched(const Arguments& arg)
                                                     batch_count));
         handle.post_test(arg);
 
-        CHECK_HIP_ERROR(hx_or_b_1.transfer_from(dx_or_b));
-
-        // calculate dxorb <- A^(-1) b   rocblas_device_pointer_device
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_2));
-
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(rocblas_tbsv_batched_fn(handle,
-                                                    uplo,
-                                                    transA,
-                                                    diag,
-                                                    N,
-                                                    K,
-                                                    dAb.ptr_on_device(),
-                                                    lda,
-                                                    dx_or_b.ptr_on_device(),
-                                                    incx,
-                                                    batch_count));
-        handle.post_test(arg);
-
-        CHECK_HIP_ERROR(hx_or_b_2.transfer_from(dx_or_b));
+        CHECK_HIP_ERROR(hx_or_b.transfer_from(dx_or_b));
 
         //computed result is in hx_or_b, so forward error is E = hx - hx_or_b
         // calculate norm 1 of vector E
-        for(int b = 0; b < batch_count; b++)
-        {
-            max_err_1 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx[b], hx_or_b_1[b]));
-            max_err_2 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx[b], hx_or_b_2[b]));
-
-            // unit test
-            trsm_err_res_check<T>(max_err_1, N, error_eps_multiplier, eps);
-            trsm_err_res_check<T>(max_err_2, N, error_eps_multiplier, eps);
-        }
+        max_err = rocblas_abs(vector_norm_1<T>(N, incx, hx, hx_or_b));
+        if(arg.unit_check)
+            trsm_err_res_check<T>(max_err, N, error_eps_multiplier, eps);
 
         // hx_or_b contains A * (calculated X), so res = A * (calculated x) - b = hx_or_b - hb
         for(int b = 0; b < batch_count; b++)
         {
-            cblas_tbmv<T>(uplo, transA, diag, N, K, hAb[b], lda, hx_or_b_1[b], incx);
-            cblas_tbmv<T>(uplo, transA, diag, N, K, hAb[b], lda, hx_or_b_2[b], incx);
+            ref_tbmv<T>(uplo, transA, diag, N, K, hAb[b], lda, hx_or_b[b], incx);
         }
 
         //calculate norm 1 of res
-        for(int b = 0; b < batch_count; b++)
-        {
-            max_err_1 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx_or_b_1[b], hb[b]));
-            max_err_2 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx_or_b_1[b], hb[b]));
-
-            // unit test
-            trsm_err_res_check<T>(max_err_1, N, residual_eps_multiplier, eps);
-            trsm_err_res_check<T>(max_err_2, N, residual_eps_multiplier, eps);
-        }
+        max_err_res = rocblas_abs(vector_norm_1<T>(N, incx, hx_or_b, hb));
+        if(arg.unit_check)
+            trsm_err_res_check<T>(max_err_res, N, residual_eps_multiplier, eps);
     }
 
     if(arg.timing)
     {
         // GPU rocBLAS
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_1));
-
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b));
 
         int number_cold_calls = arg.cold_iters;
         int number_hot_calls  = arg.iters;
@@ -326,7 +283,7 @@ void testing_tbsv_batched(const Arguments& arg)
 
         if(arg.norm_check)
             for(int b = 0; b < batch_count; b++)
-                cblas_tbsv<T>(uplo, transA, diag, N, K, hAb[b], lda, cpu_x_or_b[b], incx);
+                ref_tbsv<T>(uplo, transA, diag, N, K, hAb[b], lda, cpu_x_or_b[b], incx);
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
@@ -337,7 +294,7 @@ void testing_tbsv_batched(const Arguments& arg)
                          tbsv_gflop_count<T>(N, K),
                          ArgumentLogging::NA_value,
                          cpu_time_used,
-                         max_err_1,
-                         max_err_2);
+                         max_err,
+                         max_err_res);
     }
 }

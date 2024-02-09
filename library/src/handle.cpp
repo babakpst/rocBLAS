@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -73,11 +73,75 @@ static inline int getActiveDevice()
     return device;
 }
 
-static inline int getActiveArch(int deviceId)
+static Processor getActiveArch(int deviceId)
 {
     hipDeviceProp_t deviceProperties;
     hipGetDeviceProperties(&deviceProperties, deviceId);
-    return deviceProperties.gcnArch;
+    // strip out xnack/ecc from name
+    std::string deviceFullString(deviceProperties.gcnArchName);
+    std::string deviceString = deviceFullString.substr(0, deviceFullString.find(":"));
+
+    if(deviceString.find("gfx803") != std::string::npos)
+    {
+        return Processor::gfx803;
+    }
+    else if(deviceString.find("gfx900") != std::string::npos)
+    {
+        return Processor::gfx900;
+    }
+    else if(deviceString.find("gfx906") != std::string::npos)
+    {
+        return Processor::gfx906;
+    }
+    else if(deviceString.find("gfx908") != std::string::npos)
+    {
+        return Processor::gfx908;
+    }
+    else if(deviceString.find("gfx90a") != std::string::npos)
+    {
+        return Processor::gfx90a;
+    }
+    else if(deviceString.find("gfx940") != std::string::npos)
+    {
+        return Processor::gfx940;
+    }
+    else if(deviceString.find("gfx941") != std::string::npos)
+    {
+        return Processor::gfx941;
+    }
+    else if(deviceString.find("gfx942") != std::string::npos)
+    {
+        return Processor::gfx942;
+    }
+    else if(deviceString.find("gfx1010") != std::string::npos)
+    {
+        return Processor::gfx1010;
+    }
+    else if(deviceString.find("gfx1011") != std::string::npos)
+    {
+        return Processor::gfx1011;
+    }
+    else if(deviceString.find("gfx1012") != std::string::npos)
+    {
+        return Processor::gfx1012;
+    }
+    else if(deviceString.find("gfx1030") != std::string::npos)
+    {
+        return Processor::gfx1030;
+    }
+    else if(deviceString.find("gfx1100") != std::string::npos)
+    {
+        return Processor::gfx1100;
+    }
+    else if(deviceString.find("gfx1101") != std::string::npos)
+    {
+        return Processor::gfx1101;
+    }
+    else if(deviceString.find("gfx1102") != std::string::npos)
+    {
+        return Processor::gfx1102;
+    }
+    return static_cast<Processor>(0);
 }
 
 /*******************************************************************************
@@ -85,9 +149,10 @@ static inline int getActiveArch(int deviceId)
  ******************************************************************************/
 _rocblas_handle::_rocblas_handle()
     : device(getActiveDevice()) // active device is handle device
-    , arch(getActiveArch(device))
+    , arch(static_cast<int>(getActiveArch(device)))
 {
-    archMajor = arch / 100; // this may need to switch to string handling in the future
+    archMajor      = arch / 100; // this may need to switch to string handling in the future
+    archMajorMinor = arch / 10;
 
     //ROCBLAS_STREAM_ORDER_ALLOC
     const char* stream_order_alloc_env = read_env("ROCBLAS_STREAM_ORDER_ALLOC");
@@ -181,7 +246,8 @@ _rocblas_handle::~_rocblas_handle()
             {
                 rocblas_cerr
                     << "rocBLAS error during freeing of allocated memory in handle destructor: "
-                    << rocblas_status_to_string(get_rocblas_status_for_hip_status(hipStatus))
+                    << rocblas_status_to_string(
+                           rocblas_internal_convert_hip_to_rocblas_status(hipStatus))
                     << std::endl;
                 rocblas_abort();
             };
@@ -197,38 +263,36 @@ _rocblas_handle::~_rocblas_handle()
                 rocblas_cerr << "rocBLAS error during freeing of allocated memory in handle "
                                 "destructor (stream order allocation): "
                              << rocblas_status_to_string(
-                                    get_rocblas_status_for_hip_status(hipStatus))
+                                    rocblas_internal_convert_hip_to_rocblas_status(hipStatus))
                              << std::endl;
                 rocblas_abort();
             };
 
-            for(auto dev_mem : dev_mem_pointers)
-            {
-                hipStatus = (dev_mem) ? (hipFreeAsync)(dev_mem, stream) : hipSuccess;
-
-                if(hipStatus != hipSuccess)
-                {
-                    rocblas_cerr << "rocBLAS error during freeing of allocated memory (during "
-                                    "stream capture) in handle destructor: "
-                                 << rocblas_status_to_string(
-                                        get_rocblas_status_for_hip_status(hipStatus))
-                                 << std::endl;
-                    rocblas_abort();
-                };
-            }
             hipMemPool_t mem_pool;
             int          device;
-            hipGetDevice(&device);
-            hipDeviceGetDefaultMemPool(&mem_pool, device);
-
+            hipStatus = hipGetDevice(&device);
+            if(hipStatus != hipSuccess)
+            {
+                rocblas_cerr << "rocBLAS error retreiving the device (deviceID: " << device << ")"
+                             << std::endl;
+                rocblas_abort();
+            }
+            hipStatus = hipDeviceGetDefaultMemPool(&mem_pool, device);
+            if(hipStatus != hipSuccess)
+            {
+                rocblas_cerr << "rocBLAS error retreiving the device's memory pool (deviceID: "
+                             << device << ")" << std::endl;
+                rocblas_abort();
+            }
             //Releases device memory back to OS
-            hipMemPoolTrimTo(mem_pool, 0);
+            hipStatus = hipMemPoolTrimTo(mem_pool, 0);
+            if(hipStatus != hipSuccess)
+            {
+                rocblas_cerr << "rocBLAS error releasing the device's memory pool (deviceID: "
+                             << device << ")" << std::endl;
+                rocblas_abort();
+            }
 #endif
-        }
-        // Free memory allocated on the host
-        for(auto host_mem : host_mem_pointers)
-        {
-            free(host_mem);
         }
     }
 }
@@ -245,7 +309,8 @@ bool _rocblas_handle::device_allocator(size_t size)
         if(device_memory_in_use)
         {
             rocblas_cerr << "rocBLAS internal error: Cannot reallocate device memory while it is "
-                            "already in use.";
+                            "already in use."
+                         << std::endl;
             rocblas_abort();
         }
 
@@ -254,11 +319,16 @@ bool _rocblas_handle::device_allocator(size_t size)
         auto saved_device_id = push_device_id();
 
         device_memory_size = 0;
+
+        //Add an additional device memory on top of default size.
+        //This is to support kernels requiring large workspace with numerical checking enabled.
+        size_t total_size = size + DEFAULT_DEVICE_MEMORY_SIZE;
+
         if(!device_memory || (hipFree)(device_memory) == hipSuccess)
         {
-            success = (hipMalloc)(&device_memory, size) == hipSuccess;
+            success = (hipMalloc)(&device_memory, total_size) == hipSuccess;
             if(success)
-                device_memory_size = size;
+                device_memory_size = total_size;
             else
                 device_memory = nullptr;
         }
@@ -399,7 +469,7 @@ try
         // If allocation fails, nullify device memory address and return error
         // Leave the memory under rocBLAS management for future calls
         handle->device_memory = nullptr;
-        return get_rocblas_status_for_hip_status(hipStatus);
+        return rocblas_internal_convert_hip_to_rocblas_status(hipStatus);
     }
     else
     {

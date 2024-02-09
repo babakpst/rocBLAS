@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
 
 #pragma once
 
-#define ROCBLAS_NO_DEPRECATED_WARNINGS
 #define ROCBLAS_BETA_FEATURES_API
 #include "../../library/src/include/handle.hpp"
 #include "rocblas.hpp"
@@ -47,24 +46,19 @@ void testing_gemm_batched_ex_get_solutions(const Arguments& arg)
     rocblas_local_handle handle{arg};
     auto                 transA = char2rocblas_operation(arg.transA);
     auto                 transB = char2rocblas_operation(arg.transB);
-    auto                 M = arg.M, N = arg.N, K = arg.K;
-    auto                 lda = arg.lda, ldb = arg.ldb, ldc = arg.ldc, ldd = arg.ldd;
+    int                  M = arg.M, N = arg.N, K = arg.K;
+    int                  lda = arg.lda, ldb = arg.ldb, ldc = arg.ldc, ldd = arg.ldd;
     auto                 A_row       = transA == rocblas_operation_none ? M : std::max(K, 1);
     auto                 A_col       = transA == rocblas_operation_none ? std::max(K, 1) : M;
     auto                 B_row       = transB == rocblas_operation_none ? std::max(K, 1) : N;
     auto                 B_col       = transB == rocblas_operation_none ? N : std::max(K, 1);
-    auto                 batch_count = arg.batch_count;
+    int                  batch_count = arg.batch_count;
     auto                 d_type      = arg.d_type;
 
     // Quick-return or error sizes
     // Note: K==0 is not an early exit, since we still must multiply C by beta
     bool invalid_size = M < 0 || N < 0 || K < 0 || lda < A_row || ldb < B_row || ldc < M || ldd < M
                         || batch_count < 0;
-
-    // size checking is only needed for int8x4
-    bool pack_to_int8x4 = arg.flags & rocblas_gemm_flags_pack_int8x4;
-    bool int8_invalid   = (pack_to_int8x4 && std::is_same<Ti, int8_t>{}
-                         && (K % 4 != 0 || (transA != rocblas_operation_none && lda % 4 != 0)));
 
     if(invalid_size || !M || !N || !batch_count)
     {
@@ -96,51 +90,9 @@ void testing_gemm_batched_ex_get_solutions(const Arguments& arg)
                               invalid_size ? rocblas_status_invalid_size : rocblas_status_success);
         return;
     }
-    if(int8_invalid)
-    {
-        // Allocate device memory
-        device_batch_matrix<Ti> dA(A_row, A_col, lda, batch_count);
-        device_batch_matrix<Ti> dB(B_row, B_col, ldb, batch_count);
-        device_batch_matrix<To> dC(M, N, ldc, batch_count);
-        device_batch_matrix<To> dD(M, N, ldd, batch_count);
-
-        // Check device memory allocation
-        CHECK_DEVICE_ALLOCATION(dA.memcheck());
-        CHECK_DEVICE_ALLOCATION(dB.memcheck());
-        CHECK_DEVICE_ALLOCATION(dC.memcheck());
-        CHECK_DEVICE_ALLOCATION(dD.memcheck());
-
-        EXPECT_ROCBLAS_STATUS(rocblas_gemm_batched_ex(handle,
-                                                      transA,
-                                                      transB,
-                                                      M,
-                                                      N,
-                                                      K,
-                                                      &h_alpha_Tc,
-                                                      dA.ptr_on_device(),
-                                                      arg.a_type,
-                                                      lda,
-                                                      dB.ptr_on_device(),
-                                                      arg.b_type,
-                                                      ldb,
-                                                      &h_beta_Tc,
-                                                      dC.ptr_on_device(),
-                                                      arg.c_type,
-                                                      ldc,
-                                                      dD.ptr_on_device(),
-                                                      arg.d_type,
-                                                      ldd,
-                                                      batch_count,
-                                                      arg.compute_type,
-                                                      algo,
-                                                      solution_index,
-                                                      flags),
-                              rocblas_status_invalid_size);
-        return;
-    }
 
     // update after invalid checks
-    if(!arg.c_noalias_d)
+    if(!arg.outofplace)
     {
         // c alias of d must be identical descriptors
         ldd    = ldc;
@@ -163,10 +115,10 @@ void testing_gemm_batched_ex_get_solutions(const Arguments& arg)
     device_batch_matrix<Ti> dB(B_row, B_col, ldb, batch_count);
     // if C!=D, allocate C and D normally
     // if C==D, allocate C big enough for the larger of C and D; D points to C
-    device_batch_matrix<To> dC(M, N, ldc, batch_count);
-    device_batch_matrix<To> dD = (arg.c_noalias_d) ? device_batch_matrix<To>(M, N, ldd, batch_count)
+    device_batch_matrix<To>  dC(M, N, ldc, batch_count);
+    device_batch_matrix<To>  dD = (arg.outofplace) ? device_batch_matrix<To>(M, N, ldd, batch_count)
                                                    : device_batch_matrix<To>(0, 1, 1, 1);
-    device_batch_matrix<To>& dDref = (arg.c_noalias_d) ? dD : dC;
+    device_batch_matrix<To>& dDref = (arg.outofplace) ? dD : dC;
     device_vector<Tc>        d_alpha_Tc(1);
     device_vector<Tc>        d_beta_Tc(1);
 
@@ -230,4 +182,31 @@ void testing_gemm_batched_ex_get_solutions(const Arguments& arg)
     EXPECT_ROCBLAS_STATUS(
         rocblas_gemm_batched_exM(GEMM_B_EX_ARGS, max + 1, rocblas_gemm_flags_none),
         rocblas_status_invalid_value);
+
+    // Testing get solutions by type - should be superset of solutions that solve problem
+    rocblas_int size_type;
+    CHECK_ROCBLAS_ERROR(rocblas_gemm_batched_ex_get_solutions_by_type(handle,
+                                                                      arg.a_type,
+                                                                      arg.c_type,
+                                                                      arg.compute_type,
+                                                                      rocblas_gemm_flags_none,
+                                                                      NULL,
+                                                                      &size_type));
+
+    std::vector<rocblas_int> ary_type(size_type);
+    CHECK_ROCBLAS_ERROR(rocblas_gemm_batched_ex_get_solutions_by_type(handle,
+                                                                      arg.a_type,
+                                                                      arg.c_type,
+                                                                      arg.compute_type,
+                                                                      rocblas_gemm_flags_none,
+                                                                      ary_type.data(),
+                                                                      &size_type));
+
+    std::vector<rocblas_int> valid_ary(ary.begin(), ary.begin() + size); // Trim off junk values
+    std::sort(ary_type.begin(), ary_type.end());
+    std::sort(valid_ary.begin(), valid_ary.end());
+
+    bool ary_is_subset
+        = std::includes(ary_type.begin(), ary_type.end(), valid_ary.begin(), valid_ary.end());
+    EXPECT_TRUE(ary_is_subset);
 }

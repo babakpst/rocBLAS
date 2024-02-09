@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,28 +22,20 @@
 
 #pragma once
 
-#include "bytes.hpp"
-#include "cblas_interface.hpp"
-#include "flops.hpp"
-#include "norm.hpp"
-#include "rocblas.hpp"
-#include "rocblas_init.hpp"
-#include "rocblas_math.hpp"
-#include "rocblas_random.hpp"
-#include "rocblas_test.hpp"
-#include "rocblas_vector.hpp"
-#include "unit.hpp"
-#include "utility.hpp"
+#include "testing_common.hpp"
 
 template <typename T, typename U = T, typename V = T>
 void testing_rot_bad_arg(const Arguments& arg)
 {
-    const bool FORTRAN        = arg.fortran;
-    auto       rocblas_rot_fn = FORTRAN ? rocblas_rot<T, U, V, true> : rocblas_rot<T, U, V, false>;
+    auto rocblas_rot_fn
+        = arg.api == FORTRAN ? rocblas_rot<T, U, V, true> : rocblas_rot<T, U, V, false>;
 
-    rocblas_int          N    = 100;
-    rocblas_int          incx = 1;
-    rocblas_int          incy = 1;
+    auto rocblas_rot_fn_64
+        = arg.api == FORTRAN_64 ? rocblas_rot_64<T, U, V, true> : rocblas_rot_64<T, U, V, false>;
+
+    int64_t              N    = 100;
+    int64_t              incx = 1;
+    int64_t              incy = 1;
     rocblas_local_handle handle{arg};
 
     // Allocate device memory
@@ -58,30 +50,38 @@ void testing_rot_bad_arg(const Arguments& arg)
     CHECK_DEVICE_ALLOCATION(dc.memcheck());
     CHECK_DEVICE_ALLOCATION(ds.memcheck());
 
-    EXPECT_ROCBLAS_STATUS((rocblas_rot_fn(nullptr, N, dx, incx, dy, incy, dc, ds)),
-                          rocblas_status_invalid_handle);
-    EXPECT_ROCBLAS_STATUS((rocblas_rot_fn(handle, N, nullptr, incx, dy, incy, dc, ds)),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_rot_fn(handle, N, dx, incx, nullptr, incy, dc, ds)),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_rot_fn(handle, N, dx, incx, dy, incy, nullptr, ds)),
-                          rocblas_status_invalid_pointer);
-    EXPECT_ROCBLAS_STATUS((rocblas_rot_fn(handle, N, dx, incx, dy, incy, dc, nullptr)),
-                          rocblas_status_invalid_pointer);
+    DAPI_EXPECT(
+        rocblas_status_invalid_handle, rocblas_rot_fn, (nullptr, N, dx, incx, dy, incy, dc, ds));
+    DAPI_EXPECT(rocblas_status_invalid_pointer,
+                rocblas_rot_fn,
+                (handle, N, nullptr, incx, dy, incy, dc, ds));
+    DAPI_EXPECT(rocblas_status_invalid_pointer,
+                rocblas_rot_fn,
+                (handle, N, dx, incx, nullptr, incy, dc, ds));
+    DAPI_EXPECT(rocblas_status_invalid_pointer,
+                rocblas_rot_fn,
+                (handle, N, dx, incx, dy, incy, nullptr, ds));
+    DAPI_EXPECT(rocblas_status_invalid_pointer,
+                rocblas_rot_fn,
+                (handle, N, dx, incx, dy, incy, dc, nullptr));
 }
 
 template <typename T, typename U = T, typename V = T>
 void testing_rot(const Arguments& arg)
 {
-    const bool FORTRAN        = arg.fortran;
-    auto       rocblas_rot_fn = FORTRAN ? rocblas_rot<T, U, V, true> : rocblas_rot<T, U, V, false>;
 
-    rocblas_int N    = arg.N;
-    rocblas_int incx = arg.incx;
-    rocblas_int incy = arg.incy;
+    auto rocblas_rot_fn
+        = arg.api == FORTRAN ? rocblas_rot<T, U, V, true> : rocblas_rot<T, U, V, false>;
+
+    auto rocblas_rot_fn_64
+        = arg.api == FORTRAN_64 ? rocblas_rot_64<T, U, V, true> : rocblas_rot_64<T, U, V, false>;
+
+    int64_t N    = arg.N;
+    int64_t incx = arg.incx;
+    int64_t incy = arg.incy;
 
     rocblas_local_handle handle{arg};
-    double               gpu_time_used, cpu_time_used;
+    double               cpu_time_used;
     double norm_error_host_x = 0.0, norm_error_host_y = 0.0, norm_error_device_x = 0.0,
            norm_error_device_y = 0.0;
 
@@ -89,24 +89,20 @@ void testing_rot(const Arguments& arg)
     if(N <= 0)
     {
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_ROCBLAS_ERROR(
-            (rocblas_rot_fn(handle, N, nullptr, incx, nullptr, incy, nullptr, nullptr)));
+        DAPI_CHECK(rocblas_rot_fn, (handle, N, nullptr, incx, nullptr, incy, nullptr, nullptr));
         return;
     }
 
-    rocblas_int abs_incx = incx >= 0 ? incx : -incx;
-    rocblas_int abs_incy = incy >= 0 ? incy : -incy;
-
     // Naming: `h` is in CPU (host) memory(eg hx), `d` is in GPU (device) memory (eg dx).
     // Allocate host memory
-    host_vector<T> hx(N, incx ? incx : 1);
-    host_vector<T> hy(N, incy ? incy : 1);
+    host_vector<T> hx(N, incx);
+    host_vector<T> hy(N, incy);
     host_vector<U> hc(1);
     host_vector<V> hs(1);
 
     // Allocate device memory
-    device_vector<T> dx(N, incx ? incx : 1);
-    device_vector<T> dy(N, incy ? incy : 1);
+    device_vector<T> dx(N, incx);
+    device_vector<T> dy(N, incy);
     device_vector<U> dc(1, 1);
     device_vector<V> ds(1, 1);
 
@@ -123,93 +119,92 @@ void testing_rot(const Arguments& arg)
     rocblas_init_vector(hs, arg, rocblas_client_alpha_sets_nan, false);
 
     // CPU BLAS reference data
-    host_vector<T> cx = hx;
-    host_vector<T> cy = hy;
-    // cblas_rotg<T, U>(cx, cy, hc, hs);
-    // cx[0] = hx[0];
-    // cy[0] = hy[0];
-    cpu_time_used = get_time_us_no_sync();
-    cblas_rot<T, T, U, V>(N, cx, incx, cy, incy, hc, hs);
-    cpu_time_used = get_time_us_no_sync() - cpu_time_used;
+    host_vector<T> hx_gold = hx;
+    host_vector<T> hy_gold = hy;
 
     if(arg.unit_check || arg.norm_check)
     {
-        // Test rocblas_pointer_mode_host
+        if(arg.pointer_mode_host)
         {
             CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
             CHECK_HIP_ERROR(dx.transfer_from(hx));
             CHECK_HIP_ERROR(dy.transfer_from(hy));
+
             handle.pre_test(arg);
-            CHECK_ROCBLAS_ERROR((rocblas_rot_fn(handle, N, dx, incx, dy, incy, hc, hs)));
+            DAPI_CHECK(rocblas_rot_fn, (handle, N, dx, incx, dy, incy, hc, hs));
             handle.post_test(arg);
-            // Allocate host memory
-            host_vector<T> rx(N, incx ? incx : 1);
-            host_vector<T> ry(N, incy ? incy : 1);
 
-            CHECK_HIP_ERROR(rx.transfer_from(dx));
-            CHECK_HIP_ERROR(ry.transfer_from(dy));
-            if(arg.unit_check)
-            {
-                unit_check_general<T>(1, N, abs_incx, cx, rx);
-                unit_check_general<T>(1, N, abs_incy, cy, ry);
-            }
-            if(arg.norm_check)
-            {
-                norm_error_host_x = norm_check_general<T>('F', 1, N, abs_incx, cx, rx);
-                norm_error_host_y = norm_check_general<T>('F', 1, N, abs_incy, cy, ry);
-            }
+            CHECK_HIP_ERROR(hx.transfer_from(dx));
+            CHECK_HIP_ERROR(hy.transfer_from(dy));
         }
-
-        // Test rocblas_pointer_mode_device
+        if(arg.pointer_mode_device)
         {
             CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-            CHECK_HIP_ERROR(dx.transfer_from(hx));
-            CHECK_HIP_ERROR(dy.transfer_from(hy));
+            CHECK_HIP_ERROR(dx.transfer_from(hx_gold));
+            CHECK_HIP_ERROR(dy.transfer_from(hy_gold));
             CHECK_HIP_ERROR(dc.transfer_from(hc));
             CHECK_HIP_ERROR(ds.transfer_from(hs));
+
             handle.pre_test(arg);
-            CHECK_ROCBLAS_ERROR((rocblas_rot_fn(handle, N, dx, incx, dy, incy, dc, ds)));
+            DAPI_CHECK(rocblas_rot_fn, (handle, N, dx, incx, dy, incy, dc, ds));
             handle.post_test(arg);
+        }
 
-            // Allocate host memory
-            host_vector<T> rx(N, incx ? incx : 1);
-            host_vector<T> ry(N, incy ? incy : 1);
+        cpu_time_used = get_time_us_no_sync();
+        ref_rot<T, T, U, V>(N, hx_gold, incx, hy_gold, incy, hc, hs);
+        cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
-            CHECK_HIP_ERROR(rx.transfer_from(dx));
-            CHECK_HIP_ERROR(ry.transfer_from(dy));
+        if(arg.pointer_mode_host)
+        {
             if(arg.unit_check)
             {
-                unit_check_general<T>(1, N, abs_incx, cx, rx);
-                unit_check_general<T>(1, N, abs_incy, cy, ry);
+                unit_check_general<T>(1, N, incx, hx_gold, hx);
+                unit_check_general<T>(1, N, incy, hy_gold, hy);
             }
             if(arg.norm_check)
             {
-                norm_error_device_x = norm_check_general<T>('F', 1, N, abs_incx, cx, rx);
-                norm_error_device_y = norm_check_general<T>('F', 1, N, abs_incy, cy, ry);
+                norm_error_host_x = norm_check_general<T>('F', 1, N, incx, hx_gold, hx);
+                norm_error_host_y = norm_check_general<T>('F', 1, N, incy, hy_gold, hy);
+            }
+        }
+        if(arg.pointer_mode_device)
+        {
+            CHECK_HIP_ERROR(hx.transfer_from(dx));
+            CHECK_HIP_ERROR(hy.transfer_from(dy));
+
+            if(arg.unit_check)
+            {
+                unit_check_general<T>(1, N, incx, hx_gold, hx);
+                unit_check_general<T>(1, N, incy, hy_gold, hy);
+            }
+            if(arg.norm_check)
+            {
+                norm_error_device_x = norm_check_general<T>('F', 1, N, incx, hx_gold, hx);
+                norm_error_device_y = norm_check_general<T>('F', 1, N, incy, hy_gold, hy);
             }
         }
     }
 
     if(arg.timing)
     {
-        int number_cold_calls = arg.cold_iters;
-        int number_hot_calls  = arg.iters;
+
+        double gpu_time_used;
+        int    number_cold_calls = arg.cold_iters;
+        int    total_calls       = number_cold_calls + arg.iters;
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
         CHECK_HIP_ERROR(dx.transfer_from(hx));
         CHECK_HIP_ERROR(dy.transfer_from(hy));
         CHECK_HIP_ERROR(dc.transfer_from(hc));
         CHECK_HIP_ERROR(ds.transfer_from(hs));
 
-        for(int iter = 0; iter < number_cold_calls; iter++)
-        {
-            rocblas_rot_fn(handle, N, dx, incx, dy, incy, dc, ds);
-        }
         hipStream_t stream;
         CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
-        gpu_time_used = get_time_us_sync(stream); // in microseconds
-        for(int iter = 0; iter < number_hot_calls; iter++)
+        for(int iter = 0; iter < total_calls; iter++)
         {
-            rocblas_rot_fn(handle, N, dx, incx, dy, incy, dc, ds);
+            if(iter == number_cold_calls)
+                gpu_time_used = get_time_us_sync(stream);
+
+            DAPI_DISPATCH(rocblas_rot_fn, (handle, N, dx, incx, dy, incy, dc, ds));
         }
         gpu_time_used = (get_time_us_sync(stream) - gpu_time_used);
 

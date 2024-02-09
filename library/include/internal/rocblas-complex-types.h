@@ -171,7 +171,7 @@ public:
     /*  possible transition helpers for use of both internal and hipComplex
 
     // Conversion from hipFloatComplex
-    template <typename U, std::enable_if_t<std::is_same<T, float>{} && std::is_same<U, hipFloatComplex>{}, int> = 0>
+    template <typename U, std::enable_if_t<std::is_same_v<T, float> && std::is_same_v<U, hipFloatComplex>, int> = 0>
     __device__ __host__ explicit constexpr rocblas_complex_num(const U& z)
         : x{z.x()}
         , y{z.y()}
@@ -179,14 +179,14 @@ public:
     }
 
     // Conversion to hipFloatComplex
-    template <typename U, std::enable_if_t<std::is_same<T, float>{} && std::is_same<U, hipFloatComplex>{}, int> = 0>
+    template <typename U, std::enable_if_t<std::is_same_v<T, float> && std::is_same_v<U, hipFloatComplex>, int> = 0>
     __device__ __host__ explicit constexpr operator U() const
     {
         return {x, y};
     }
 
     // Conversion from hipDoubleComplex
-    template <typename U, std::enable_if_t<std::is_same<T, double>{} && std::is_same<U, hipDoubleComplex>{}, int> = 0>
+    template <typename U, std::enable_if_t<std::is_same_v<T, double> && std::is_same_v<U, hipDoubleComplex>, int> = 0>
     __device__ __host__ explicit constexpr rocblas_complex_num(const U& z)
         : x{z.x()}
         , y{z.y()}
@@ -194,7 +194,7 @@ public:
     }
 
     // Conversion to hipDoubleComplex
-    template <typename U, std::enable_if_t<std::is_same<T, double>{} && std::is_same<U, hipDoubleComplex>{}, int> = 0>
+    template <typename U, std::enable_if_t<std::is_same_v<T, double> && std::is_same_v<U, hipDoubleComplex>, int> = 0>
     __device__ __host__ explicit constexpr operator U() const
     {
         return {x, y};
@@ -529,6 +529,18 @@ struct ROCBLAS_INTERNAL_EXPORT rocblas_index_value_t
 {
     //! @brief Important: index must come first, so that rocblas_index_value_t* can be cast to rocblas_int*
     rocblas_int index;
+    //! @brief The value.
+    T value;
+};
+
+//!
+//! @brief Struct to define pair of value and 64-bit index.
+//!
+template <typename T>
+struct ROCBLAS_INTERNAL_EXPORT rocblas_index_64_value_t
+{
+    //! @brief Important: index must come first, so that rocblas_index_64_value_t* can be cast to int64_t*
+    int64_t index;
     //! @brief The value.
     T value;
 };

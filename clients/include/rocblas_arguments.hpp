@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -35,6 +35,33 @@
 // Predeclare enumerator
 enum rocblas_argument : int;
 
+// bit mask rocblas_client_api_
+const uint32_t c_API_64       = 1;
+const uint32_t c_API_FORTRAN  = 2;
+const uint32_t c_API_INTERNAL = 4;
+
+// last bit set for _64 API
+typedef enum rocblas_client_api_
+{
+    C           = 0,
+    C_64        = 1,
+    FORTRAN     = 2,
+    FORTRAN_64  = 3,
+    INTERNAL    = 4,
+    INTERNAL_64 = 5
+} rocblas_client_api;
+
+// bitmask
+typedef enum rocblas_client_os_
+{
+    LINUX   = 1,
+    WINDOWS = 2,
+    ALL     = 3
+} rocblas_client_os;
+
+/*! \brief device matches pattern */
+bool gpu_arch_match(const std::string& gpu_arch, const char pattern[4]);
+
 /***************************************************************************
  *! \brief Class used to parse command arguments in both client & gtest    *
  * WARNING: If this data is changed, then rocblas_common.yaml must also be *
@@ -42,6 +69,8 @@ enum rocblas_argument : int;
  ***************************************************************************/
 struct Arguments
 {
+    static constexpr int64_t c_scan_value = -999;
+
     /*************************************************************************
      *                    Beginning Of Arguments                             *
      *************************************************************************/
@@ -67,29 +96,29 @@ struct Arguments
 
     size_t user_allocated_workspace;
 
-    // 32bit
+    // 64bit
 
-    rocblas_int M;
-    rocblas_int N;
-    rocblas_int K;
+    int64_t M;
+    int64_t N;
+    int64_t K;
 
-    rocblas_int KL;
-    rocblas_int KU;
+    int64_t KL;
+    int64_t KU;
 
-    rocblas_int lda;
-    rocblas_int ldb;
-    rocblas_int ldc;
-    rocblas_int ldd;
+    int64_t lda;
+    int64_t ldb;
+    int64_t ldc;
+    int64_t ldd;
 
-    rocblas_int incx;
-    rocblas_int incy;
-    rocblas_int incd;
-    rocblas_int incb;
+    int64_t incx;
+    int64_t incy;
 
-    rocblas_int batch_count;
+    int64_t batch_count;
 
-    rocblas_int iters;
-    rocblas_int cold_iters;
+    int64_t scan;
+
+    int32_t iters;
+    int32_t cold_iters;
 
     uint32_t algo;
     int32_t  solution_index;
@@ -98,20 +127,33 @@ struct Arguments
 
     rocblas_gemm_flags flags;
 
-    rocblas_datatype a_type;
-    rocblas_datatype b_type;
-    rocblas_datatype c_type;
-    rocblas_datatype d_type;
-    rocblas_datatype compute_type;
+    rocblas_datatype    a_type;
+    rocblas_datatype    b_type;
+    rocblas_datatype    c_type;
+    rocblas_datatype    d_type;
+    rocblas_datatype    compute_type;
+    rocblas_computetype composite_compute_type;
 
     rocblas_initialization initialization;
 
-    rocblas_arithmetic_check arithmetic_check;
-
     rocblas_atomics_mode atomics_mode;
+
+    rocblas_client_os os_flags;
+
+    // the gpu arch string after "gfx" for which the test is valid
+    // '?' is wildcard char, empty string is default as valid on all
+    char gpu_arch[4];
+
+    rocblas_client_api api;
 
     // memory padding for testing write out of bounds
     uint32_t pad;
+
+    uint32_t math_mode;
+
+    // number of copies of arrays to allocate for context sensitive benchmarking
+    uint64_t flush_batch_count;
+    uint64_t flush_memory_size;
 
     // 16 bit
     uint16_t threads;
@@ -122,6 +164,7 @@ struct Arguments
 
     int8_t norm_check;
     int8_t unit_check;
+    int8_t res_check;
     int8_t timing;
 
     char transA;
@@ -130,10 +173,14 @@ struct Arguments
     char uplo;
     char diag;
 
+    bool pointer_mode_host;
+    bool pointer_mode_device;
+    bool stochastic_rounding;
     bool c_noalias_d;
-    bool HMM;
-    bool fortran;
+    bool outofplace;
+    bool HMM; // xnack+
     bool graph_test;
+    bool repeatability_check;
 
     /*************************************************************************
      *                     End Of Arguments                                  *
@@ -142,6 +189,10 @@ struct Arguments
     // we don't have a constructor as the python generated data is used for memory initializer for testing
     // thus this is for other use where we want defaults to match those specified in rocblas_common.yaml
     void init();
+
+    // This should be called before use and may internally modify values to match rules
+    // if the arguments don't make sense it will return false
+    bool validate();
 
     // clang-format off
 
@@ -173,9 +224,8 @@ struct Arguments
     OPER(ldd) SEP                    \
     OPER(incx) SEP                   \
     OPER(incy) SEP                   \
-    OPER(incd) SEP                   \
-    OPER(incb) SEP                   \
     OPER(batch_count) SEP            \
+    OPER(scan) SEP                   \
     OPER(iters) SEP                  \
     OPER(cold_iters) SEP             \
     OPER(algo) SEP                   \
@@ -187,26 +237,36 @@ struct Arguments
     OPER(c_type) SEP                 \
     OPER(d_type) SEP                 \
     OPER(compute_type) SEP           \
+    OPER(composite_compute_type) SEP \
     OPER(initialization) SEP         \
-    OPER(arithmetic_check) SEP       \
     OPER(atomics_mode) SEP           \
+    OPER(os_flags) SEP               \
+    OPER(gpu_arch) SEP               \
+    OPER(api) SEP                    \
     OPER(pad) SEP                    \
+    OPER(math_mode) SEP              \
+    OPER(flush_batch_count) SEP             \
+    OPER(flush_memory_size) SEP             \
     OPER(threads) SEP                \
     OPER(streams) SEP                \
     OPER(devices) SEP                \
     OPER(norm_check) SEP             \
     OPER(unit_check) SEP             \
+    OPER(res_check) SEP              \
     OPER(timing) SEP                 \
     OPER(transA) SEP                 \
     OPER(transB) SEP                 \
     OPER(side) SEP                   \
     OPER(uplo) SEP                   \
     OPER(diag) SEP                   \
+    OPER(pointer_mode_host) SEP      \
+    OPER(pointer_mode_device) SEP    \
+    OPER(stochastic_rounding) SEP    \
     OPER(c_noalias_d) SEP            \
+    OPER(outofplace) SEP             \
     OPER(HMM) SEP                    \
-    OPER(fortran) SEP                \
-    OPER(graph_test)
-
+    OPER(graph_test) SEP             \
+    OPER(repeatability_check)
     // clang-format on
 
     // Validate input format.

@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -56,19 +56,15 @@ namespace
             }
             else
             {
-                bool is_batched = (BLAS1_EX == blas1_ex::scal_batched_ex);
-                bool is_strided = (BLAS1_EX == blas1_ex::scal_strided_batched_ex);
+                constexpr bool is_batched = (BLAS1_EX == blas1_ex::scal_batched_ex);
+                constexpr bool is_strided = (BLAS1_EX == blas1_ex::scal_strided_batched_ex);
 
                 name << rocblas_datatype2string(arg.a_type) << '_'
                      << rocblas_datatype2string(arg.b_type);
 
                 name << '_' << rocblas_datatype2string(arg.compute_type);
 
-                name << '_' << arg.N;
-
-                name << '_' << arg.alpha << '_' << arg.alphai;
-
-                name << '_' << arg.incx;
+                name << '_' << arg.N << '_' << arg.alpha << '_' << arg.alphai << '_' << arg.incx;
 
                 if(is_strided)
                     name << '_' << arg.stride_x;
@@ -77,8 +73,14 @@ namespace
                     name << '_' << arg.batch_count;
             }
 
-            if(arg.fortran)
+            if(arg.api & c_API_64)
+            {
+                name << "_I64";
+            }
+            if(arg.api & c_API_FORTRAN)
+            {
                 name << "_F";
+            }
 
             return std::move(name);
         }
@@ -94,18 +96,27 @@ namespace
         // T1 is alpha_type T2 is x_type T3 is execution_type
         ((BLAS1_EX == blas1_ex::scal_ex || BLAS1_EX == blas1_ex::scal_batched_ex
           || BLAS1_EX == blas1_ex::scal_strided_batched_ex)
-         && ((std::is_same<T1, T2>{} && std::is_same<T2, T3>{}
-              && (std::is_same<T1, float>{} || std::is_same<T1, double>{}
-                  || std::is_same<T1, rocblas_half>{} || std::is_same<T1, rocblas_float_complex>{}
-                  || std::is_same<T1, rocblas_double_complex>{}))
-             || (std::is_same<T1, T2>{} && std::is_same<T1, rocblas_half>{}
-                 && std::is_same<T3, float>{})
-             || (std::is_same<T1, T3>{} && std::is_same<T1, float>{}
-                 && std::is_same<T2, rocblas_half>{})
-             || (std::is_same<T2, T3>{} && std::is_same<T1, float>{}
-                 && std::is_same<T2, rocblas_float_complex>{})
-             || (std::is_same<T2, T3>{} && std::is_same<T1, double>{}
-                 && std::is_same<T2, rocblas_double_complex>{})))>;
+         && ((std::is_same_v<
+                  T1,
+                  T2> && std::is_same_v<T2, T3> && (std::is_same_v<T1, float> || std::is_same_v<T1, double> || std::is_same_v<T1, rocblas_half> || std::is_same_v<T1, rocblas_float_complex> || std::is_same_v<T1, rocblas_double_complex>))
+             || (std::is_same_v<
+                     T2,
+                     T3> && std::is_same_v<T1, float> && std::is_same_v<T2, rocblas_float_complex>)
+             || (std::is_same_v<
+                     T2,
+                     T3> && std::is_same_v<T1, double> && std::is_same_v<T2, rocblas_double_complex>)
+             || (std::is_same_v<
+                     T1,
+                     T2> && std::is_same_v<T1, rocblas_half> && std::is_same_v<T3, float>)
+             || (std::is_same_v<
+                     T1,
+                     T3> && std::is_same_v<T1, float> && std::is_same_v<T2, rocblas_half>)
+             || (std::is_same_v<
+                     T1,
+                     rocblas_bfloat16> && std::is_same_v<T1, T2> && std::is_same_v<T3, float>)
+             || (std::is_same_v<
+                     T1,
+                     float> && std::is_same_v<T2, rocblas_bfloat16> && std::is_same_v<T1, T3>)))>;
 
 // Creates tests for one of the BLAS 1 functions
 // ARG passes 1-3 template arguments to the testing_* function

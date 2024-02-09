@@ -1,5 +1,74 @@
+/* ************************************************************************
+ * Copyright (C) 2020-2023 Advanced Micro Devices, Inc. All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell cop-
+ * ies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IM-
+ * PLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
+ * CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ * ************************************************************************ */
+
 #include "check_numerics_vector.hpp"
+#include "int64_helpers.hpp"
 #include "utility.hpp"
+
+/**
+  *
+  * rocblas_check_numerics_vector_kernel(n, xa, offset_x, inc_x, stride_x, abnormal)
+  *
+  * Info about rocblas_check_numerics_vector_kernel function:
+  *
+  *    It is the kernel function which checks a vector for numerical abnormalities such as NaN/zero/Inf/denormal values and updates the rocblas_check_numerics_t structure.
+  *
+  * Parameters   : n            : Total number of elements in the vector
+  *                xa           : Pointer to the vector which is under consideration for numerical abnormalities
+  *                offset_x     : Offset of vector 'xa'
+  *                inc_x        : Stride between consecutive values of vector 'xa'
+  *                stride_x     : Specifies the pointer increment between one vector 'x_i' and the next one (xa_i+1) (where (xa_i) is the i-th instance of the batch)
+  *                abnormal     : Device pointer to the rocblas_check_numerics_t structure
+  *
+  * Return Value : Nothing --
+  *
+**/
+
+template <int DIM_X, typename T>
+ROCBLAS_KERNEL(DIM_X)
+rocblas_check_numerics_vector_kernel(rocblas_int               n,
+                                     T                         xa,
+                                     rocblas_stride            offset_x,
+                                     int64_t                   inc_x,
+                                     rocblas_stride            stride_x,
+                                     rocblas_check_numerics_t* abnormal)
+{
+    auto*   x   = load_ptr_batch(xa, blockIdx.y, offset_x, stride_x);
+    int64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    //Check every element of the x vector for a NaN/zero/Inf/denormal value
+    if(tid < n)
+    {
+        auto value = x[tid * inc_x];
+        if(!abnormal->has_zero && rocblas_iszero(value))
+            abnormal->has_zero = true;
+        if(!abnormal->has_NaN && rocblas_isnan(value))
+            abnormal->has_NaN = true;
+        if(!abnormal->has_Inf && rocblas_isinf(value))
+            abnormal->has_Inf = true;
+        if(!abnormal->has_denorm && rocblas_isdenorm(value))
+            abnormal->has_denorm = true;
+    }
+}
 
 /**
   *
@@ -36,14 +105,14 @@ rocblas_status rocblas_check_numerics_abnormal_struct(const char*               
     {
         if(is_input)
         {
-            rocblas_cerr << "Funtion name:\t" << function_name << " :- Input :\t"
+            rocblas_cerr << "Function name:\t" << function_name << " :- Input :\t"
                          << " has_NaN " << h_abnormal->has_NaN << " has_zero "
                          << h_abnormal->has_zero << " has_Inf " << h_abnormal->has_Inf
                          << " has_denorm " << h_abnormal->has_denorm << std::endl;
         }
         else
         {
-            rocblas_cerr << "Funtion name:\t" << function_name << " :- Output :\t"
+            rocblas_cerr << "Function name:\t" << function_name << " :- Output :\t"
                          << " has_NaN " << h_abnormal->has_NaN << " has_zero "
                          << h_abnormal->has_zero << " has_Inf " << h_abnormal->has_Inf
                          << " has_denorm " << h_abnormal->has_denorm << std::endl;
@@ -88,17 +157,17 @@ template <typename T>
 ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     rocblas_internal_check_numerics_vector_template(const char*    function_name,
                                                     rocblas_handle handle,
-                                                    rocblas_int    n,
+                                                    int64_t        n_64,
                                                     T              x,
                                                     rocblas_stride offset_x,
-                                                    rocblas_int    inc_x,
+                                                    int64_t        inc_x,
                                                     rocblas_stride stride_x,
-                                                    rocblas_int    batch_count,
+                                                    int64_t        batch_count_64,
                                                     const int      check_numerics,
                                                     bool           is_input)
 {
     //Quick return if possible. Not Argument error
-    if(n <= 0 || inc_x <= 0 || batch_count <= 0 || !x)
+    if(n_64 <= 0 || batch_count_64 <= 0 || !x)
     {
         return rocblas_status_success;
     }
@@ -107,36 +176,59 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     rocblas_check_numerics_t h_abnormal;
 
     //Allocating memory for device structure
-    auto d_abnormal = handle->device_malloc(sizeof(rocblas_check_numerics_t));
+    auto        d_abnormal     = handle->device_malloc(sizeof(rocblas_check_numerics_t));
+    hipStream_t rocblas_stream = handle->get_stream();
+    if(!d_abnormal)
+    {
+        rocblas_cerr << "rocBLAS internal error: No workspace memory available to allocate the "
+                        "struct d_abnormal in "
+                        "rocblas_check_numerics"
+                     << std::endl;
+        return rocblas_status_memory_error;
+    }
 
     //Transferring the rocblas_check_numerics_t structure from host to the device
-    RETURN_IF_HIP_ERROR(hipMemcpy((rocblas_check_numerics_t*)d_abnormal,
-                                  &h_abnormal,
-                                  sizeof(rocblas_check_numerics_t),
-                                  hipMemcpyHostToDevice));
+    RETURN_IF_HIP_ERROR(hipMemcpyAsync((rocblas_check_numerics_t*)d_abnormal,
+                                       &h_abnormal,
+                                       sizeof(rocblas_check_numerics_t),
+                                       hipMemcpyHostToDevice,
+                                       rocblas_stream));
+    constexpr rocblas_int NB = 256;
 
-    hipStream_t           rocblas_stream = handle->get_stream();
-    constexpr rocblas_int NB             = 256;
-    dim3                  blocks((n - 1) / NB + 1, batch_count);
-    dim3                  threads(NB);
+    size_t abs_inc = inc_x < 0 ? -inc_x : inc_x;
 
-    hipLaunchKernelGGL((rocblas_check_numerics_vector_kernel<NB>),
-                       blocks,
-                       threads,
-                       0,
-                       rocblas_stream,
-                       n,
-                       x,
-                       offset_x,
-                       inc_x,
-                       stride_x,
-                       (rocblas_check_numerics_t*)d_abnormal);
+    for(int64_t b_base = 0; b_base < batch_count_64; b_base += c_i64_grid_YZ_chunk)
+    {
+        auto    x_ptr       = adjust_ptr_batch(x, b_base, stride_x);
+        int32_t batch_count = int32_t(std::min(batch_count_64 - b_base, c_i64_grid_YZ_chunk));
+        for(int64_t n_base = 0; n_base < n_64; n_base += c_i64_grid_X_chunk)
+        {
+            int32_t n = int32_t(std::min(n_64 - n_base, c_i64_grid_X_chunk));
+
+            dim3 blocks((n - 1) / NB + 1, batch_count);
+            dim3 threads(NB);
+
+            ROCBLAS_LAUNCH_KERNEL((rocblas_check_numerics_vector_kernel<NB>),
+                                  blocks,
+                                  threads,
+                                  0,
+                                  rocblas_stream,
+                                  n,
+                                  x_ptr,
+                                  offset_x + abs_inc * n_base,
+                                  abs_inc,
+                                  stride_x,
+                                  (rocblas_check_numerics_t*)d_abnormal);
+        }
+    }
 
     //Transferring the rocblas_check_numerics_t structure from device to the host
-    RETURN_IF_HIP_ERROR(hipMemcpy(&h_abnormal,
-                                  (rocblas_check_numerics_t*)d_abnormal,
-                                  sizeof(rocblas_check_numerics_t),
-                                  hipMemcpyDeviceToHost));
+    RETURN_IF_HIP_ERROR(hipMemcpyAsync(&h_abnormal,
+                                       (rocblas_check_numerics_t*)d_abnormal,
+                                       sizeof(rocblas_check_numerics_t),
+                                       hipMemcpyDeviceToHost,
+                                       rocblas_stream));
+    RETURN_IF_HIP_ERROR(hipStreamSynchronize(rocblas_stream));
 
     return rocblas_check_numerics_abnormal_struct(
         function_name, check_numerics, is_input, &h_abnormal);
@@ -151,12 +243,12 @@ ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status
     template ROCBLAS_INTERNAL_EXPORT_NOINLINE rocblas_status                           \
         rocblas_internal_check_numerics_vector_template(const char*    function_name,  \
                                                         rocblas_handle handle,         \
-                                                        rocblas_int    n,              \
+                                                        int64_t        n,              \
                                                         typet_         x,              \
                                                         rocblas_stride offset_x,       \
-                                                        rocblas_int    incx,           \
+                                                        int64_t        incx,           \
                                                         rocblas_stride stride_x,       \
-                                                        rocblas_int    batch_count,    \
+                                                        int64_t        batch_count,    \
                                                         const int      check_numerics, \
                                                         bool           is_input)
 INST(float*);

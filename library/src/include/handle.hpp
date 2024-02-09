@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include "macros.hpp"
+#include "definitions.hpp"
 #include "rocblas.h"
 #include "rocblas_ostream.hpp"
 #include "utility.hpp"
@@ -68,6 +68,31 @@ enum class rocblas_device_memory_ownership
     rocblas_managed,
     user_managed,
     user_owned,
+};
+
+enum class Processor : int
+{
+    // matching enum used in hipGcnArch
+    // only including supported types
+    gfx803  = 803,
+    gfx900  = 900,
+    gfx906  = 906,
+    gfx908  = 908,
+    gfx90a  = 910,
+    gfx940  = 940,
+    gfx941  = 941,
+    gfx942  = 942,
+    gfx1010 = 1010,
+    gfx1011 = 1011,
+    gfx1012 = 1012,
+    gfx1030 = 1030,
+    gfx1031 = 1031,
+    gfx1032 = 1032,
+    gfx1034 = 1034,
+    gfx1035 = 1035,
+    gfx1100 = 1100,
+    gfx1101 = 1101,
+    gfx1102 = 1102
 };
 
 // helper function in handle.cpp
@@ -203,6 +228,11 @@ public:
         return archMajor;
     }
 
+    int getArchMajorMinor()
+    {
+        return archMajorMinor;
+    }
+
     // hipEvent_t pointers (for internal use only)
     hipEvent_t startEvent = nullptr;
     hipEvent_t stopEvent  = nullptr;
@@ -222,8 +252,8 @@ public:
     // default check_numerics_mode is no numeric_check
     rocblas_check_numerics_mode check_numerics = rocblas_check_numerics_mode_no_check;
 
-    // used by hipBLAS to set int8 datatype to int8_t or rocblas_int8x4
-    rocblas_int8_type_for_hipblas rocblas_int8_type = rocblas_int8_type_for_hipblas_default;
+    // default math_mode is default_math
+    rocblas_math_mode math_mode = rocblas_default_math;
 
     // logging streams
     std::unique_ptr<rocblas_internal_ostream> log_trace_os;
@@ -265,6 +295,11 @@ public:
     auto* get_solution_fitness_query() const
     {
         return solution_fitness_query;
+    }
+
+    void set_stream_order_memory_allocation(bool flag)
+    {
+        stream_order_alloc = flag;
     }
 
     // Sets the optimal size(s) of device memory for a kernel call
@@ -324,31 +359,6 @@ public:
             return false;
     }
 
-    void* host_malloc(size_t size)
-    {
-        void* ptr = malloc(size);
-        if(ptr)
-        {
-            host_mem_pointers.push_back(ptr);
-            return ptr;
-        }
-        else
-        {
-            rocblas_cerr << " host_malloc FAILED " << std::endl;
-            rocblas_abort();
-        }
-    }
-
-    bool skip_alpha_beta_memcpy()
-    {
-        return alpha_beta_memcpy_complete;
-    }
-
-    void alpha_beta_memcpy_completed()
-    {
-        alpha_beta_memcpy_complete = true;
-    }
-
 private:
     // device memory work buffer
     static constexpr size_t DEFAULT_DEVICE_MEMORY_SIZE = 32 * 1024 * 1024;
@@ -361,8 +371,6 @@ private:
     bool                            alpha_beta_memcpy_complete = false;
     rocblas_device_memory_ownership device_memory_owner;
     size_t                          device_memory_query_size;
-    std::vector<void*>              dev_mem_pointers;
-    std::vector<void*>              host_mem_pointers;
 
     bool stream_order_alloc = false;
 
@@ -374,7 +382,7 @@ private:
 
 #if ROCBLAS_REALLOC_ON_DEMAND
     // Helper for device memory allocator
-    bool device_allocator(size_t size);
+    bool ROCBLAS_EXPORT device_allocator(size_t size);
 #endif
 
     // Device ID is created at handle creation time and remains in effect for the life of the handle.
@@ -383,6 +391,7 @@ private:
     // Arch ID is created at handle creation time and remains in effect for the life of the handle.
     const int arch;
     int       archMajor;
+    int       archMajorMinor;
 
     // Opaque smart allocator class to perform device memory allocations
     // clang-format off
@@ -433,11 +442,11 @@ private:
             }
             else
             {
-    #if ROCBLAS_REALLOC_ON_DEMAND
+#if ROCBLAS_REALLOC_ON_DEMAND
                 success = handle->device_allocator(size);
-    #else
+#else
                 success = size <= handle->device_memory_size - handle->device_memory_in_use;
-    #endif
+#endif
                 // If allocation failed, return an array of nullptr's
                 // If total size is 0, return an array of nullptr's, but leave it marked as successful
                 if(!success || !size)
@@ -550,22 +559,15 @@ private:
 #if HIP_VERSION >= 50300000
                         if(dev_mem)
                         {
-                            //If stream is in capture mode, skip de-allocating the device memory.
-                            //All the device memory will be de-allocated when the handle is destroyed.
-                            //WORKAROUND until allocation node is implemented in HIP runtime.
-                            if(handle->is_stream_in_capture_mode())
-                                handle->dev_mem_pointers.push_back(dev_mem);
-                            else
+
+                            bool status = hipFreeAsync(dev_mem, stream_in_use) == hipSuccess ;
+                            if(!status)
                             {
-                                bool status = hipFreeAsync(dev_mem, stream_in_use) == hipSuccess ;
-                                if(!status)
-                                {
-                                    rocblas_cerr << " rocBLAS internal error: hipFreeAsync() Failed, "
-                                    "device memory could not be released to default memory pool" << std::endl;
-                                    rocblas_abort();
-                                }
-                                dev_mem = nullptr;
+                                rocblas_cerr << " rocBLAS internal error: hipFreeAsync() Failed, "
+                                "device memory could not be released to default memory pool" << std::endl;
+                                rocblas_abort();
                             }
+                            dev_mem = nullptr;
                         }
 #endif
                 }
@@ -587,6 +589,9 @@ private:
                         rocblas_abort();
                     }
                 }
+
+                handle->gsu_workspace_size = 0;
+                handle->gsu_workspace      = nullptr;
             }
         }
 
@@ -615,6 +620,7 @@ private:
             return static_cast<T*>(pointers.at(1 - pointers.size()));
         }
     };
+
     // clang-format on
 
     // Allocate workspace for GSU based on the needs.
@@ -627,6 +633,12 @@ private:
         {
             handle->gsu_workspace_size = success ? size : 0;
             handle->gsu_workspace = static_cast<void*>(*this);
+        }
+
+        _gsu_malloc_by_size(rocblas_handle handle)
+        : _device_malloc(handle, 0)
+        {
+
         }
 
         ~_gsu_malloc_by_size()
@@ -653,6 +665,25 @@ public:
         return _device_malloc(this, size_t(sizes)...);
     }
 
+    template <typename... Ss,
+              std::enable_if_t<sizeof...(Ss) && conjunction<std::is_convertible<Ss, size_t>...>{},
+                               int> = 0>
+    auto device_malloc_with_GSU(Ss... sizes) //assume last size is gsu size
+    {
+        //have to assume it can be called to resize in following iteration (resize if > cur?)
+        //next request enough alloc, assign pointer
+
+        size_t i      = 0;
+        size_t mine[] = {(i++, size_t(sizes))...};
+
+        auto result = _device_malloc(this, size_t(sizes)...);
+
+        this->gsu_workspace_size = result ? mine[i - 1] : 0;
+        this->gsu_workspace      = result ? result[i - 1] : nullptr;
+
+        return result;
+    }
+
     // Allocate count pointers, reserving "size" total bytes
     auto device_malloc_count(size_t count, size_t size)
     {
@@ -665,6 +696,9 @@ public:
 
     auto gsu_malloc_by_size(size_t requested_Workspace_Size)
     {
+        if(this->gsu_workspace) // Added to accomodate quant, remove comment after testing
+            return _gsu_malloc_by_size(this);
+
         return _gsu_malloc_by_size(this, requested_Workspace_Size);
     };
 };

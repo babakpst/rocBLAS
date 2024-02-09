@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2020-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2020-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -35,6 +35,9 @@ bool ArgumentModel_get_log_function_name();
 void ArgumentModel_set_log_datatype(bool d);
 bool ArgumentModel_get_log_datatype();
 
+void ArgumentModel_log_frequencies(rocblas_internal_ostream& name_line,
+                                   rocblas_internal_ostream& val_line);
+
 // ArgumentModel template has a variadic list of argument enums
 template <rocblas_argument... Args>
 class ArgumentModel
@@ -63,6 +66,9 @@ public:
                   double                    norm3,
                   double                    norm4)
     {
+        // requires enablement for frequency logging
+        ArgumentModel_log_frequencies(name_line, val_line);
+
         constexpr bool has_batch_count = has(e_batch_count);
         rocblas_int    batch_count     = has_batch_count ? arg.batch_count : 1;
         rocblas_int    hot_calls       = arg.iters < 1 ? 1 : arg.iters;
@@ -72,18 +78,21 @@ public:
             gpu_us /= hot_calls;
 
         // per/us to per/sec *10^6
-        double rocblas_gflops = gflops * batch_count / gpu_us * 1e6;
-        double rocblas_GBps   = gbytes * batch_count / gpu_us * 1e6;
+        const double c_per_usec_to_per_sec = 1e6;
 
         // append performance fields
         if(gflops != ArgumentLogging::NA_value)
         {
+            double rocblas_gflops = gflops * batch_count / gpu_us * c_per_usec_to_per_sec;
+
             name_line << ",rocblas-Gflops";
             val_line << ", " << rocblas_gflops;
         }
 
         if(gbytes != ArgumentLogging::NA_value)
         {
+            double rocblas_GBps = gbytes * batch_count / gpu_us * c_per_usec_to_per_sec;
+
             // GB/s not usually reported for non-memory bound functions
             name_line << ",rocblas-GB/s";
             val_line << ", " << rocblas_GBps;
@@ -98,7 +107,7 @@ public:
             {
                 if(gflops != ArgumentLogging::NA_value)
                 {
-                    double cblas_gflops = gflops * batch_count / cpu_us * 1e6;
+                    double cblas_gflops = gflops * batch_count / cpu_us * c_per_usec_to_per_sec;
                     name_line << ",CPU-Gflops";
                     val_line << "," << cblas_gflops;
                 }
@@ -197,7 +206,7 @@ public:
         //
         // arg is an instance of the Arguments struct
         //
-        // apply is a templated lambda for C++17 and a templated fuctor for C++14
+        // apply is a templated lambda for C++17 and a templated functor for C++14
         //
         // For rocblas_ddot, the following template specialization of apply will be called:
         // apply<e_N>(print, arg, T{}), apply<e_incx>(print, arg, T{}), apply<e_incy>(print, arg, T{})

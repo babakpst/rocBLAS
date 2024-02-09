@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -58,7 +58,7 @@ public:
                                          size_t         n,
                                          size_t         lda,
                                          rocblas_stride stride,
-                                         rocblas_int    batch_count,
+                                         int64_t        batch_count,
                                          bool           HMM = false)
         : d_vector<T>(calculate_nmemb(n, lda, stride, batch_count), HMM)
         , m_m(m)
@@ -129,7 +129,7 @@ public:
     //!
     //! @brief Returns the batch count.
     //!
-    rocblas_int batch_count() const
+    int64_t batch_count() const
     {
         return this->m_batch_count;
     }
@@ -147,7 +147,7 @@ public:
     //! @param batch_index The batch index.
     //! @return A mutable pointer to the batch_index'th matrix.
     //!
-    T* operator[](rocblas_int batch_index)
+    T* operator[](int64_t batch_index)
     {
         return (this->m_stride >= 0)
                    ? this->m_data + batch_index * this->m_stride
@@ -159,7 +159,7 @@ public:
     //! @param batch_index The batch index.
     //! @return A non-mutable mutable pointer to the batch_index'th matrix.
     //!
-    const T* operator[](rocblas_int batch_index) const
+    const T* operator[](int64_t batch_index) const
     {
         return (this->m_stride >= 0)
                    ? this->m_data + batch_index * this->m_stride
@@ -185,7 +185,7 @@ public:
     }
 
     //!
-    //! @brief Tell whether ressources allocation failed.
+    //! @brief Tell whether resource allocation failed.
     //!
     explicit operator bool() const
     {
@@ -206,12 +206,34 @@ public:
     }
 
     //!
+    //! @brief Broadcast data from one matrix on host to each batch_count matrices.
+    //! @param that That matrix on host.
+    //! @return The hip error.
+    //!
+    hipError_t broadcast_one_matrix_from(const host_matrix<T>& that)
+    {
+        hipError_t status = hipSuccess;
+        for(int64_t batch_index = 0; batch_index < m_batch_count; batch_index++)
+        {
+            status = hipMemcpy(this->data() + (batch_index * m_stride),
+                               that.data(),
+                               sizeof(T) * this->m_n * this->m_lda,
+                               this->use_HMM ? hipMemcpyHostToHost : hipMemcpyHostToDevice);
+            if(status != hipSuccess)
+                break;
+        }
+        return status;
+    }
+
+    //!
     //! @brief Check if memory exists.
     //! @return hipSuccess if memory exists, hipErrorOutOfMemory otherwise.
     //!
     hipError_t memcheck() const
     {
-        if(*this)
+        bool valid_parameters = calculate_nmemb(m_n, m_lda, m_stride, m_batch_count) > 0;
+
+        if(*this || !valid_parameters)
             return hipSuccess;
         else
             return hipErrorOutOfMemory;
@@ -222,11 +244,10 @@ private:
     size_t         m_n{};
     size_t         m_lda{};
     rocblas_stride m_stride{};
-    rocblas_int    m_batch_count{};
+    int64_t        m_batch_count{};
     T*             m_data{};
 
-    static size_t
-        calculate_nmemb(size_t n, size_t lda, rocblas_stride stride, rocblas_int batch_count)
+    static size_t calculate_nmemb(size_t n, size_t lda, rocblas_stride stride, int64_t batch_count)
     {
         return lda * n + size_t(batch_count - 1) * std::abs(stride);
     }

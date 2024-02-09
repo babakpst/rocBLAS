@@ -22,176 +22,20 @@
 
 #pragma once
 
-#include "../blas1/rocblas_nrm2.hpp"
+#include "../blas1/rocblas_asum_nrm2.hpp"
 #include "handle.hpp"
 #include "logging.hpp"
-#include "rocblas.h"
-#include "utility.hpp"
 
-template <int NB, bool ISBATCHED, typename Tx, typename Tr = Tx, typename Tex = Tr>
-rocblas_status rocblas_nrm2_ex_typecasting(rocblas_handle handle,
-                                           rocblas_int    n,
-                                           const void*    x,
-                                           rocblas_stride shiftx,
-                                           rocblas_int    incx,
-                                           rocblas_stride stridex,
-                                           rocblas_int    batch_count,
-                                           void*          results,
-                                           void*          workspace)
-{
-    auto           check_numerics = handle->check_numerics;
-    rocblas_status status         = rocblas_status_success;
-    if(ISBATCHED)
-    {
-        if(check_numerics)
-        {
-            bool           is_input = true;
-            rocblas_status nrm2_ex_check_numerics_status
-                = rocblas_internal_check_numerics_vector_template("rocblas_nrm2_batched_ex",
-                                                                  handle,
-                                                                  n,
-                                                                  (const Tx* const*)x,
-                                                                  shiftx,
-                                                                  incx,
-                                                                  stridex,
-                                                                  batch_count,
-                                                                  check_numerics,
-                                                                  is_input);
-            if(nrm2_ex_check_numerics_status != rocblas_status_success)
-                return nrm2_ex_check_numerics_status;
-        }
-
-        status = rocblas_internal_nrm2_template<NB>(handle,
-                                                    n,
-                                                    (const Tx* const*)x,
-                                                    shiftx,
-                                                    incx,
-                                                    stridex,
-                                                    batch_count,
-                                                    (Tex*)workspace,
-                                                    (Tr*)results);
-        if(status != rocblas_status_success)
-            return status;
-
-        if(check_numerics)
-        {
-            bool           is_input = false;
-            rocblas_status nrm2_ex_check_numerics_status
-                = rocblas_internal_check_numerics_vector_template("rocblas_nrm2_batched_ex",
-                                                                  handle,
-                                                                  n,
-                                                                  (const Tx* const*)x,
-                                                                  shiftx,
-                                                                  incx,
-                                                                  stridex,
-                                                                  batch_count,
-                                                                  check_numerics,
-                                                                  is_input);
-            if(nrm2_ex_check_numerics_status != rocblas_status_success)
-                return nrm2_ex_check_numerics_status;
-        }
-    }
-    else
-    {
-        if(check_numerics)
-        {
-            bool           is_input = true;
-            rocblas_status nrm2_ex_check_numerics_status
-                = rocblas_internal_check_numerics_vector_template(
-                    stridex ? "rocblas_nrm2_strided_batched_ex" : "rocblas_nrm2_ex",
-                    handle,
-                    n,
-                    (const Tx*)x,
-                    shiftx,
-                    incx,
-                    stridex,
-                    batch_count,
-                    check_numerics,
-                    is_input);
-            if(nrm2_ex_check_numerics_status != rocblas_status_success)
-                return nrm2_ex_check_numerics_status;
-        }
-
-        status = rocblas_internal_nrm2_template<NB>(handle,
-                                                    n,
-                                                    (const Tx*)x,
-                                                    shiftx,
-                                                    incx,
-                                                    stridex,
-                                                    batch_count,
-                                                    (Tex*)workspace,
-                                                    (Tr*)results);
-        if(status != rocblas_status_success)
-            return status;
-
-        if(check_numerics)
-        {
-            bool           is_input = false;
-            rocblas_status nrm2_ex_check_numerics_status
-                = rocblas_internal_check_numerics_vector_template(
-                    stridex ? "rocblas_nrm2_strided_batched_ex" : "rocblas_nrm2_ex",
-                    handle,
-                    n,
-                    (const Tx*)x,
-                    shiftx,
-                    incx,
-                    stridex,
-                    batch_count,
-                    check_numerics,
-                    is_input);
-            if(nrm2_ex_check_numerics_status != rocblas_status_success)
-                return nrm2_ex_check_numerics_status;
-        }
-    }
-    return status;
-}
-
-template <rocblas_int NB, bool ISBATCHED>
+template <typename API_INT, rocblas_int NB, bool ISBATCHED>
 rocblas_status rocblas_nrm2_ex_template(rocblas_handle   handle,
-                                        rocblas_int      n,
+                                        API_INT          n,
                                         const void*      x,
                                         rocblas_datatype x_type,
                                         rocblas_stride   shiftx,
-                                        rocblas_int      incx,
+                                        API_INT          incx,
                                         rocblas_stride   stridex,
-                                        rocblas_int      batch_count,
+                                        API_INT          batch_count,
                                         void*            results,
                                         rocblas_datatype result_type,
                                         rocblas_datatype execution_type,
-                                        void*            workspace)
-{
-#define rocblas_nrm2_ex_typecasting_PARAM \
-    handle, n, x, shiftx, incx, stridex, batch_count, results, workspace
-
-    if(x_type == rocblas_datatype_f16_r && result_type == rocblas_datatype_f16_r
-       && execution_type == rocblas_datatype_f32_r)
-    {
-        return rocblas_nrm2_ex_typecasting<NB, ISBATCHED, rocblas_half, rocblas_half, float>(
-            rocblas_nrm2_ex_typecasting_PARAM);
-    }
-    else if(x_type == rocblas_datatype_f32_r && result_type == rocblas_datatype_f32_r
-            && execution_type == rocblas_datatype_f32_r)
-    {
-        return rocblas_nrm2_ex_typecasting<NB, ISBATCHED, float>(rocblas_nrm2_ex_typecasting_PARAM);
-    }
-    else if(x_type == rocblas_datatype_f64_r && result_type == rocblas_datatype_f64_r
-            && execution_type == rocblas_datatype_f64_r)
-    {
-        return rocblas_nrm2_ex_typecasting<NB, ISBATCHED, double>(
-            rocblas_nrm2_ex_typecasting_PARAM);
-    }
-    else if(x_type == rocblas_datatype_f32_c && result_type == rocblas_datatype_f32_r
-            && execution_type == rocblas_datatype_f32_r)
-    {
-        return rocblas_nrm2_ex_typecasting<NB, ISBATCHED, rocblas_float_complex, float>(
-            rocblas_nrm2_ex_typecasting_PARAM);
-    }
-    else if(x_type == rocblas_datatype_f64_c && result_type == rocblas_datatype_f64_r
-            && execution_type == rocblas_datatype_f64_r)
-    {
-        return rocblas_nrm2_ex_typecasting<NB, ISBATCHED, rocblas_double_complex, double>(
-            rocblas_nrm2_ex_typecasting_PARAM);
-    }
-
-    return rocblas_status_not_implemented;
-}
+                                        void*            workspace);

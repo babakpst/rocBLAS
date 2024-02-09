@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -31,13 +31,13 @@ inline rocblas_status rocblas_tbmv_arg_check(rocblas_handle    handle,
                                              rocblas_fill      uplo,
                                              rocblas_operation transA,
                                              rocblas_diagonal  diag,
-                                             rocblas_int       m,
-                                             rocblas_int       k,
+                                             int64_t           n,
+                                             int64_t           k,
                                              U                 A,
-                                             rocblas_int       lda,
+                                             int64_t           lda,
                                              X                 x,
-                                             rocblas_int       incx,
-                                             rocblas_int       batch_count)
+                                             int64_t           incx,
+                                             int64_t           batch_count)
 {
     if(uplo != rocblas_fill_lower && uplo != rocblas_fill_upper)
         return rocblas_status_invalid_value;
@@ -49,11 +49,11 @@ inline rocblas_status rocblas_tbmv_arg_check(rocblas_handle    handle,
     if(diag != rocblas_diagonal_unit && diag != rocblas_diagonal_non_unit)
         return rocblas_status_invalid_value;
 
-    if(m < 0 || k < 0 || lda < k + 1 || !incx || batch_count < 0)
+    if(n < 0 || k < 0 || lda < k + 1 || !incx || batch_count < 0)
         return rocblas_status_invalid_size;
 
     // quick return if possible.
-    if(!m || !batch_count)
+    if(!n || !batch_count)
     {
         RETURN_ZERO_DEVICE_MEMORY_SIZE_IF_QUERIED(handle);
         return rocblas_status_success;
@@ -62,36 +62,36 @@ inline rocblas_status rocblas_tbmv_arg_check(rocblas_handle    handle,
     return rocblas_status_continue;
 }
 
-template <typename U, typename V>
-rocblas_status rocblas_tbmv_template(rocblas_handle    handle,
-                                     rocblas_fill      uplo,
-                                     rocblas_operation transA,
-                                     rocblas_diagonal  diag,
-                                     rocblas_int       m,
-                                     rocblas_int       k,
-                                     U                 A,
-                                     rocblas_stride    offseta,
-                                     rocblas_int       lda,
-                                     rocblas_stride    strideA,
-                                     V                 x,
-                                     rocblas_stride    offsetx,
-                                     rocblas_int       incx,
-                                     rocblas_stride    stridex,
-                                     rocblas_int       batch_count,
-                                     V                 w_x_copy);
+template <typename TConstPtr, typename TPtr>
+rocblas_status rocblas_internal_tbmv_launcher(rocblas_handle    handle,
+                                              rocblas_fill      uplo,
+                                              rocblas_operation transA,
+                                              rocblas_diagonal  diag,
+                                              rocblas_int       n,
+                                              rocblas_int       k,
+                                              TConstPtr         A,
+                                              rocblas_stride    offseta,
+                                              int64_t           lda,
+                                              rocblas_stride    strideA,
+                                              TPtr              x,
+                                              rocblas_stride    offsetx,
+                                              int64_t           incx,
+                                              rocblas_stride    stridex,
+                                              rocblas_int       batch_count,
+                                              TPtr              w_x_copy);
 
 template <typename T, typename U>
 rocblas_status rocblas_tbmv_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
-                                           rocblas_int    m,
+                                           int64_t        n,
                                            T              A,
                                            rocblas_stride offset_a,
-                                           rocblas_int    lda,
+                                           int64_t        lda,
                                            rocblas_stride stride_a,
                                            U              x,
                                            rocblas_stride offset_x,
-                                           rocblas_int    inc_x,
+                                           int64_t        inc_x,
                                            rocblas_stride stride_x,
-                                           rocblas_int    batch_count,
+                                           int64_t        batch_count,
                                            const int      check_numerics,
                                            bool           is_input);

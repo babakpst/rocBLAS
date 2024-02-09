@@ -41,7 +41,7 @@ template <typename T>
 void testing_tpsv_batched_bad_arg(const Arguments& arg)
 {
     auto rocblas_tpsv_batched_fn
-        = arg.fortran ? rocblas_tpsv_batched<T, true> : rocblas_tpsv_batched<T, false>;
+        = arg.api == FORTRAN ? rocblas_tpsv_batched<T, true> : rocblas_tpsv_batched<T, false>;
 
     const rocblas_int       N           = 100;
     const rocblas_int       incx        = 1;
@@ -82,7 +82,7 @@ template <typename T>
 void testing_tpsv_batched(const Arguments& arg)
 {
     auto rocblas_tpsv_batched_fn
-        = arg.fortran ? rocblas_tpsv_batched<T, true> : rocblas_tpsv_batched<T, false>;
+        = arg.api == FORTRAN ? rocblas_tpsv_batched<T, true> : rocblas_tpsv_batched<T, false>;
 
     rocblas_int N           = arg.N;
     rocblas_int incx        = arg.incx;
@@ -110,10 +110,7 @@ void testing_tpsv_batched(const Arguments& arg)
         return;
     }
 
-    size_t abs_incx = size_t(incx >= 0 ? incx : -incx);
-
     double gpu_time_used, cpu_time_used;
-    double rocblas_error;
     double error_eps_multiplier    = 40.0;
     double residual_eps_multiplier = 20.0;
     double eps                     = std::numeric_limits<real_t<T>>::epsilon();
@@ -122,21 +119,17 @@ void testing_tpsv_batched(const Arguments& arg)
     // Allocate host memory
     host_batch_matrix<T> hA(N, N, N, batch_count);
     host_batch_matrix<T> hAp(1, rocblas_packed_matrix_size(N), 1, batch_count);
-    host_batch_matrix<T> AAT(N, N, N, batch_count);
     host_batch_vector<T> hb(N, incx, batch_count);
     host_batch_vector<T> hx(N, incx, batch_count);
-    host_batch_vector<T> hx_or_b_1(N, incx, batch_count);
-    host_batch_vector<T> hx_or_b_2(N, incx, batch_count);
+    host_batch_vector<T> hx_or_b(N, incx, batch_count);
     host_batch_vector<T> cpu_x_or_b(N, incx, batch_count);
 
     // Check host memory allocation
     CHECK_HIP_ERROR(hA.memcheck());
     CHECK_HIP_ERROR(hAp.memcheck());
-    CHECK_HIP_ERROR(AAT.memcheck());
     CHECK_HIP_ERROR(hb.memcheck());
     CHECK_HIP_ERROR(hx.memcheck());
-    CHECK_HIP_ERROR(hx_or_b_1.memcheck());
-    CHECK_HIP_ERROR(hx_or_b_2.memcheck());
+    CHECK_HIP_ERROR(hx_or_b.memcheck());
     CHECK_HIP_ERROR(cpu_x_or_b.memcheck());
 
     // Allocate device memory
@@ -165,29 +158,24 @@ void testing_tpsv_batched(const Arguments& arg)
     for(int b = 0; b < batch_count; b++)
     {
         // Calculate hb = hA*hx;
-        cblas_trmv<T>(uplo, transA, diag, N, hA[b], N, hb[b], incx);
+        ref_trmv<T>(uplo, transA, diag, N, hA[b], N, hb[b], incx);
     }
 
     // helper function to convert Regular matrix `hA` to packed matrix `hAp`
     regular_to_packed(uplo == rocblas_fill_upper, hA, hAp, N);
 
     cpu_x_or_b.copy_from(hb);
-    hx_or_b_1.copy_from(hb);
-    hx_or_b_2.copy_from(hb);
+    hx_or_b.copy_from(hb);
 
     CHECK_HIP_ERROR(dAp.transfer_from(hAp));
-    CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_1));
+    CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b));
 
-    double max_err_1 = 0.0;
-    double max_err_2 = 0.0;
-    double max_res_1 = 0.0;
-    double max_res_2 = 0.0;
+    double max_err = 0.0;
+    double max_res = 0.0;
 
     if(arg.unit_check || arg.norm_check)
     {
-        // calculate dxorb <- A^(-1) b   rocblas_device_pointer_host
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-
+        // calculate dxorb <- A^(-1) b
         handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR(rocblas_tpsv_batched_fn(handle,
                                                     uplo,
@@ -199,61 +187,29 @@ void testing_tpsv_batched(const Arguments& arg)
                                                     incx,
                                                     batch_count));
         handle.post_test(arg);
+        CHECK_HIP_ERROR(hx_or_b.transfer_from(dx_or_b));
 
-        CHECK_HIP_ERROR(hx_or_b_1.transfer_from(dx_or_b));
+        max_err = vector_norm_1(N, incx, hx, hx_or_b);
 
-        // calculate dxorb <- A^(-1) b   rocblas_device_pointer_device
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_2));
-
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(rocblas_tpsv_batched_fn(handle,
-                                                    uplo,
-                                                    transA,
-                                                    diag,
-                                                    N,
-                                                    dAp.ptr_on_device(),
-                                                    dx_or_b.ptr_on_device(),
-                                                    incx,
-                                                    batch_count));
-        handle.post_test(arg);
-
-        CHECK_HIP_ERROR(hx_or_b_2.transfer_from(dx_or_b));
-
-        for(int b = 0; b < batch_count; b++)
-        {
-            max_err_1 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx[b], hx_or_b_1[b]));
-            max_err_2 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx[b], hx_or_b_2[b]));
-            //unit test
-            trsm_err_res_check<T>(max_err_1, N, error_eps_multiplier, eps);
-            trsm_err_res_check<T>(max_err_2, N, error_eps_multiplier, eps);
-        }
+        if(arg.unit_check)
+            trsm_err_res_check<T>(max_err, N, error_eps_multiplier, eps);
 
         // hx_or_b contains A * (calculated X), so res = A * (calculated x) - b = hx_or_b - hb
         for(int b = 0; b < batch_count; b++)
         {
-            cblas_trmv<T>(uplo, transA, diag, N, hA[b], N, hx_or_b_1[b], incx);
-            cblas_trmv<T>(uplo, transA, diag, N, hA[b], N, hx_or_b_2[b], incx);
+            ref_trmv<T>(uplo, transA, diag, N, hA[b], N, hx_or_b[b], incx);
         }
 
-        //calculate norm 1 of res
-        for(int b = 0; b < batch_count; b++)
-        {
-            max_err_1 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx_or_b_1[b], hb[b]));
-            max_err_2 = rocblas_abs(vector_norm_1<T>(N, abs_incx, hx_or_b_1[b], hb[b]));
-            //unit test
-            trsm_err_res_check<T>(max_err_1, N, residual_eps_multiplier, eps);
-            trsm_err_res_check<T>(max_err_2, N, residual_eps_multiplier, eps);
-        }
+        max_res = vector_norm_1(N, incx, hx_or_b, hb);
+
+        if(arg.unit_check)
+            trsm_err_res_check<T>(max_res, N, residual_eps_multiplier, eps);
     }
 
     if(arg.timing)
     {
         // GPU rocBLAS
-        hx_or_b_1.copy_from(cpu_x_or_b);
-        CHECK_HIP_ERROR(dx_or_b.transfer_from(hx_or_b_1));
-
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        CHECK_HIP_ERROR(dx_or_b.transfer_from(cpu_x_or_b));
 
         int number_cold_calls = arg.cold_iters;
         int number_hot_calls  = arg.iters;
@@ -291,7 +247,7 @@ void testing_tpsv_batched(const Arguments& arg)
 
         if(arg.norm_check)
             for(int b = 0; b < batch_count; b++)
-                cblas_tpsv<T>(uplo, transA, diag, N, hAp[b], cpu_x_or_b[b], incx);
+                ref_tpsv<T>(uplo, transA, diag, N, hAp[b], cpu_x_or_b[b], incx);
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
@@ -302,7 +258,7 @@ void testing_tpsv_batched(const Arguments& arg)
             tpsv_gflop_count<T>(N),
             ArgumentLogging::NA_value,
             cpu_time_used,
-            max_err_1,
-            max_err_2);
+            max_err,
+            max_res);
     }
 }

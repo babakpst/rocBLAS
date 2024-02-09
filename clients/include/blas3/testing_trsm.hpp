@@ -36,13 +36,15 @@
 #include "unit.hpp"
 #include "utility.hpp"
 
+#include "blas3/rocblas_trsm.hpp"
+
 #define ERROR_EPS_MULTIPLIER 40
 #define RESIDUAL_EPS_MULTIPLIER 40
 
 template <typename T>
 void testing_trsm_bad_arg(const Arguments& arg)
 {
-    auto rocblas_trsm_fn = arg.fortran ? rocblas_trsm<T, true> : rocblas_trsm<T, false>;
+    auto rocblas_trsm_fn = arg.api == FORTRAN ? rocblas_trsm<T, true> : rocblas_trsm<T, false>;
 
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
@@ -199,7 +201,7 @@ void testing_trsm_bad_arg(const Arguments& arg)
 template <typename T>
 void testing_trsm(const Arguments& arg)
 {
-    auto rocblas_trsm_fn = arg.fortran ? rocblas_trsm<T, true> : rocblas_trsm<T, false>;
+    auto rocblas_trsm_fn = arg.api == FORTRAN ? rocblas_trsm<T, true> : rocblas_trsm<T, false>;
 
     rocblas_int M   = arg.M;
     rocblas_int N   = arg.N;
@@ -240,12 +242,9 @@ void testing_trsm(const Arguments& arg)
     // Naming: `h` is in CPU (host) memory(eg hA), `d` is in GPU (device) memory (eg dA).
     // Allocate host memory
     host_matrix<T> hA(K, K, lda);
-    host_matrix<T> hAAT(K, K, lda);
-    host_matrix<T> hB(M, N, ldb);
+    host_matrix<T> hB(M, N, M); // save memory when large ldb
     host_matrix<T> hX(M, N, ldb);
     host_matrix<T> hXorB_1(M, N, ldb);
-    host_matrix<T> hXorB_2(M, N, ldb);
-    host_matrix<T> cpuXorB(M, N, ldb);
 
     // Allocate device memory
     device_matrix<T> dA(K, K, lda, HMM);
@@ -272,13 +271,11 @@ void testing_trsm(const Arguments& arg)
         make_unit_diagonal(uplo, (T*)hA, lda, K);
     }
 
-    hB = hX;
+    copy_matrix_with_different_leading_dimensions(hX, hB);
 
     // Calculate hB = hA*hX;
-    cblas_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA, lda, hB, ldb);
-    hXorB_1 = hB; // hXorB <- B
-    hXorB_2 = hB; // hXorB <- B
-    cpuXorB = hB; // cpuXorB <- B
+    ref_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA, lda, hB, M);
+    copy_matrix_with_different_leading_dimensions(hB, hXorB_1);
 
     // copy data from CPU to device
     CHECK_HIP_ERROR(dA.transfer_from(hA));
@@ -289,8 +286,8 @@ void testing_trsm(const Arguments& arg)
     double error_eps_multiplier    = ERROR_EPS_MULTIPLIER;
     double residual_eps_multiplier = RESIDUAL_EPS_MULTIPLIER;
     double eps                     = std::numeric_limits<real_t<T>>::epsilon();
-    double max_err_1               = 0.0;
-    double max_err_2               = 0.0;
+    double err_host                = 0.0;
+    double err_device              = 0.0;
 
     if(!ROCBLAS_REALLOC_ON_DEMAND)
     {
@@ -308,63 +305,153 @@ void testing_trsm(const Arguments& arg)
 
     if(arg.unit_check || arg.norm_check)
     {
-        // calculate dXorB <- A^(-1) B   rocblas_device_pointer_host
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
-        CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_1));
-        handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(
-            rocblas_trsm_fn(handle, side, uplo, transA, diag, M, N, &alpha_h, dA, lda, dXorB, ldb));
-        handle.post_test(arg);
-        CHECK_HIP_ERROR(hXorB_1.transfer_from(dXorB));
-
-        // calculate dXorB <- A^(-1) B   rocblas_device_pointer_device
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
-        CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_2));
-        CHECK_HIP_ERROR(hipMemcpy(alpha_d, &alpha_h, sizeof(T), hipMemcpyHostToDevice));
-
-        CHECK_ROCBLAS_ERROR(
-            rocblas_trsm_fn(handle, side, uplo, transA, diag, M, N, alpha_d, dA, lda, dXorB, ldb));
-
-        CHECK_HIP_ERROR(hXorB_2.transfer_from(dXorB));
-
-        if(alpha_h == 0)
+        if(arg.pointer_mode_host)
         {
-            // expecting 0 output, set hX == 0
-            rocblas_init_zero((T*)hX, M, N, ldb);
+            // calculate dXorB <- A^(-1) B   rocblas_device_pointer_host
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+            CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_1));
 
-            if(arg.unit_check)
+            handle.pre_test(arg);
+            if(arg.api != INTERNAL)
             {
-                unit_check_general<T>(M, N, ldb, hX, hXorB_1);
-                unit_check_general<T>(M, N, ldb, hX, hXorB_2);
+                CHECK_ROCBLAS_ERROR(rocblas_trsm_fn(
+                    handle, side, uplo, transA, diag, M, N, &alpha_h, dA, lda, dXorB, ldb));
             }
-
-            if(arg.norm_check)
+            else
             {
-                max_err_1 = std::abs(norm_check_general<T>('F', M, N, ldb, hX, hXorB_1));
-                max_err_2 = std::abs(norm_check_general<T>('F', M, N, ldb, hX, hXorB_2));
+                // internal function requires us to supply temporary memory ourselves
+                constexpr bool        BATCHED        = false;
+                constexpr rocblas_int batch_count    = 1;
+                bool                  optimal_mem    = true;
+                rocblas_int           supp_invA_size = 0; // used for trsm_ex
+
+                // first exported internal interface - calculate how much mem is needed
+                size_t w_x_tmp_size, w_x_tmp_arr_size, w_invA_size, w_invA_arr_size,
+                    w_x_tmp_size_backup;
+                rocblas_status mem_status
+                    = rocblas_internal_trsm_workspace_size<T>(side,
+                                                              transA,
+                                                              M,
+                                                              N,
+                                                              batch_count,
+                                                              supp_invA_size,
+                                                              &w_x_tmp_size,
+                                                              &w_x_tmp_arr_size,
+                                                              &w_invA_size,
+                                                              &w_invA_arr_size,
+                                                              &w_x_tmp_size_backup);
+
+                if(mem_status != rocblas_status_success && mem_status != rocblas_status_continue)
+                    CHECK_ROCBLAS_ERROR(mem_status);
+
+                // allocate memory ourselves
+                device_vector<T> w_mem_x_tmp(w_x_tmp_size / sizeof(T));
+                device_vector<T> w_mem_x_tmp_arr(w_x_tmp_arr_size / sizeof(T*));
+                device_vector<T> w_mem_invA(w_invA_size / sizeof(T));
+                device_vector<T> w_mem_invA_arr(w_invA_arr_size / sizeof(T*));
+
+                // using ldc/ldd as offsets
+                rocblas_stride strideA = 0, strideB = 0;
+                rocblas_stride offsetA = arg.ldc, offsetB = arg.ldd;
+
+                CHECK_ROCBLAS_ERROR(rocblas_internal_trsm_template(handle,
+                                                                   side,
+                                                                   uplo,
+                                                                   transA,
+                                                                   diag,
+                                                                   M,
+                                                                   N,
+                                                                   &alpha_h,
+                                                                   (const T*)dA + offsetA,
+                                                                   -offsetA,
+                                                                   lda,
+                                                                   strideA,
+                                                                   (T*)dXorB + offsetB,
+                                                                   -offsetB,
+                                                                   ldb,
+                                                                   strideB,
+                                                                   batch_count,
+                                                                   optimal_mem,
+                                                                   (void*)w_mem_x_tmp,
+                                                                   (void*)w_mem_x_tmp_arr,
+                                                                   (void*)w_mem_invA,
+                                                                   (void*)w_mem_invA_arr));
+            }
+            handle.post_test(arg);
+
+            CHECK_HIP_ERROR(hXorB_1.transfer_from(dXorB));
+
+            // doing unit tests here to save memory by having hB just use M as leading dimension,
+            // need to reuse hXorB for hipMemcpy later
+            if(alpha_h == 0)
+            {
+                // expecting 0 output, set hX == 0
+                rocblas_init_zero((T*)hX, M, N, ldb);
+
+                if(arg.unit_check)
+                    unit_check_general<T>(M, N, ldb, hX, hXorB_1);
+                if(arg.norm_check)
+                    err_host = std::abs(norm_check_general<T>('F', M, N, ldb, hX, hXorB_1));
+            }
+            else
+            {
+                //computed result is in hx_or_b, so forward error is E = hx - hx_or_b
+                // calculate vector-induced-norm 1 of matrix E
+                err_host = matrix_norm_1<T>(M, N, ldb, hX, hXorB_1);
+
+                if(arg.unit_check)
+                    trsm_err_res_check<T>(err_host, M, error_eps_multiplier, eps);
+
+                // hx_or_b contains A * (calculated X), so res = A * (calculated x) - b = hx_or_b - hb
+                ref_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA, lda, hXorB_1, ldb);
+                double err_host_res = matrix_norm_1<T>(M, N, hXorB_1, ldb, hB, M);
+
+                if(arg.unit_check)
+                    trsm_err_res_check<T>(err_host_res, M, residual_eps_multiplier, eps);
+                err_host = std::max(err_host, err_host_res);
             }
         }
-        else
+
+        if(arg.pointer_mode_device)
         {
-            //computed result is in hx_or_b, so forward error is E = hx - hx_or_b
-            // calculate vector-induced-norm 1 of matrix E
-            max_err_1 = rocblas_abs(matrix_norm_1<T>(M, N, ldb, hX, hXorB_1));
-            max_err_2 = rocblas_abs(matrix_norm_1<T>(M, N, ldb, hX, hXorB_2));
+            // calculate dXorB <- A^(-1) B   rocblas_device_pointer_device
+            CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
 
-            //unit test
-            trsm_err_res_check<T>(max_err_1, M, error_eps_multiplier, eps);
-            trsm_err_res_check<T>(max_err_2, M, error_eps_multiplier, eps);
+            // copy hB to hXorB with correct leading dimension as hB still holds input
+            copy_matrix_with_different_leading_dimensions(hB, hXorB_1);
 
-            // hx_or_b contains A * (calculated X), so res = A * (calculated x) - b = hx_or_b - hb
-            cblas_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA, lda, hXorB_1, ldb);
-            cblas_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA, lda, hXorB_2, ldb);
+            CHECK_HIP_ERROR(dXorB.transfer_from(hXorB_1));
+            CHECK_HIP_ERROR(hipMemcpy(alpha_d, &alpha_h, sizeof(T), hipMemcpyHostToDevice));
 
-            max_err_1 = rocblas_abs(matrix_norm_1<T>(M, N, ldb, hXorB_1, hB));
-            max_err_2 = rocblas_abs(matrix_norm_1<T>(M, N, ldb, hXorB_2, hB));
+            CHECK_ROCBLAS_ERROR(rocblas_trsm_fn(
+                handle, side, uplo, transA, diag, M, N, alpha_d, dA, lda, dXorB, ldb));
 
-            //unit test
-            trsm_err_res_check<T>(max_err_1, M, residual_eps_multiplier, eps);
-            trsm_err_res_check<T>(max_err_2, M, residual_eps_multiplier, eps);
+            CHECK_HIP_ERROR(hXorB_1.transfer_from(dXorB));
+
+            if(alpha_h == 0)
+            {
+                // expecting 0 output, set hX == 0
+                rocblas_init_zero((T*)hX, M, N, ldb);
+
+                if(arg.unit_check)
+                    unit_check_general<T>(M, N, ldb, hX, hXorB_1);
+                if(arg.norm_check)
+                    err_device = std::abs(norm_check_general<T>('F', M, N, ldb, hX, hXorB_1));
+            }
+            else
+            {
+                err_device = matrix_norm_1<T>(M, N, ldb, hX, hXorB_1);
+
+                if(arg.unit_check)
+                    trsm_err_res_check<T>(err_device, M, error_eps_multiplier, eps);
+
+                ref_trmm<T>(side, uplo, transA, diag, M, N, 1.0 / alpha_h, hA, lda, hXorB_1, ldb);
+                double err_device_res = matrix_norm_1<T>(M, N, hXorB_1, ldb, hB, M);
+
+                if(arg.unit_check)
+                    trsm_err_res_check<T>(err_device_res, M, residual_eps_multiplier, eps);
+                err_device = std::max(err_device, err_device_res);
+            }
         }
     }
 
@@ -397,9 +484,10 @@ void testing_trsm(const Arguments& arg)
         gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
 
         // CPU cblas
+        copy_matrix_with_different_leading_dimensions(hB, hXorB_1);
         cpu_time_used = get_time_us_no_sync();
 
-        cblas_trsm<T>(side, uplo, transA, diag, M, N, alpha_h, hA, lda, cpuXorB, ldb);
+        ref_trsm<T>(side, uplo, transA, diag, M, N, alpha_h, hA, lda, hXorB_1, ldb);
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
@@ -410,7 +498,7 @@ void testing_trsm(const Arguments& arg)
                          trsm_gflop_count<T>(M, N, K),
                          ArgumentLogging::NA_value,
                          cpu_time_used,
-                         max_err_1,
-                         max_err_2);
+                         err_host,
+                         err_device);
     }
 }

@@ -36,12 +36,13 @@ class ConfigurableEventListener : public TestEventListener
     std::atomic_size_t       skipped_tests{0}; // Number of skipped tests.
 
 public:
-    bool showTestCases      = true; // Show the names of each test case.
-    bool showTestNames      = true; // Show the names of each test.
-    bool showSuccesses      = true; // Show each success.
-    bool showInlineFailures = true; // Show each failure as it occurs.
-    bool showEnvironment    = true; // Show the setup of the global environment.
-    bool showInlineSkips    = true; // Show when we skip a test.
+    bool showTestCases           = true; // Show the names of each test case.
+    bool showTestNames           = true; // Show the names of each test.
+    bool showSuccesses           = true; // Show each success.
+    bool showInlineFailures      = true; // Show each failure as it occurs.
+    bool showEnvironment         = true; // Show the setup of the global environment.
+    bool showInlineSkips         = true; // Show when we skip a test.
+    bool showInlineSkipTooFewGPU = false; // Only show in summary
 
     explicit ConfigurableEventListener(TestEventListener* theEventListener)
         : eventListener(theEventListener)
@@ -89,25 +90,41 @@ public:
 
     void OnTestPartResult(const TestPartResult& result) override
     {
-        if(!strcmp(result.message(), LIMITED_RAM_STRING_GTEST))
+        if(result.type() == TestPartResult::kSkip)
         {
-            if(showInlineSkips)
-                rocblas_cout << "Skipped test due to limited RAM environment." << std::endl;
             ++skipped_tests;
+
+            if(strstr(result.message(), LIMITED_RAM_STRING))
+            {
+                if(showInlineSkips)
+                    rocblas_cout << "Skipped test due to limited RAM environment." << std::endl;
+            }
+            else if(strstr(result.message(), LIMITED_VRAM_STRING))
+            {
+                if(showInlineSkips)
+                    rocblas_cout << "Skipped test due to limited GPU memory environment."
+                                 << std::endl;
+            }
+            else if(strstr(result.message(), HMM_NOT_SUPPORTED_STRING))
+            {
+                if(showInlineSkips)
+                    rocblas_cout << "Skipped test due to HMM not supported." << std::endl;
+            }
+            else if(strstr(result.message(), TOO_FEW_DEVICES_PRESENT_STRING))
+            {
+                if(showInlineSkipTooFewGPU) // specific default for gpu
+                    rocblas_cout << "Skipped test due to too few GPUs." << std::endl;
+            }
+            else if(showInlineSkips)
+            {
+                // this is more output than the simple sentences above
+                eventListener->OnTestPartResult(result);
+            }
         }
-        else if(!strcmp(result.message(), LIMITED_MEMORY_STRING_GTEST))
+        else
         {
-            if(showInlineSkips)
-                rocblas_cout << "Skipped test due to limited GPU memory environment." << std::endl;
-            ++skipped_tests;
+            eventListener->OnTestPartResult(result);
         }
-        else if(!strcmp(result.message(), TOO_MANY_DEVICES_STRING_GTEST))
-        {
-            if(showInlineSkips)
-                rocblas_cout << "Skipped test due to too few GPUs." << std::endl;
-            ++skipped_tests;
-        }
-        eventListener->OnTestPartResult(result);
     }
 
     void OnTestEnd(const TestInfo& test_info) override
@@ -167,6 +184,17 @@ static void rocblas_set_listener()
 
     if(gtest_listener && !strcmp(gtest_listener, "NO_PASS_LINE_IN_LOG"))
     {
+        rocblas_cout << "environment GTEST_LISTENER=NO_PASS_LINE_IN_LOG is now the default.\n"
+                        "To see pass lines use: GTEST_LISTENER=PASS_LINE_IN_LOG"
+                     << std::endl;
+    }
+
+    if(gtest_listener && !strcmp(gtest_listener, "PASS_LINE_IN_LOG"))
+    {
+    }
+    else
+    {
+        // default is now the same as GTEST_LISTENER=NO_PASS_LINE_IN_LOG
         listener->showTestNames      = false;
         listener->showSuccesses      = false;
         listener->showInlineFailures = true; // easier reading
@@ -191,6 +219,24 @@ static void rocblas_print_version()
     static std::string blas_version = rocblas_version_string();
 
     rocblas_cout << "rocBLAS version: " << blas_version << "\n" << std::endl;
+}
+
+// Print rocBLAS and Tensile commit hashes
+static void rocblas_print_commit_hashes()
+{
+    const char* rocblas_tensile_commit_hash[] = {ROCBLAS_TENSILE_COMMIT_ID};
+
+#if BUILD_WITH_TENSILE
+    rocblas_cout << "rocBLAS-commit-hash: " << rocblas_tensile_commit_hash[0] << std::endl
+                 << std::endl;
+    rocblas_cout << "Tensile-commit-hash: " << rocblas_tensile_commit_hash[1] << std::endl
+                 << std::endl;
+#else
+    rocblas_cout << "rocBLAS-commit-hash: " << rocblas_tensile_commit_hash[0] << std::endl
+                 << std::endl;
+    rocblas_cout << "Tensile-commit-hash: N/A, as rocBLAS was built without Tensile" << std::endl
+                 << std::endl;
+#endif
 }
 
 static void rocblas_print_usage_warning()
@@ -251,6 +297,9 @@ int main(int argc, char** argv)
     }
 
     rocblas_print_version();
+
+    // Print rocBLAS and Tensile commit hashes
+    rocblas_print_commit_hashes();
 
     // Set test device
     rocblas_set_test_device();

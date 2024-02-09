@@ -66,32 +66,23 @@ Tests:
   category: pre_checkin
   function: syrkx_bad_arg
   precision: *single_double_precisions_complex_real
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
-- name: syrkx_size_t_N
-  category: nightly
+- name: syrkx_size_t
+  category: stress
   function: syrkx
   precision: *single_precision
-  uplo: [ U ]
-  transA: [ N ]
+  uplo: [ U, L ] # op(A) and op(B) are NxK
   matrix_size:
-    - { N:     1, K:  51200,  lda: 51200,  ldb:     1,  ldc: 1 }
-    - { N:     1, K:  51200,  lda:     1,  ldb: 51200,  ldc: 1 }
+    - { transA: N,  N:     3, K:  46975,  lda: 46975,  ldb:     3,  ldc: 3 }
+    - { transA: N,  N:     3, K:  46975,  lda:     3,  ldb: 46975,  ldc: 3 }
+    - { transA: T,  N: 46975, K:      4,  lda:     4,  ldb:     4,  ldc: 46975}
   alpha_beta:
-    - { alpha:  1.0, beta:  1.0 }
+    - { alpha:  0.5, beta:  0.5 }
   batch_count: [ 1 ]
-
-- name: syrkx_size_t_T
-  category: nightly
-  function: syrkx
-  precision: *single_precision
-  uplo: [ U ]
-  transA: [ T ]
-  matrix_size:
-    - { N: 51200, K:      4,  lda:     4,  ldb: 4,  ldc: 51200}
-  alpha_beta:
-    - { alpha:  1.0, beta:  1.0 }
-  batch_count: [ 1 ]
+  pointer_mode_host: false
+  gpu_arch: '90a'
+  os_flags: LINUX
 
 - name: syrkx_NaN
   category: pre_checkin
@@ -171,7 +162,7 @@ Tests:
   transA: [ N, T ]
   matrix_size: *medium_matrix_size_range
   alpha_beta: *alpha_beta_range
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: syrkx_large
   category: nightly
@@ -181,13 +172,14 @@ Tests:
   transA: [ N, T ]
   matrix_size: *large_matrix_size_range
   alpha_beta: *alpha_beta
+  pointer_mode_device: false
 
 # batched
 - name: syrkx_batched_bad
   category: pre_checkin
   function: syrkx_batched_bad_arg
   precision: *single_precision
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: syrkx_batched_quick
   category: quick
@@ -220,7 +212,7 @@ Tests:
   matrix_size: *medium_matrix_size_range
   alpha_beta: *alpha_beta_range
   batch_count: [ 1, 2 ]
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: syrkx_batched_large
   category: nightly
@@ -231,13 +223,14 @@ Tests:
   matrix_size: *large_matrix_size_range
   alpha_beta: *alpha_beta
   batch_count: [ 2 ]
+  pointer_mode_host: false
 
 # strided batched
 - name: syrkx_strided_batched_bad
   category: pre_checkin
   function: syrkx_strided_batched_bad_arg
   precision: *single_precision
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: syrkx_strided_batched_quick
   category: quick
@@ -270,7 +263,7 @@ Tests:
   matrix_size: *medium_matrix_size_range
   alpha_beta: *alpha_beta_range
   batch_count: [ 2 ]
-  fortran: [ false, true ]
+  api: [ C, FORTRAN ]
 
 - name: syrkx_strided_batched_large
   category: nightly
@@ -281,6 +274,7 @@ Tests:
   matrix_size: *large_matrix_size_range
   alpha_beta: *alpha_beta
   batch_count: [ 2 ]
+  pointer_mode_host: false
 
 - name: syrkx_graph_test
   category: pre_checkin

@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,32 +23,20 @@
 
 #pragma once
 
-#include "bytes.hpp"
-#include "cblas_interface.hpp"
-#include "flops.hpp"
-#include "near.hpp"
-#include "norm.hpp"
-#include "rocblas.hpp"
-#include "rocblas_datatype2string.hpp"
-#include "rocblas_init.hpp"
-#include "rocblas_math.hpp"
-#include "rocblas_matrix.hpp"
-#include "rocblas_random.hpp"
-#include "rocblas_test.hpp"
-#include "rocblas_vector.hpp"
-#include "unit.hpp"
-#include "utility.hpp"
+#include "testing_common.hpp"
 
 template <typename T>
 void testing_tbmv_bad_arg(const Arguments& arg)
 {
-    auto rocblas_tbmv_fn = arg.fortran ? rocblas_tbmv<T, true> : rocblas_tbmv<T, false>;
+    auto rocblas_tbmv_fn = arg.api == FORTRAN ? rocblas_tbmv<T, true> : rocblas_tbmv<T, false>;
+    auto rocblas_tbmv_fn_64
+        = arg.api == FORTRAN_64 ? rocblas_tbmv_64<T, true> : rocblas_tbmv_64<T, false>;
 
-    const rocblas_int       M                 = 100;
-    const rocblas_int       K                 = 5;
-    const rocblas_int       lda               = 100;
-    const rocblas_int       incx              = 1;
-    const rocblas_int       banded_matrix_row = K + 1;
+    const int64_t           N                 = 100;
+    const int64_t           K                 = 5;
+    const int64_t           lda               = 100;
+    const int64_t           incx              = 1;
+    const int64_t           banded_matrix_row = K + 1;
     const rocblas_fill      uplo              = rocblas_fill_upper;
     const rocblas_operation transA            = rocblas_operation_none;
     const rocblas_diagonal  diag              = rocblas_diagonal_non_unit;
@@ -56,79 +44,80 @@ void testing_tbmv_bad_arg(const Arguments& arg)
     rocblas_local_handle handle{arg};
 
     // Allocate device memory
-    device_matrix<T> dAb(banded_matrix_row, M, lda);
-    device_vector<T> dx(M, incx);
+    device_matrix<T> dAb(banded_matrix_row, N, lda);
+    device_vector<T> dx(N, incx);
 
     // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dAb.memcheck());
     CHECK_DEVICE_ALLOCATION(dx.memcheck());
 
-    EXPECT_ROCBLAS_STATUS(
-        rocblas_tbmv_fn(handle, rocblas_fill_full, transA, diag, M, K, dAb, lda, dx, incx),
-        rocblas_status_invalid_value);
+    DAPI_EXPECT(rocblas_status_invalid_value,
+                rocblas_tbmv_fn,
+                (handle, rocblas_fill_full, transA, diag, N, K, dAb, lda, dx, incx));
 
-    EXPECT_ROCBLAS_STATUS(
-        rocblas_tbmv_fn(
-            handle, uplo, (rocblas_operation)rocblas_fill_full, diag, M, K, dAb, lda, dx, incx),
-        rocblas_status_invalid_value);
+    DAPI_EXPECT(
+        rocblas_status_invalid_value,
+        rocblas_tbmv_fn,
+        (handle, uplo, (rocblas_operation)rocblas_fill_full, diag, N, K, dAb, lda, dx, incx));
 
-    EXPECT_ROCBLAS_STATUS(
-        rocblas_tbmv_fn(
-            handle, uplo, transA, (rocblas_diagonal)rocblas_fill_full, M, K, dAb, lda, dx, incx),
-        rocblas_status_invalid_value);
+    DAPI_EXPECT(
+        rocblas_status_invalid_value,
+        rocblas_tbmv_fn,
+        (handle, uplo, transA, (rocblas_diagonal)rocblas_fill_full, N, K, dAb, lda, dx, incx));
 
-    EXPECT_ROCBLAS_STATUS(rocblas_tbmv_fn(handle, uplo, transA, diag, M, K, nullptr, lda, dx, incx),
-                          rocblas_status_invalid_pointer);
+    DAPI_EXPECT(rocblas_status_invalid_pointer,
+                rocblas_tbmv_fn,
+                (handle, uplo, transA, diag, N, K, nullptr, lda, dx, incx));
 
-    EXPECT_ROCBLAS_STATUS(
-        rocblas_tbmv_fn(handle, uplo, transA, diag, M, K, dAb, lda, nullptr, incx),
-        rocblas_status_invalid_pointer);
+    DAPI_EXPECT(rocblas_status_invalid_pointer,
+                rocblas_tbmv_fn,
+                (handle, uplo, transA, diag, N, K, dAb, lda, nullptr, incx));
 
-    EXPECT_ROCBLAS_STATUS(rocblas_tbmv_fn(nullptr, uplo, transA, diag, M, K, dAb, lda, dx, incx),
-                          rocblas_status_invalid_handle);
+    DAPI_EXPECT(rocblas_status_invalid_handle,
+                rocblas_tbmv_fn,
+                (nullptr, uplo, transA, diag, N, K, dAb, lda, dx, incx));
 }
 
 template <typename T>
 void testing_tbmv(const Arguments& arg)
 {
-    auto rocblas_tbmv_fn = arg.fortran ? rocblas_tbmv<T, true> : rocblas_tbmv<T, false>;
+    auto rocblas_tbmv_fn = arg.api == FORTRAN ? rocblas_tbmv<T, true> : rocblas_tbmv<T, false>;
+    auto rocblas_tbmv_fn_64
+        = arg.api == FORTRAN_64 ? rocblas_tbmv_64<T, true> : rocblas_tbmv_64<T, false>;
 
-    rocblas_int       M                 = arg.M;
-    rocblas_int       K                 = arg.K;
-    rocblas_int       lda               = arg.lda;
-    rocblas_int       incx              = arg.incx;
+    int64_t           N                 = arg.N;
+    int64_t           K                 = arg.K;
+    int64_t           lda               = arg.lda;
+    int64_t           incx              = arg.incx;
     char              char_uplo         = arg.uplo;
     char              char_diag         = arg.diag;
     rocblas_fill      uplo              = char2rocblas_fill(char_uplo);
     rocblas_operation transA            = char2rocblas_operation(arg.transA);
     rocblas_diagonal  diag              = char2rocblas_diagonal(char_diag);
-    const rocblas_int banded_matrix_row = K + 1;
+    const int64_t     banded_matrix_row = K + 1;
 
     rocblas_local_handle handle{arg};
 
     // argument sanity check before allocating invalid memory
-    bool invalid_size = M < 0 || K < 0 || lda < banded_matrix_row || !incx;
+    bool invalid_size = N < 0 || K < 0 || lda < banded_matrix_row || !incx;
     if(invalid_size)
     {
-        EXPECT_ROCBLAS_STATUS(
-            rocblas_tbmv_fn(handle, uplo, transA, diag, M, K, nullptr, lda, nullptr, incx),
-            rocblas_status_invalid_size);
+        DAPI_EXPECT(rocblas_status_invalid_size,
+                    rocblas_tbmv_fn,
+                    (handle, uplo, transA, diag, N, K, nullptr, lda, nullptr, incx));
 
         return;
     }
 
-    size_t abs_incx = incx >= 0 ? incx : -incx;
-
     // Naming: `h` is in CPU (host) memory(eg hAb), `d` is in GPU (device) memory (eg dAb).
     // Allocate host memory
-    host_matrix<T> hAb(banded_matrix_row, M, lda);
-    host_vector<T> hx_1(M, incx);
-    host_vector<T> hx_2(M, incx);
-    host_vector<T> hx_gold(M, incx);
+    host_matrix<T> hAb(banded_matrix_row, N, lda);
+    host_vector<T> hx(N, incx);
+    host_vector<T> hx_gold(N, incx);
 
     // Allocate device memory
-    device_matrix<T> dAb(banded_matrix_row, M, lda);
-    device_vector<T> dx(M, incx);
+    device_matrix<T> dAb(banded_matrix_row, N, lda);
+    device_vector<T> dx(N, incx);
 
     // Check device memory allocation
     CHECK_DEVICE_ALLOCATION(dAb.memcheck());
@@ -138,17 +127,16 @@ void testing_tbmv(const Arguments& arg)
     // Initializing the banded-matrix 'hAb' as a general matrix as the banded matrix is not triangular.
     rocblas_init_matrix(
         hAb, arg, rocblas_client_never_set_nan, rocblas_client_general_matrix, true);
-    rocblas_init_vector(hx_1, arg, rocblas_client_never_set_nan, false, true);
+    rocblas_init_vector(hx, arg, rocblas_client_never_set_nan, false, true);
 
-    hx_gold = hx_1;
+    hx_gold = hx;
 
     // Copy data from CPU to device
     CHECK_HIP_ERROR(dAb.transfer_from(hAb));
-    CHECK_HIP_ERROR(dx.transfer_from(hx_1));
+    CHECK_HIP_ERROR(dx.transfer_from(hx));
 
-    double gpu_time_used, cpu_time_used;
-    double rocblas_error_1;
-    double rocblas_error_2;
+    double cpu_time_used;
+    double rocblas_error = 0.0;
 
     /* =====================================================================
            ROCBLAS
@@ -157,58 +145,55 @@ void testing_tbmv(const Arguments& arg)
     if(arg.unit_check || arg.norm_check)
     {
         // pointer mode shouldn't matter here
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
         handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(rocblas_tbmv_fn(handle, uplo, transA, diag, M, K, dAb, lda, dx, incx));
+        DAPI_CHECK(rocblas_tbmv_fn, (handle, uplo, transA, diag, N, K, dAb, lda, dx, incx));
         handle.post_test(arg);
 
         // CPU BLAS
         cpu_time_used = get_time_us_no_sync();
-        cblas_tbmv<T>(uplo, transA, diag, M, K, hAb, lda, hx_gold, incx);
+        ref_tbmv<T>(uplo, transA, diag, N, K, hAb, lda, hx_gold, incx);
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
         // copy output from device to CPU
-        CHECK_HIP_ERROR(hx_2.transfer_from(dx));
+        CHECK_HIP_ERROR(hx.transfer_from(dx));
 
         if(arg.unit_check)
         {
-            unit_check_general<T>(1, M, abs_incx, hx_gold, hx_2);
+            unit_check_general<T>(1, N, incx, hx_gold, hx);
         }
 
         if(arg.norm_check)
         {
-            rocblas_error_1 = norm_check_general<T>('F', 1, M, abs_incx, hx_gold, hx_2);
+            rocblas_error = norm_check_general<T>('F', 1, N, incx, hx_gold, hx);
         }
     }
 
     if(arg.timing)
     {
-        int number_cold_calls = arg.cold_iters;
-        int number_hot_calls  = arg.iters;
-
-        for(int iter = 0; iter < number_cold_calls; iter++)
-        {
-            rocblas_tbmv_fn(handle, uplo, transA, diag, M, K, dAb, lda, dx, incx);
-        }
+        double gpu_time_used;
+        int    number_cold_calls = arg.cold_iters;
+        int    total_calls       = number_cold_calls + arg.iters;
 
         hipStream_t stream;
         CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
-        gpu_time_used = get_time_us_sync(stream); // in microseconds
 
-        for(int iter = 0; iter < number_hot_calls; iter++)
+        for(int iter = 0; iter < total_calls; iter++)
         {
-            rocblas_tbmv_fn(handle, uplo, transA, diag, M, K, dAb, lda, dx, incx);
+            if(iter == number_cold_calls)
+                gpu_time_used = get_time_us_sync(stream); // in microseconds
+
+            DAPI_DISPATCH(rocblas_tbmv_fn, (handle, uplo, transA, diag, N, K, dAb, lda, dx, incx));
         }
 
         gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
 
-        ArgumentModel<e_uplo, e_transA, e_diag, e_M, e_K, e_lda, e_incx>{}.log_args<T>(
+        ArgumentModel<e_uplo, e_transA, e_diag, e_N, e_K, e_lda, e_incx>{}.log_args<T>(
             rocblas_cout,
             arg,
             gpu_time_used,
-            tbmv_gflop_count<T>(M, K),
-            tbmv_gbyte_count<T>(M, K),
+            tbmv_gflop_count<T>(N, K),
+            tbmv_gbyte_count<T>(N, K),
             cpu_time_used,
-            rocblas_error_1);
+            rocblas_error);
     }
 }

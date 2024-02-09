@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,25 +22,14 @@
 
 #pragma once
 
-#include "bytes.hpp"
-#include "cblas_interface.hpp"
-#include "flops.hpp"
-#include "near.hpp"
-#include "norm.hpp"
-#include "rocblas.hpp"
-#include "rocblas_init.hpp"
-#include "rocblas_math.hpp"
-#include "rocblas_matrix.hpp"
-#include "rocblas_random.hpp"
-#include "rocblas_test.hpp"
-#include "rocblas_vector.hpp"
-#include "unit.hpp"
-#include "utility.hpp"
+#include "testing_common.hpp"
 
 template <typename T>
 void testing_hpr2_bad_arg(const Arguments& arg)
 {
-    auto rocblas_hpr2_fn = arg.fortran ? rocblas_hpr2<T, true> : rocblas_hpr2<T, false>;
+    auto rocblas_hpr2_fn = arg.api == FORTRAN ? rocblas_hpr2<T, true> : rocblas_hpr2<T, false>;
+    auto rocblas_hpr2_fn_64
+        = arg.api == FORTRAN_64 ? rocblas_hpr2_64<T, true> : rocblas_hpr2_64<T, false>;
 
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
@@ -48,9 +37,9 @@ void testing_hpr2_bad_arg(const Arguments& arg)
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, pointer_mode));
 
         rocblas_fill uplo = rocblas_fill_upper;
-        rocblas_int  N    = 100;
-        rocblas_int  incx = 1;
-        rocblas_int  incy = 1;
+        int64_t      N    = 100;
+        int64_t      incx = 1;
+        int64_t      incy = 1;
 
         device_vector<T> alpha_d(1), zero_d(1);
 
@@ -77,52 +66,60 @@ void testing_hpr2_bad_arg(const Arguments& arg)
         CHECK_DEVICE_ALLOCATION(dx.memcheck());
         CHECK_DEVICE_ALLOCATION(dy.memcheck());
 
-        EXPECT_ROCBLAS_STATUS((rocblas_hpr2_fn)(nullptr, uplo, N, alpha, dx, incx, dy, incy, dAp_1),
-                              rocblas_status_invalid_handle);
+        DAPI_EXPECT(rocblas_status_invalid_handle,
+                    rocblas_hpr2_fn,
+                    (nullptr, uplo, N, alpha, dx, incx, dy, incy, dAp_1));
 
-        EXPECT_ROCBLAS_STATUS(
-            (rocblas_hpr2_fn)(handle, rocblas_fill_full, N, alpha, dx, incx, dy, incy, dAp_1),
-            rocblas_status_invalid_value);
+        DAPI_EXPECT(rocblas_status_invalid_value,
+                    rocblas_hpr2_fn,
+                    (handle, rocblas_fill_full, N, alpha, dx, incx, dy, incy, dAp_1));
 
-        EXPECT_ROCBLAS_STATUS(
-            (rocblas_hpr2_fn)(handle, uplo, N, nullptr, dx, incx, dy, incy, dAp_1),
-            rocblas_status_invalid_pointer);
+        DAPI_EXPECT(rocblas_status_invalid_pointer,
+                    rocblas_hpr2_fn,
+                    (handle, uplo, N, nullptr, dx, incx, dy, incy, dAp_1));
 
         if(pointer_mode == rocblas_pointer_mode_host)
         {
-            EXPECT_ROCBLAS_STATUS(
-                (rocblas_hpr2_fn)(handle, uplo, N, alpha, nullptr, incx, dy, incy, dAp_1),
-                rocblas_status_invalid_pointer);
+            DAPI_EXPECT(rocblas_status_invalid_pointer,
+                        rocblas_hpr2_fn,
+                        (handle, uplo, N, alpha, nullptr, incx, dy, incy, dAp_1));
 
-            EXPECT_ROCBLAS_STATUS(
-                (rocblas_hpr2_fn)(handle, uplo, N, alpha, dx, incx, nullptr, incy, dAp_1),
-                rocblas_status_invalid_pointer);
+            DAPI_EXPECT(rocblas_status_invalid_pointer,
+                        rocblas_hpr2_fn,
+                        (handle, uplo, N, alpha, dx, incx, nullptr, incy, dAp_1));
 
-            EXPECT_ROCBLAS_STATUS(
-                (rocblas_hpr2_fn)(handle, uplo, N, alpha, dx, incx, dy, incy, nullptr),
-                rocblas_status_invalid_pointer);
+            DAPI_EXPECT(rocblas_status_invalid_pointer,
+                        rocblas_hpr2_fn,
+                        (handle, uplo, N, alpha, dx, incx, dy, incy, nullptr));
         }
 
         // N==0 all pointers may be null
-        EXPECT_ROCBLAS_STATUS(
-            (rocblas_hpr2_fn)(handle, uplo, 0, nullptr, nullptr, incx, nullptr, incy, nullptr),
-            rocblas_status_success);
+        DAPI_CHECK(rocblas_hpr2_fn,
+                   (handle, uplo, 0, nullptr, nullptr, incx, nullptr, incy, nullptr));
 
         // alpha==0 all pointers may be null
-        EXPECT_ROCBLAS_STATUS(
-            (rocblas_hpr2_fn)(handle, uplo, N, zero, nullptr, incx, nullptr, incy, nullptr),
-            rocblas_status_success);
+        DAPI_CHECK(rocblas_hpr2_fn, (handle, uplo, N, zero, nullptr, incx, nullptr, incy, nullptr));
+
+        if(arg.api & c_API_64)
+        {
+            int64_t n_over_int32 = 2147483649;
+            DAPI_EXPECT(rocblas_status_invalid_size,
+                        rocblas_hpr2_fn,
+                        (handle, uplo, n_over_int32, alpha, dx, incx, dy, incy, dAp_1));
+        }
     }
 }
 
 template <typename T>
 void testing_hpr2(const Arguments& arg)
 {
-    auto rocblas_hpr2_fn = arg.fortran ? rocblas_hpr2<T, true> : rocblas_hpr2<T, false>;
+    auto rocblas_hpr2_fn = arg.api == FORTRAN ? rocblas_hpr2<T, true> : rocblas_hpr2<T, false>;
+    auto rocblas_hpr2_fn_64
+        = arg.api == FORTRAN_64 ? rocblas_hpr2_64<T, true> : rocblas_hpr2_64<T, false>;
 
-    rocblas_int          N       = arg.N;
-    rocblas_int          incx    = arg.incx;
-    rocblas_int          incy    = arg.incy;
+    int64_t              N       = arg.N;
+    int64_t              incx    = arg.incx;
+    int64_t              incy    = arg.incy;
     T                    h_alpha = arg.get_alpha<T>();
     rocblas_fill         uplo    = char2rocblas_fill(arg.uplo);
     rocblas_local_handle handle{arg};
@@ -130,16 +127,14 @@ void testing_hpr2(const Arguments& arg)
     // argument check before allocating invalid memory
     if(N < 0 || !incx || !incy)
     {
-        EXPECT_ROCBLAS_STATUS(
-            (rocblas_hpr2_fn)(handle, uplo, N, nullptr, nullptr, incx, nullptr, incy, nullptr),
-            rocblas_status_invalid_size);
+        DAPI_EXPECT(rocblas_status_invalid_size,
+                    rocblas_hpr2_fn,
+                    (handle, uplo, N, nullptr, nullptr, incx, nullptr, incy, nullptr));
 
         return;
     }
 
-    size_t abs_incx = incx >= 0 ? incx : -incx;
-    size_t abs_incy = incy >= 0 ? incy : -incy;
-    size_t size_A   = rocblas_packed_matrix_size(N);
+    size_t size_A = rocblas_packed_matrix_size(N);
 
     // Naming: `h` is in CPU (host) memory(eg hAp_1), `d` is in GPU (device) memory (eg dAp_1).
     // Allocate host memory
@@ -186,9 +181,9 @@ void testing_hpr2(const Arguments& arg)
     CHECK_HIP_ERROR(dx.transfer_from(hx));
     CHECK_HIP_ERROR(dy.transfer_from(hy));
 
-    double gpu_time_used, cpu_time_used;
-    double rocblas_error_1;
-    double rocblas_error_2;
+    double cpu_time_used;
+    double error_host;
+    double error_device;
 
     if(arg.unit_check || arg.norm_check)
     {
@@ -198,18 +193,17 @@ void testing_hpr2(const Arguments& arg)
 
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
         handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR(
-            (rocblas_hpr2_fn)(handle, uplo, N, &h_alpha, dx, incx, dy, incy, dAp_1));
+        DAPI_CHECK(rocblas_hpr2_fn, (handle, uplo, N, &h_alpha, dx, incx, dy, incy, dAp_1));
         handle.post_test(arg);
 
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_device));
         handle.pre_test(arg);
-        CHECK_ROCBLAS_ERROR((rocblas_hpr2_fn)(handle, uplo, N, d_alpha, dx, incx, dy, incy, dAp_2));
+        DAPI_CHECK(rocblas_hpr2_fn, (handle, uplo, N, d_alpha, dx, incx, dy, incy, dAp_2));
         handle.post_test(arg);
 
         // CPU BLAS
         cpu_time_used = get_time_us_no_sync();
-        cblas_hpr2<T>(uplo, N, h_alpha, hx, incx, hy, incy, hAp_gold);
+        ref_hpr2<T>(uplo, N, h_alpha, hx, incx, hy, incy, hAp_gold);
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
         // copy output from device to CPU
@@ -225,29 +219,28 @@ void testing_hpr2(const Arguments& arg)
 
         if(arg.norm_check)
         {
-            rocblas_error_1 = norm_check_general<T>('F', 1, size_A, 1, hAp_gold, hAp_1);
-            rocblas_error_2 = norm_check_general<T>('F', 1, size_A, 1, hAp_gold, hAp_2);
+            error_host   = norm_check_general<T>('F', 1, size_A, 1, hAp_gold, hAp_1);
+            error_device = norm_check_general<T>('F', 1, size_A, 1, hAp_gold, hAp_2);
         }
     }
 
     if(arg.timing)
     {
-        int number_cold_calls = arg.cold_iters;
-        int number_hot_calls  = arg.iters;
-        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        double gpu_time_used;
+        int    number_cold_calls = arg.cold_iters;
+        int    total_calls       = number_cold_calls + arg.iters;
 
-        for(int iter = 0; iter < number_cold_calls; iter++)
-        {
-            rocblas_hpr2_fn(handle, uplo, N, &h_alpha, dx, incx, dy, incy, dAp_1);
-        }
+        CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
 
         hipStream_t stream;
         CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
-        gpu_time_used = get_time_us_sync(stream); // in microseconds
 
-        for(int iter = 0; iter < number_hot_calls; iter++)
+        for(int iter = 0; iter < total_calls; iter++)
         {
-            rocblas_hpr2_fn(handle, uplo, N, &h_alpha, dx, incx, dy, incy, dAp_1);
+            if(iter == number_cold_calls)
+                gpu_time_used = get_time_us_sync(stream);
+
+            DAPI_DISPATCH(rocblas_hpr2_fn, (handle, uplo, N, &h_alpha, dx, incx, dy, incy, dAp_1));
         }
 
         gpu_time_used = get_time_us_sync(stream) - gpu_time_used;
@@ -258,7 +251,7 @@ void testing_hpr2(const Arguments& arg)
                                                                           hpr2_gflop_count<T>(N),
                                                                           hpr2_gbyte_count<T>(N),
                                                                           cpu_time_used,
-                                                                          rocblas_error_1,
-                                                                          rocblas_error_2);
+                                                                          error_host,
+                                                                          error_device);
     }
 }

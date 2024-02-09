@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2016-2023 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2016-2024 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -20,147 +20,25 @@
  *
  * ************************************************************************ */
 
+#include "rocblas_copy_kernels.hpp"
 #include "check_numerics_vector.hpp"
 #include "handle.hpp"
+#include "rocblas_block_sizes.h"
 #include "rocblas_copy.hpp"
-
-template <bool CONJ, typename T, typename U>
-ROCBLAS_KERNEL_NO_BOUNDS rocblas_copy_kernel(rocblas_int    n,
-                                             const T        xa,
-                                             rocblas_stride shiftx,
-                                             rocblas_int    incx,
-                                             rocblas_stride stridex,
-                                             U              ya,
-                                             rocblas_stride shifty,
-                                             rocblas_int    incy,
-                                             rocblas_stride stridey)
-{
-    ptrdiff_t   tid = blockIdx.x * blockDim.x + threadIdx.x;
-    const auto* x   = load_ptr_batch(xa, blockIdx.y, shiftx, stridex);
-    auto*       y   = load_ptr_batch(ya, blockIdx.y, shifty, stridey);
-    if(tid < n)
-    {
-
-        y[tid * incy] = CONJ ? conj(x[tid * incx]) : x[tid * incx];
-    }
-}
-
-//! @brief Optimized kernel for the floating points.
-//!
-template <rocblas_int NB, typename T, typename U>
-ROCBLAS_KERNEL(NB)
-rocblas_scopy_2_kernel(rocblas_int n,
-                       const T __restrict xa,
-                       rocblas_stride shiftx,
-                       rocblas_stride stridex,
-                       U __restrict ya,
-                       rocblas_stride shifty,
-                       rocblas_stride stridey)
-{
-    ptrdiff_t   tid = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
-    const auto* x   = load_ptr_batch(xa, blockIdx.y, shiftx, stridex);
-    auto*       y   = load_ptr_batch(ya, blockIdx.y, shifty, stridey);
-    if(tid < n - 1)
-    {
-        for(rocblas_int j = 0; j < 2; ++j)
-        {
-            y[tid + j] = x[tid + j];
-        }
-    }
-    if(n % 2 != 0 && tid == n - 1)
-        y[tid] = x[tid];
-}
-
-template <bool CONJ, rocblas_int NB, typename T, typename U>
-rocblas_status rocblas_copy_template(rocblas_handle handle,
-                                     rocblas_int    n,
-                                     T              x,
-                                     rocblas_stride offsetx,
-                                     rocblas_int    incx,
-                                     rocblas_stride stridex,
-                                     U              y,
-                                     rocblas_stride offsety,
-                                     rocblas_int    incy,
-                                     rocblas_stride stridey,
-                                     rocblas_int    batch_count)
-{
-    // Quick return if possible.
-    if(n <= 0 || batch_count <= 0)
-        return rocblas_status_success;
-
-    if(!x || !y)
-        return rocblas_status_invalid_pointer;
-
-    static constexpr bool using_rocblas_float
-        = std::is_same<U, rocblas_float*>{} || std::is_same<U, rocblas_float* const*>{};
-
-    if(!using_rocblas_float || incx != 1 || incy != 1)
-    {
-        // In case of negative inc shift pointer to end of data for negative indexing tid*inc
-        ptrdiff_t shiftx = offsetx - ((incx < 0) ? ptrdiff_t(incx) * (n - 1) : 0);
-        ptrdiff_t shifty = offsety - ((incy < 0) ? ptrdiff_t(incy) * (n - 1) : 0);
-
-        int  blocks = (n - 1) / NB + 1;
-        dim3 grid(blocks, batch_count);
-        dim3 threads(NB);
-
-        hipLaunchKernelGGL(rocblas_copy_kernel<CONJ>,
-                           grid,
-                           threads,
-                           0,
-                           handle->get_stream(),
-                           n,
-                           x,
-                           shiftx,
-                           incx,
-                           stridex,
-                           y,
-                           shifty,
-                           incy,
-                           stridey);
-    }
-    else
-    {
-        // Kernel function for improving the performance of SCOPY when incx==1 and incy==1
-
-        // In case of negative inc shift pointer to end of data for negative indexing tid*inc
-        ptrdiff_t shiftx = offsetx - 0;
-        ptrdiff_t shifty = offsety - 0;
-
-        int         blocks = 1 + ((n - 1) / (NB * 2));
-        dim3        grid(blocks, batch_count);
-        dim3        threads(NB);
-        hipStream_t scopy_stream = handle->get_stream();
-
-        hipLaunchKernelGGL(rocblas_scopy_2_kernel<NB>,
-                           grid,
-                           threads,
-                           0,
-                           scopy_stream,
-                           n,
-                           x,
-                           shiftx,
-                           stridex,
-                           y,
-                           shifty,
-                           stridey);
-    }
-    return rocblas_status_success;
-}
 
 template <typename T, typename U>
 rocblas_status rocblas_copy_check_numerics(const char*    function_name,
                                            rocblas_handle handle,
-                                           rocblas_int    n,
+                                           int64_t        n,
                                            T              x,
                                            rocblas_stride offset_x,
-                                           rocblas_int    inc_x,
+                                           int64_t        inc_x,
                                            rocblas_stride stride_x,
                                            U              y,
                                            rocblas_stride offset_y,
-                                           rocblas_int    inc_y,
+                                           int64_t        inc_y,
                                            rocblas_stride stride_y,
-                                           rocblas_int    batch_count,
+                                           int64_t        batch_count,
                                            const int      check_numerics,
                                            bool           is_input)
 {
@@ -192,79 +70,7 @@ rocblas_status rocblas_copy_check_numerics(const char*    function_name,
     return check_numerics_status;
 }
 
-// Instantiations below will need to be manually updated to match any change in
-// template parameters in the files copy*.cpp
-
-#ifdef INSTANTIATE_COPY_TEMPLATE
-#error INSTANTIATE_COPY_TEMPLATE already defined
-#endif
-
-#define INSTANTIATE_COPY_TEMPLATE(CONJ_, NB_, T_, U_)                                         \
-    template rocblas_status rocblas_copy_template<CONJ_, NB_, T_, U_>(rocblas_handle handle,  \
-                                                                      rocblas_int    n,       \
-                                                                      T_             x,       \
-                                                                      rocblas_stride offsetx, \
-                                                                      rocblas_int    incx,    \
-                                                                      rocblas_stride stridex, \
-                                                                      U_             y,       \
-                                                                      rocblas_stride offsety, \
-                                                                      rocblas_int    incy,    \
-                                                                      rocblas_stride stridey, \
-                                                                      rocblas_int    batch_count);
-
-INSTANTIATE_COPY_TEMPLATE(false, 512, const float*, float*)
-INSTANTIATE_COPY_TEMPLATE(true, 256, const float*, float*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, const float*, float*)
-
-INSTANTIATE_COPY_TEMPLATE(true, 256, const double*, double*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, const double*, double*)
-
-INSTANTIATE_COPY_TEMPLATE(true, 256, const rocblas_half*, rocblas_half*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, const rocblas_half*, rocblas_half*)
-
-INSTANTIATE_COPY_TEMPLATE(true, 256, const rocblas_float_complex*, rocblas_float_complex*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, const rocblas_float_complex*, rocblas_float_complex*)
-
-INSTANTIATE_COPY_TEMPLATE(true, 256, const rocblas_double_complex*, rocblas_double_complex*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, const rocblas_double_complex*, rocblas_double_complex*)
-
-INSTANTIATE_COPY_TEMPLATE(false, 512, float*, float*)
-INSTANTIATE_COPY_TEMPLATE(false, 512, float*, float* const*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, float*, float*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, float* const*, float* const*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, float const* const*, float* const*)
-
-INSTANTIATE_COPY_TEMPLATE(false, 512, double*, double*)
-INSTANTIATE_COPY_TEMPLATE(false, 512, double*, double* const*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, double*, double*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, double* const*, double* const*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, double const* const*, double* const*)
-
-INSTANTIATE_COPY_TEMPLATE(false, 256, const rocblas_half* const*, rocblas_half* const*)
-
-INSTANTIATE_COPY_TEMPLATE(false, 512, rocblas_float_complex*, rocblas_float_complex*)
-INSTANTIATE_COPY_TEMPLATE(false, 512, rocblas_float_complex*, rocblas_float_complex* const*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, rocblas_float_complex*, rocblas_float_complex*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, rocblas_float_complex* const*, rocblas_float_complex* const*)
-INSTANTIATE_COPY_TEMPLATE(false,
-                          256,
-                          rocblas_float_complex const* const*,
-                          rocblas_float_complex* const*)
-
-INSTANTIATE_COPY_TEMPLATE(false, 512, rocblas_double_complex*, rocblas_double_complex*)
-INSTANTIATE_COPY_TEMPLATE(false, 512, rocblas_double_complex*, rocblas_double_complex* const*)
-INSTANTIATE_COPY_TEMPLATE(false, 256, rocblas_double_complex*, rocblas_double_complex*)
-INSTANTIATE_COPY_TEMPLATE(false,
-                          256,
-                          rocblas_double_complex* const*,
-                          rocblas_double_complex* const*)
-INSTANTIATE_COPY_TEMPLATE(false,
-                          256,
-                          rocblas_double_complex const* const*,
-                          rocblas_double_complex* const*)
-
-#undef INSTANTIATE_COPY_TEMPLATE
-
+// check numerics single instantiation used for both rocblas_int and int64_t
 #ifdef INSTANTIATE_COPY_CHECK_NUMERICS
 #error INSTANTIATE_COPY_CHECK_NUMERICS already defined
 #endif
@@ -272,16 +78,16 @@ INSTANTIATE_COPY_TEMPLATE(false,
 #define INSTANTIATE_COPY_CHECK_NUMERICS(T_, U_)                                                \
     template rocblas_status rocblas_copy_check_numerics<T_, U_>(const char*    function_name,  \
                                                                 rocblas_handle handle,         \
-                                                                rocblas_int    n,              \
+                                                                int64_t        n,              \
                                                                 T_             x,              \
                                                                 rocblas_stride offset_x,       \
-                                                                rocblas_int    inc_x,          \
+                                                                int64_t        inc_x,          \
                                                                 rocblas_stride stride_x,       \
                                                                 U_             y,              \
                                                                 rocblas_stride offset_y,       \
-                                                                rocblas_int    inc_y,          \
+                                                                int64_t        inc_y,          \
                                                                 rocblas_stride stride_y,       \
-                                                                rocblas_int    batch_count,    \
+                                                                int64_t        batch_count,    \
                                                                 const int      check_numerics, \
                                                                 bool           is_input);
 
@@ -299,3 +105,87 @@ INSTANTIATE_COPY_CHECK_NUMERICS(const rocblas_double_complex* const*,
                                 rocblas_double_complex* const*)
 
 #undef INSTANTIATE_COPY_CHECK_NUMERICS
+
+// Instantiations below will need to be manually updated to match any change in
+// template parameters in the files copy*.cpp
+
+#ifdef INSTANTIATE_COPY_LAUNCHER
+#error INSTANTIATE_COPY_LAUNCHER already defined
+#endif
+
+#define INSTANTIATE_COPY_LAUNCHER(NB_, T_, U_)                                        \
+    template rocblas_status rocblas_internal_copy_launcher<rocblas_int, NB_, T_, U_>( \
+        rocblas_handle handle,                                                        \
+        rocblas_int    n,                                                             \
+        T_             x,                                                             \
+        rocblas_stride offsetx,                                                       \
+        rocblas_int    incx,                                                          \
+        rocblas_stride stridex,                                                       \
+        U_             y,                                                             \
+        rocblas_stride offsety,                                                       \
+        rocblas_int    incy,                                                          \
+        rocblas_stride stridey,                                                       \
+        rocblas_int    batch_count);
+
+// non batched
+
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, const float*, float*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, const double*, double*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, const rocblas_half*, rocblas_half*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, const rocblas_float_complex*, rocblas_float_complex*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, const rocblas_double_complex*, rocblas_double_complex*)
+
+// batched
+
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, float const* const*, float* const*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, double const* const*, double* const*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, rocblas_half const* const*, rocblas_half* const*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB,
+                          rocblas_float_complex const* const*,
+                          rocblas_float_complex* const*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB,
+                          rocblas_double_complex const* const*,
+                          rocblas_double_complex* const*)
+
+// internal template calls
+
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, float*, float* const*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, double*, double* const*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, rocblas_float_complex*, rocblas_float_complex* const*)
+INSTANTIATE_COPY_LAUNCHER(ROCBLAS_COPY_NB, rocblas_double_complex*, rocblas_double_complex* const*)
+
+#undef INSTANTIATE_COPY_LAUNCHER
+
+#ifdef INSTANTIATE_COPY_LAUNCHER_64
+#error INSTANTIATE_COPY_LAUNCHER_64 already defined
+#endif
+
+#define INSTANTIATE_COPY_LAUNCHER_64(NB_, T_, U_)                                 \
+    template rocblas_status rocblas_internal_copy_launcher<int64_t, NB_, T_, U_>( \
+        rocblas_handle handle,                                                    \
+        int64_t        n,                                                         \
+        T_             x,                                                         \
+        rocblas_stride offsetx,                                                   \
+        int64_t        incx,                                                      \
+        rocblas_stride stridex,                                                   \
+        U_             y,                                                         \
+        rocblas_stride offsety,                                                   \
+        int64_t        incy,                                                      \
+        rocblas_stride stridey,                                                   \
+        int64_t        batch_count);
+
+// internal template calls
+
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB, float*, float*)
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB, double*, double*)
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB, rocblas_float_complex*, rocblas_float_complex*)
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB, rocblas_double_complex*, rocblas_double_complex*)
+
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB, float*, float* const*)
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB, double*, double* const*)
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB, rocblas_float_complex*, rocblas_float_complex* const*)
+INSTANTIATE_COPY_LAUNCHER_64(ROCBLAS_COPY_NB,
+                             rocblas_double_complex*,
+                             rocblas_double_complex* const*)
+
+#undef INSTANTIATE_COPY_LAUNCHER_64

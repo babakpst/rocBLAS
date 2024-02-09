@@ -25,18 +25,20 @@
 #include "rocblas_tbsv.hpp"
 
 template <bool UPPER, bool TRANS>
-ROCBLAS_KERNEL_ILF inline rocblas_int rocblas_banded_matrix_index(
+ROCBLAS_KERNEL_ILF inline size_t rocblas_banded_matrix_index(
     rocblas_int n, rocblas_int lda, rocblas_int k, rocblas_int row, rocblas_int col)
 {
-    return UPPER ? (TRANS ? ((row * lda + col + (k - row))) : (col * lda + row + (k - col)))
-                 : (TRANS ? ((row * lda + (col - row))) : (col * lda + (row - col)));
+    return UPPER
+               ? (TRANS ? ((row * size_t(lda) + col + (k - row)))
+                        : (col * size_t(lda) + row + (k - col)))
+               : (TRANS ? ((row * size_t(lda) + (col - row))) : (col * size_t(lda) + (row - col)));
 }
 
 // Uses forward substitution to solve Ax = b. Used for a non-transposed lower-triangular matrix
 // or a transposed upper-triangular matrix.
 template <bool CONJ, bool TRANS, rocblas_int BLK_SIZE, typename T>
 ROCBLAS_KERNEL_ILF void rocblas_tbsv_forward_substitution_calc(
-    bool diag, int n, int k, const T* A, rocblas_int lda, T* x, rocblas_int incx)
+    bool is_unit_diag, int n, int k, const T* A, rocblas_int lda, T* x, rocblas_int incx)
 {
     __shared__ T xshared[BLK_SIZE];
     int          tx = threadIdx.x;
@@ -46,7 +48,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_forward_substitution_calc(
     {
         // cache x into shared memory
         if(tx + i < n)
-            xshared[tx] = x[(tx + i) * incx];
+            xshared[tx] = x[(tx + i) * int64_t(incx)];
 
         __syncthreads();
 
@@ -59,13 +61,12 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_forward_substitution_calc(
                 break;
 
             // solve element that can be solved
-            if(tx == j && !diag)
+            if(tx == j && !is_unit_diag)
             {
                 rocblas_int colA = j + i;
                 rocblas_int rowA = j + i;
-                rocblas_int indexA
-                    = rocblas_banded_matrix_index<TRANS, TRANS>(n, lda, k, rowA, colA);
-                xshared[tx] = xshared[tx] / (CONJ ? conj(A[indexA]) : A[indexA]);
+                size_t indexA    = rocblas_banded_matrix_index<TRANS, TRANS>(n, lda, k, rowA, colA);
+                xshared[tx]      = xshared[tx] / (CONJ ? conj(A[indexA]) : A[indexA]);
             }
 
             __syncthreads();
@@ -75,8 +76,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_forward_substitution_calc(
             {
                 rocblas_int colA = j + i;
                 rocblas_int rowA = tx + i;
-                rocblas_int indexA
-                    = rocblas_banded_matrix_index<TRANS, TRANS>(n, lda, k, rowA, colA);
+                size_t indexA    = rocblas_banded_matrix_index<TRANS, TRANS>(n, lda, k, rowA, colA);
 
                 // Ensure row is in range, and subtract
                 if(rowA < n && colA >= rowA - k)
@@ -99,21 +99,20 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_forward_substitution_calc(
             {
                 rocblas_int colA = i + p;
                 rocblas_int rowA = tx + j;
-                rocblas_int indexA
-                    = rocblas_banded_matrix_index<TRANS, TRANS>(n, lda, k, rowA, colA);
+                size_t indexA    = rocblas_banded_matrix_index<TRANS, TRANS>(n, lda, k, rowA, colA);
 
-                if(diag && colA == rowA)
+                if(is_unit_diag && colA == rowA)
                     val += xshared[p];
                 else if(colA < n && colA >= rowA - k)
                     val += (CONJ ? conj(A[indexA]) : A[indexA]) * xshared[p];
             }
 
-            x[(tx + j) * incx] -= val;
+            x[(tx + j) * int64_t(incx)] -= val;
         }
 
         // store solved part back to global memory
         if(tx + i < n)
-            x[(tx + i) * incx] = xshared[tx];
+            x[(tx + i) * int64_t(incx)] = xshared[tx];
 
         __syncthreads();
     }
@@ -123,7 +122,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_forward_substitution_calc(
 // or a transposed lower-triangular matrix.
 template <bool CONJ, bool TRANS, rocblas_int BLK_SIZE, typename T>
 ROCBLAS_KERNEL_ILF void rocblas_tbsv_backward_substitution_calc(
-    bool diag, int n, int k, const T* A, rocblas_int lda, T* x, rocblas_int incx)
+    bool is_unit_diag, int n, int k, const T* A, rocblas_int lda, T* x, rocblas_int incx)
 {
     __shared__ T xshared[BLK_SIZE];
     int          tx = threadIdx.x;
@@ -133,7 +132,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_backward_substitution_calc(
     {
         // cache x into shared memory
         if(tx + i >= 0)
-            xshared[tx] = x[(tx + i) * incx];
+            xshared[tx] = x[(tx + i) * int64_t(incx)];
 
         __syncthreads();
 
@@ -146,13 +145,12 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_backward_substitution_calc(
                 break;
 
             // Solve the new element that can be solved
-            if(tx == j && !diag)
+            if(tx == j && !is_unit_diag)
             {
                 rocblas_int colA = j + i;
                 rocblas_int rowA = j + i;
-                rocblas_int indexA
-                    = rocblas_banded_matrix_index<!TRANS, TRANS>(n, lda, k, rowA, colA);
-                xshared[tx] = xshared[tx] / (CONJ ? conj(A[indexA]) : A[indexA]);
+                size_t indexA = rocblas_banded_matrix_index<!TRANS, TRANS>(n, lda, k, rowA, colA);
+                xshared[tx]   = xshared[tx] / (CONJ ? conj(A[indexA]) : A[indexA]);
             }
 
             __syncthreads();
@@ -162,8 +160,7 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_backward_substitution_calc(
             {
                 rocblas_int colA = j + i;
                 rocblas_int rowA = tx + i;
-                rocblas_int indexA
-                    = rocblas_banded_matrix_index<!TRANS, TRANS>(n, lda, k, rowA, colA);
+                size_t indexA = rocblas_banded_matrix_index<!TRANS, TRANS>(n, lda, k, rowA, colA);
 
                 // Ensure row is in range, and subtract
                 if(rowA >= 0 && colA <= rowA + k)
@@ -186,21 +183,20 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_backward_substitution_calc(
             {
                 rocblas_int colA = i + p;
                 rocblas_int rowA = tx + j;
-                rocblas_int indexA
-                    = rocblas_banded_matrix_index<!TRANS, TRANS>(n, lda, k, rowA, colA);
+                size_t indexA = rocblas_banded_matrix_index<!TRANS, TRANS>(n, lda, k, rowA, colA);
 
-                if(diag && colA == rowA)
+                if(is_unit_diag && colA == rowA)
                     val += xshared[p];
                 else if(colA <= rowA + k)
                     val += (CONJ ? conj(A[indexA]) : A[indexA]) * xshared[p];
             }
 
-            x[(tx + j) * incx] -= val;
+            x[(tx + j) * int64_t(incx)] -= val;
         }
 
         // store solved part back to global memory
         if(tx + i >= 0)
-            x[(tx + i) * incx] = xshared[tx];
+            x[(tx + i) * int64_t(incx)] = xshared[tx];
 
         __syncthreads();
     }
@@ -217,9 +213,9 @@ ROCBLAS_KERNEL_ILF void rocblas_tbsv_backward_substitution_calc(
      */
 template <bool CONJ, rocblas_int BLK_SIZE, typename TConstPtr, typename TPtr>
 ROCBLAS_KERNEL(BLK_SIZE)
-rocblas_tbsv_kernel(rocblas_fill      uplo,
-                    rocblas_operation transA,
-                    rocblas_diagonal  diag,
+rocblas_tbsv_kernel(rocblas_operation transA,
+                    bool              is_upper,
+                    bool              is_unit_diag,
                     rocblas_int       n,
                     rocblas_int       k,
                     TConstPtr         Aa,
@@ -234,23 +230,21 @@ rocblas_tbsv_kernel(rocblas_fill      uplo,
     const auto* A = load_ptr_batch(Aa, blockIdx.x, shift_A, stride_A);
     auto*       x = load_ptr_batch(xa, blockIdx.x, shift_x, stride_x);
 
-    bool is_diag = diag == rocblas_diagonal_unit;
-
     if(transA == rocblas_operation_none)
     {
-        if(uplo == rocblas_fill_upper)
+        if(is_upper)
             rocblas_tbsv_backward_substitution_calc<false, false, BLK_SIZE>(
-                is_diag, n, k, A, lda, x, incx);
+                is_unit_diag, n, k, A, lda, x, incx);
         else
             rocblas_tbsv_forward_substitution_calc<false, false, BLK_SIZE>(
-                is_diag, n, k, A, lda, x, incx);
+                is_unit_diag, n, k, A, lda, x, incx);
     }
-    else if(uplo == rocblas_fill_upper)
+    else if(is_upper)
         rocblas_tbsv_forward_substitution_calc<CONJ, true, BLK_SIZE>(
-            is_diag, n, k, A, lda, x, incx);
+            is_unit_diag, n, k, A, lda, x, incx);
     else
         rocblas_tbsv_backward_substitution_calc<CONJ, true, BLK_SIZE>(
-            is_diag, n, k, A, lda, x, incx);
+            is_unit_diag, n, k, A, lda, x, incx);
 }
 
 template <rocblas_int BLOCK, typename TConstPtr, typename TPtr>
@@ -283,47 +277,47 @@ rocblas_status rocblas_tbsv_template(rocblas_handle    handle,
     dim3 grid(batch_count);
     dim3 threads(BLOCK);
 
-    if(rocblas_operation_conjugate_transpose == transA)
+    if(transA == rocblas_operation_conjugate_transpose)
     {
-        hipLaunchKernelGGL((rocblas_tbsv_kernel<true, BLOCK>),
-                           grid,
-                           threads,
-                           0,
-                           handle->get_stream(),
-                           uplo,
-                           transA,
-                           diag,
-                           n,
-                           k,
-                           A,
-                           shift_A,
-                           lda,
-                           stride_A,
-                           x,
-                           shift_x,
-                           incx,
-                           stride_x);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_tbsv_kernel<true, BLOCK>),
+                              grid,
+                              threads,
+                              0,
+                              handle->get_stream(),
+                              transA,
+                              uplo == rocblas_fill_upper,
+                              diag == rocblas_diagonal_unit,
+                              n,
+                              k,
+                              A,
+                              shift_A,
+                              lda,
+                              stride_A,
+                              x,
+                              shift_x,
+                              incx,
+                              stride_x);
     }
     else
     {
-        hipLaunchKernelGGL((rocblas_tbsv_kernel<false, BLOCK>),
-                           grid,
-                           threads,
-                           0,
-                           handle->get_stream(),
-                           uplo,
-                           transA,
-                           diag,
-                           n,
-                           k,
-                           A,
-                           shift_A,
-                           lda,
-                           stride_A,
-                           x,
-                           shift_x,
-                           incx,
-                           stride_x);
+        ROCBLAS_LAUNCH_KERNEL((rocblas_tbsv_kernel<false, BLOCK>),
+                              grid,
+                              threads,
+                              0,
+                              handle->get_stream(),
+                              transA,
+                              uplo == rocblas_fill_upper,
+                              diag == rocblas_diagonal_unit,
+                              n,
+                              k,
+                              A,
+                              shift_A,
+                              lda,
+                              stride_A,
+                              x,
+                              shift_x,
+                              incx,
+                              stride_x);
     }
 
     return rocblas_status_success;

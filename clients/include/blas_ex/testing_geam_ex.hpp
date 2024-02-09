@@ -1,5 +1,5 @@
 /* ************************************************************************
- * Copyright (C) 2018-2022 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (C) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -41,7 +41,7 @@
 template <typename T>
 void testing_geam_ex_bad_arg(const Arguments& arg)
 {
-    auto rocblas_geam_ex_fn = arg.fortran ? rocblas_geam_ex : rocblas_geam_ex_fortran;
+    auto rocblas_geam_ex_fn = arg.api == FORTRAN ? rocblas_geam_ex : rocblas_geam_ex_fortran;
 
     for(auto pointer_mode : {rocblas_pointer_mode_host, rocblas_pointer_mode_device})
     {
@@ -511,7 +511,7 @@ void testing_geam_ex_bad_arg(const Arguments& arg)
 template <typename T>
 void testing_geam_ex(const Arguments& arg)
 {
-    auto rocblas_geam_ex_fn = arg.fortran ? rocblas_geam_ex : rocblas_geam_ex_fortran;
+    auto rocblas_geam_ex_fn = arg.api == FORTRAN ? rocblas_geam_ex : rocblas_geam_ex_fortran;
 
     rocblas_operation transA = char2rocblas_operation(arg.transA);
     rocblas_operation transB = char2rocblas_operation(arg.transB);
@@ -648,6 +648,7 @@ void testing_geam_ex(const Arguments& arg)
     {
         // ROCBLAS
         CHECK_ROCBLAS_ERROR(rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host));
+        handle.pre_test(arg);
         CHECK_ROCBLAS_ERROR(rocblas_geam_ex_fn(handle,
                                                transA,
                                                transB,
@@ -670,7 +671,7 @@ void testing_geam_ex(const Arguments& arg)
                                                ldd,
                                                compute_type,
                                                geam_ex_op));
-
+        handle.post_test(arg);
         CHECK_HIP_ERROR(hD_1.transfer_from(dD));
         CHECK_HIP_ERROR(dD.transfer_from(hD_2));
 
@@ -703,25 +704,25 @@ void testing_geam_ex(const Arguments& arg)
         // reference calculation for golden result
         cpu_time_used = get_time_us_no_sync();
 
-        auto cblas_geam_ex_fn = geam_ex_op == rocblas_geam_ex_operation_min_plus
-                                    ? cblas_geam_min_plus<T>
-                                    : cblas_geam_plus_min<T>;
+        auto ref_geam_ex_fn = geam_ex_op == rocblas_geam_ex_operation_min_plus
+                                  ? ref_geam_min_plus<T>
+                                  : ref_geam_plus_min<T>;
 
-        cblas_geam_ex_fn(transA,
-                         transB,
-                         M,
-                         N,
-                         K,
-                         h_alpha[0],
-                         (T*)hA,
-                         lda,
-                         (T*)hB,
-                         ldb,
-                         h_beta[0],
-                         (T*)hC,
-                         ldc,
-                         (T*)hD_gold,
-                         ldd);
+        ref_geam_ex_fn(transA,
+                       transB,
+                       M,
+                       N,
+                       K,
+                       h_alpha[0],
+                       (T*)hA,
+                       lda,
+                       (T*)hB,
+                       ldb,
+                       h_beta[0],
+                       (T*)hC,
+                       ldc,
+                       (T*)hD_gold,
+                       ldd);
 
         cpu_time_used = get_time_us_no_sync() - cpu_time_used;
 
@@ -777,21 +778,21 @@ void testing_geam_ex(const Arguments& arg)
                     hipMemcpy(hD_1, dD_in_place, sizeof(T) * size_D, hipMemcpyDeviceToHost));
 
                 // reference calculation
-                cblas_geam_ex_fn(transA,
-                                 transB,
-                                 M,
-                                 N,
-                                 K,
-                                 h_alpha[0],
-                                 (T*)hA_copy,
-                                 lda,
-                                 (T*)hB_copy,
-                                 ldb,
-                                 h_beta[0],
-                                 (T*)hC,
-                                 ldc,
-                                 (T*)hD_gold,
-                                 ldd);
+                ref_geam_ex_fn(transA,
+                               transB,
+                               M,
+                               N,
+                               K,
+                               h_alpha[0],
+                               (T*)hA_copy,
+                               lda,
+                               (T*)hB_copy,
+                               ldb,
+                               h_beta[0],
+                               (T*)hC,
+                               ldc,
+                               (T*)hD_gold,
+                               ldd);
 
                 if(arg.unit_check)
                 {
